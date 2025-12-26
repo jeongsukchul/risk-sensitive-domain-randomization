@@ -1,36 +1,46 @@
 # defaults:
 #     - override hydra/launcher: submitit_local
-
+# training
+num_envs : 1024
+batch_size : 1024
 # environment
 benchmark: dm_control
 task: CheetahRun
 obs: state
 exp_name : test
+
 # evaluation
 checkpoint: ???
-eval_episodes: 1
-eval_pi: true
-eval_value: true # evaluate value function approximation
-eval_freq: 50000
 impl : warp #or mjx
 eval_with_training_env : false #added
+num_evals : 20
+
 #policy
-policy : td3
+policy : ppo
 asymmetric_critic: true
 distributional_q : false
 
-#dynamics shift
-randomization: true
-# shift_dynamics_type: stochastic 
-eval_randomization: true
 # logging
-wandb_project: test-algorithms
+wandb_project: test-riskppo
 wandb_entity: tjrcjf410-seoul-national-university
 wandb_silent: false
 use_wandb: true
 save_csv: true
 comment: ''
 
+#domain randomization
+randomization: true
+eval_randomization: true
+custom_wrapper: true
+dr_train_ratio : 1.
+
+#sampler cfg
+sampler_update_freq : 10           #set 10 to take long horizon information despite of policy_updates.
+n_sampler_iters : 10                #need to consider in flow and gmm
+success_threshold : .7
+success_rate_condition : 0.8
+gamma : 0.
+beta : 2.
 # misc
 save_video: true
 save_agent: true
@@ -49,33 +59,6 @@ action_dims: ???
 episode_lengths: ???
 seed_steps: ???
 bin_size: ???
-
-#default parameters
-# learning_rate: 3e-4
-# discounting: 0.99
-# action_repeat: 1
-# normalize_observations: true
-# reward_scale: 1.0
-#rambo
-real_ratio : ???
-rollout_length : ???
-adv_weight : ???
-batch_size : ???
-rollout_batch_size : ???
-
-#wdsac
-n_nominals : ???
-delta : ???
-lambda_update_steps : ???
-single_lambda : false
-lmbda_lr : ???
-init_lmbda : 1.
-distance_type : wass
-custom_wrapper: true
-adv_wrapper : true
-#flow
-flow_lr : ???
-dr_train_ratio : 1.0
 
 #simba
 simba : false

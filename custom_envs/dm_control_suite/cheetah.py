@@ -33,7 +33,9 @@ ROOT_PATH = Path(__file__).parent
 _XML_PATH = ROOT_PATH / "xmls" / "cheetah.xml"
 # Running speed above which reward is 1.
 _RUN_SPEED = 10
-
+FLOOR_GEOM_ID = 0
+TORSO_BODY_ID = 1
+BTHIGH_BODY_ID = 2
 
 def default_config() -> config_dict.ConfigDict:
   return config_dict.create(
@@ -61,7 +63,6 @@ class Run(mjx_env.MjxEnv):
       raise NotImplementedError(
           f"Vision not implemented for {self.__class__.__name__}."
       )
-
     self._xml_path = _XML_PATH.as_posix()
     self._model_assets = common.get_assets()
     self._mj_model = mujoco.MjModel.from_xml_string(
@@ -69,6 +70,8 @@ class Run(mjx_env.MjxEnv):
     )
     self._mj_model.opt.timestep = self.sim_dt
     self._mjx_model = mjx.put_model(self._mj_model, impl=self._config.impl)
+    print("nominal floor friction", self._mjx_model.geom_friction[FLOOR_GEOM_ID, 0])
+    print("nominal bthigh mass", self._mjx_model.body_mass[BTHIGH_BODY_ID])
     self._post_init()
 
   def _post_init(self) -> None:
@@ -171,6 +174,9 @@ class Run(mjx_env.MjxEnv):
     return self._mjx_model
   
   @property
+  def nominal_params(self) -> jp.ndarray:
+    return jp.array([1., 1.,])
+  @property
   def dr_range(self) -> dict:
 
     low = jp.array(
@@ -190,9 +196,7 @@ class Run(mjx_env.MjxEnv):
         # [0.3] * 3 +                          #com_offset_max
         # [15.0] * (self.mjx_model.nbody - 1)) #body_mass_max
     return low, high
-FLOOR_GEOM_ID = 0
-TORSO_BODY_ID = 1
-BTHIGH_BODY_ID = 2
+
 
 def domain_randomize(model: mjx.Model, dr_range, params=None, rng:jax.Array=None):
   if rng is not None:

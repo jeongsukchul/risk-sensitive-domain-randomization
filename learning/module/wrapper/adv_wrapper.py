@@ -99,25 +99,15 @@ class AdVmapWrapper(Wrapper):
 
   def step(self, state: mjx_env.State, action: jax.Array, params: jax.Array) -> State:
     def step(params, s, a):
+      if params is None:
+        return self.env.step(s,a)
       mjx_model, inaxes = self.rand_fn(params=params)
       with self.v_env_fn(mjx_model) as v_env:
         return v_env.step(s, a)
     
-    def step_and_grad(params, s, a):
-      params = jnp.clip(params, self.dr_range_low, self.dr_range_high)
-      ns = step(params, s, a)
-      # grad = jax.jacfwd(lambda x,y,z : step(x,y,z).obs, argnums=0)(params, s, a)
-      # ns.info['grad']= grad
-      return ns
-    if self.get_grad:
-      ns = jax.vmap(step_and_grad)(
-        params, state, action
-      )
-
-    else:
-      ns = jax.vmap(step)(
-        params, state, action
-      )
+    ns = jax.vmap(step)(
+      params, state, action
+    )
     ns.info['dr_params'] = params
 
     return ns

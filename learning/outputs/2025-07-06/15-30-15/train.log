@@ -1,9 +1,0 @@
-[2025-07-06 15:30:17,505][jax._src.xla_bridge][INFO] - Unable to initialize backend 'tpu': INTERNAL: Failed to open libtpu.so: libtpu.so: cannot open shared object file: No such file or directory
-[2025-07-06 15:30:17,702][root][INFO] - Using JAX default device: cuda:0.
-[2025-07-06 15:30:17,703][root][INFO] - MJX Warp is disabled via MJX_WARP_ENABLED=false.
-[2025-07-06 15:30:18,162][absl][INFO] - Device count: 1, process count: 1 (id 0), local device count: 1, devices to be used count: 1
-[2025-07-06 15:30:18,876][root][INFO] - Using JAX default device: cuda:0.
-[2025-07-06 15:30:18,877][root][INFO] - MJX Warp is disabled via MJX_WARP_ENABLED=false.
-[2025-07-06 15:30:50,929][root][INFO] - Using JAX default device: cuda:0.
-[2025-07-06 15:30:50,929][root][INFO] - MJX Warp is disabled via MJX_WARP_ENABLED=false.
-[2025-07-06 15:32:13,023][absl][INFO] - {'eval/walltime': 81.97904658317566, 'eval/episode_reward': Array(1.729, dtype=float32), 'eval/episode_reward/move': Array(191.048, dtype=float32), 'eval/episode_reward/small_control': Array(895.887, dtype=float32), 'eval/episode_reward/stand': Array(11.091, dtype=float32), 'eval/episode_reward/standing': Array(11.141, dtype=float32), 'eval/episode_reward/upright': Array(624.913, dtype=float32), 'eval/episode_reward_std': Array(0.157, dtype=float32), 'eval/episode_reward/move_std': Array(1.708, dtype=float32), 'eval/episode_reward/small_control_std': Array(1.286, dtype=float32), 'eval/episode_reward/stand_std': Array(0.71, dtype=float32), 'eval/episode_reward/standing_std': Array(0.714, dtype=float32), 'eval/episode_reward/upright_std': Array(58.032, dtype=float32), 'eval/avg_episode_length': Array(1000., dtype=float32), 'eval/std_episode_length': Array(0., dtype=float32), 'eval/epoch_eval_time': 81.97904658317566, 'eval/sps': 1561.3745869821948}

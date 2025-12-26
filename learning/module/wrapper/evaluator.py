@@ -412,6 +412,7 @@ class AdvEvaluator:
     #       for name, value in eval_metrics.episode_metrics.items()
     #   })
     metrics['eval/episode_reward_mean'] = np.mean(eval_metrics.episode_metrics['reward'])
+    metrics['eval/episode_reward_p12'] = np.percentile(eval_metrics.episode_metrics['reward'],12.5)
     metrics['eval/episode_reward_p25'] = np.percentile(eval_metrics.episode_metrics['reward'],25)
     metrics['eval/episode_reward_p75'] = np.percentile(eval_metrics.episode_metrics['reward'],75)
     metrics['eval/episode_reward_std'] = np.std(eval_metrics.episode_metrics['reward'])

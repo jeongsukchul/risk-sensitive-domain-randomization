@@ -1,0 +1,1 @@
+\hat{\xi}_{k^{\prime}} \leftarrow \hat{\xi}_{k^{\prime}}-\lambda_\xi \nabla_{\hat{\xi}_{k^{\prime}}} \frac{1}{M} \sum_{i=1}^M Q^{\psi}\left(s_i, \mu_\theta\left(s_i\right), \hat{\xi}_{k^{\prime}}\right)

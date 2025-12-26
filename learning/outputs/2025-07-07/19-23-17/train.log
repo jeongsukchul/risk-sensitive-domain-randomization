@@ -1,8 +1,0 @@
-[2025-07-07 19:23:19,491][jax._src.xla_bridge][INFO] - Unable to initialize backend 'tpu': INTERNAL: Failed to open libtpu.so: libtpu.so: cannot open shared object file: No such file or directory
-[2025-07-07 19:23:19,636][root][INFO] - Using JAX default device: cuda:0.
-[2025-07-07 19:23:19,637][root][INFO] - MJX Warp is disabled via MJX_WARP_ENABLED=false.
-[2025-07-07 19:23:19,855][absl][INFO] - local_device_count: 1; total_device_count: 1
-[2025-07-07 19:23:22,707][root][INFO] - Using JAX default device: cuda:0.
-[2025-07-07 19:23:22,708][root][INFO] - MJX Warp is disabled via MJX_WARP_ENABLED=false.
-[2025-07-07 19:23:27,454][root][INFO] - Using JAX default device: cuda:0.
-[2025-07-07 19:23:27,454][root][INFO] - MJX Warp is disabled via MJX_WARP_ENABLED=false.

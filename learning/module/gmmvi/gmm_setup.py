@@ -186,22 +186,39 @@ def _setup_initial_mixture_params(NUM_DIM, key, diagonal_covs, MAX_COMPONENTS, n
 
 
 def setup_sample_fn(sample_from_component_fn: Callable):
-    def sample(gmm_state: GMMState, seed: chex.PRNGKey, num_samples: int) -> Tuple[chex.Array, chex.Array]:
-        mask = (gmm_state.component_mask==1)
-        active_idx  = jnp.where(mask)[0]
-        weights = jnp.exp(gmm_state.log_weights)
-        w_active = weights[active_idx]
-        # assert jnp.sum(w_active)==1. 
-        sampled_components = jax.random.choice(seed, gmm_state.num_components, shape=(num_samples,), p=w_active)
-        subkeys = jax.random.split(seed, num_samples)
+    @functools.partial(jax.jit, static_argnames=("num_samples",))
+    def sample(gmm_state, seed: chex.PRNGKey, num_samples: int) -> Tuple[chex.Array, chex.Array]:
+        key_comp, key_draw = jax.random.split(seed, 2)
+
+        # K must come from a static shape (NOT gmm_state.num_components)
+        K = gmm_state.log_weights.shape[0]
+
+        mask = gmm_state.component_mask.astype(bool)          # (K,)
+        valid = mask & jnp.isfinite(gmm_state.log_weights)
+
+        logits = jnp.where(valid, gmm_state.log_weights, -jnp.inf)
+
+        # avoid "all -inf" -> NaNs
+        logits = jax.lax.cond(
+            jnp.any(valid),
+            lambda l: l,
+            lambda l: jnp.zeros((K,), dtype=l.dtype),  # uniform fallback
+            logits,
+        )
+
+        # sample component indices ~ softmax(logits)
+        comps = jax.random.categorical(key_comp, logits, shape=(num_samples,)).astype(jnp.int32)
+
+        keys = jax.random.split(key_draw, num_samples)
+
         def draw_one(k, comp_idx):
-            x = sample_from_component_fn(gmm_state, comp_idx, 1, k)              # shape (1, *event_shape)
-            return jnp.squeeze(x, axis=0)    
-        samples = jax.vmap(draw_one)(subkeys, sampled_components)  
-        return jnp.squeeze(samples), sampled_components
+            x = sample_from_component_fn(gmm_state, comp_idx, 1, k)  # (1, *event_shape)
+            return x[0]  # (*event_shape,)
+
+        samples = jax.vmap(draw_one)(keys, comps)  # (num_samples, *event_shape)
+        return samples, comps
 
     return sample
-
 
 def setup_sample_from_components_shuffle_fn(sample_from_component_fn: Callable):
     def sample_from_component(gmm_state: GMMState, index: int, num_samples: int, seed: chex.Array) -> chex.Array:

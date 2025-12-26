@@ -52,24 +52,30 @@ def visualise(log_prob_fn, dr_range_low:chex.Array, dr_range_high : chex.Array, 
     pdf_values = jnp.reshape(pdf_values, x.shape)
     ctf = plt.contourf(x, y, pdf_values, levels=20, cmap='viridis')
     cbar = fig.colorbar(ctf)
+    handles= []
     if samples is not None:
       idx = jax.random.choice(jax.random.PRNGKey(0), samples.shape[0], (300,))
       sample_x = samples[idx,0]
       sample_y = samples[idx,1]
-      # sample_x = jnp.clip(samples[idx, 0],low[0], high[0])
-      # sample_y = jnp.clip(samples[idx, 1],low[1], high[1])
-      ax.scatter(sample_x, sample_y, c='r', alpha=0.5, marker='x')
-      ax.xaxis.set_major_locator(MaxNLocator(nbins=10, prune=None))
-      ax.yaxis.set_major_locator(MaxNLocator(nbins=10, prune=None))
+      h1 = ax.scatter(sample_x, sample_y, c='r', alpha=0.5, marker='x')
+      handles.append(h1)
     if eval_samples is not None:
       idx = jax.random.choice(jax.random.PRNGKey(0), eval_samples.shape[0], (300,))
       sample_x = eval_samples[idx,0]
       sample_y = eval_samples[idx,1]
-      # sample_x = jnp.clip(samples[idx, 0],low[0], high[0])
-      # sample_y = jnp.clip(samples[idx, 1],low[1], high[1])
-      ax.scatter(sample_x, sample_y, c='b', alpha=0.5, marker='x')
-      ax.xaxis.set_major_locator(MaxNLocator(nbins=10, prune=None))
-      ax.yaxis.set_major_locator(MaxNLocator(nbins=10, prune=None))
+      h2 = ax.scatter(sample_x, sample_y, c='b', alpha=0.5, marker='x')
+      handles.append(h2)
+    ax.xaxis.set_major_locator(MaxNLocator(nbins=10, prune=None))
+    ax.yaxis.set_major_locator(MaxNLocator(nbins=10, prune=None))
+    fig.subplots_adjust(right=0.80)
+    if handles:
+      ax.legend(
+          handles=handles,
+          loc="center left",
+          bbox_to_anchor=(1.02, 0.5),
+          frameon=True,
+          borderaxespad=0.0,
+      )
     fig2 = None
     if bijector_log_prob is not None:
         fig2 = plt.figure()
