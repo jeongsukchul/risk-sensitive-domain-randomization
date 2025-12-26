@@ -251,10 +251,17 @@ def flow_loss(
     value_loss = - volume * (data_log_prob *jnp.exp(data_log_prob) * target_lnpdf).mean()
     entropy_loss = volume * (jnp.exp(current_logp) * current_logp).mean()
   else:
-    value_loss = - (data_log_prob * target_lnpdf).mean()
+    value_loss = (data_log_prob * target_lnpdf).mean()
     entropy_loss = (current_logp).mean()
-  # return lmbda_params* value_loss + kl_loss, (env_state, buffer_state, normalizer_params, noise_scales, simul_info, value_loss, kl_loss)
-  return  value_loss + entropy_loss + gamma * kl_loss, ({
+  loss = value_loss + entropy_loss
+
+  # Modivied with REINFORCE + Self normalization style
+  log_weights = data_log_prob-target_lnpdf
+  log_weights = jax.nn.softmax(log_weights)
+  weights = jnp.exp(log_weights)
+  weights = weights / jnp.sum(weights)
+  loss = (weights * data_log_prob).mean()
+  return  loss + gamma * kl_loss, ({
       'flow_value_loss': value_loss,
       'flow_entropy_loss': entropy_loss,
       'flow_kl_loss' : kl_loss,

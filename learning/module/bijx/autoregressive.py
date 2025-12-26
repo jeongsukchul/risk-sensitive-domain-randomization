@@ -188,8 +188,9 @@ def make_autoregressive_nsf_bijx(
 
     # base distribution ~ N(0, I_ndim)
     # prior = bijx.IndependentNormal(event_shape=(ndim,))
+    # prior = bijx.DiagonalNormal(jnp.zeros(ndim), jnp.ones(ndim)/2)
     prior = bijx.IndependentUniform(event_shape=(ndim,))
-
+# 
     # build multiple AR blocks with different RNG seeds
     layers = []
     key = jax.random.PRNGKey(seed)

@@ -91,17 +91,16 @@ class BoxAffine(Bijection):
         super().__init__()
         self.low = jnp.asarray(low)
         self.high = jnp.asarray(high)
-
+        self.mid = (self.low + self.high)/2
+        self.scale = (self.high - self.low)
     def forward(self, x, logd, **kwargs):
-        scale = self.high - self.low
-        y = self.low + scale * x
-        ladj = jnp.sum(jnp.log(jnp.abs(scale)), axis=-1)
+        y = self.low + self.scale * x
+        ladj = jnp.sum(jnp.log(jnp.abs(self.scale)), axis=-1)
         return y, logd + ladj
 
     def reverse(self, y, logd, **kwargs):
-        scale = self.high - self.low
-        x = (y - self.low) / scale
-        ladj = jnp.sum(jnp.log(jnp.abs(scale)), axis=-1)
+        x = (y - self.low) / self.scale
+        ladj = jnp.sum(jnp.log(jnp.abs(self.scale)), axis=-1)
         return x, logd - ladj
 def render_flow_pdf_2d_subplots(
     log_prob_fn, low, high,

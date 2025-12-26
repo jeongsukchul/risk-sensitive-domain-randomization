@@ -395,7 +395,10 @@ def train(
   optimizer = optax.adam(learning_rate=learning_rate)
   flow_optimizer = nnx.Optimizer(
       flow_model,
-      optax.adam(learning_rate),
+      optax.chain(
+        optax.clip_by_global_norm(1.0),
+        optax.adamw(1e-3, weight_decay=1e-4), # Adds weight decay for regularization
+      ),
       wrt=nnx.Param,
   )
   flow_opt_graphdef,  init_flow_opt_state =  nnx.split(flow_optimizer)
@@ -1002,8 +1005,6 @@ def train(
                           jnp.linspace(dr_range_low[1], dr_range_high[1], 32))
     target_lnpdfs = beta* rewards
     target_lnpdfs = jnp.reshape(target_lnpdfs, x.shape)
-    normalized_target_lnpdfs = jax.nn.log_softmax(target_lnpdfs, axis=-1) # self-normalizing 
-    target_entropy = -(normalized_target_lnpdfs*jnp.exp(normalized_target_lnpdfs)).mean()
     target_fig = plt.figure()
     ctf = plt.contourf(x, y, target_lnpdfs, levels=20, cmap='viridis')
     cbar = target_fig.colorbar(ctf)
@@ -1015,7 +1016,6 @@ def train(
       wandb.log({
         'target log prob on current occupancy with returns' : wandb.Image(target_fig)
       }, step=0)
-    metrics.update({'eval/target entropy': target_entropy})
     logging.info(metrics)
     progress_fn(0, metrics)
   # Run initial policy_params_fn.
@@ -1207,8 +1207,6 @@ def train(
                               jnp.linspace(dr_range_low[1], dr_range_high[1], 32))
         target_lnpdfs = beta * rewards
         target_lnpdfs = jnp.reshape(target_lnpdfs, x.shape)
-        normalized_target_lnpdfs = jax.nn.log_softmax(target_lnpdfs, axis=-1) # self-normalizing 
-        target_entropy = -(normalized_target_lnpdfs*jnp.exp(normalized_target_lnpdfs)).mean()
         target_fig = plt.figure()
         ctf = plt.contourf(x, y, target_lnpdfs, levels=20, cmap='viridis')
         cbar = target_fig.colorbar(ctf)
@@ -1220,7 +1218,6 @@ def train(
           wandb.log({
             'target log prob on current occupancy with returns' : wandb.Image(target_fig)
           }, step=int(current_step))
-        metrics.update({"eval/target_entropy" : target_entropy})
       logging.info(metrics)
       progress_fn(current_step, metrics)
 

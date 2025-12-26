@@ -398,7 +398,6 @@ class AdvEvaluator:
     # eval_state = self._generate_eval_unroll(policy_params, dynamics_params, unroll_key)
     # eval_metrics = eval_state.info['eval_metrics']
     eval_metrics = jax.tree_util.tree_map(lambda x : x.mean(axis=0), eval_metrics)
-    reward_2d = eval_metrics.episode_metrics['reward']
     eval_metrics.active_episodes.block_until_ready()
     epoch_eval_time = time.time() - t
     metrics = {}
@@ -411,14 +410,21 @@ class AdvEvaluator:
     #       )
     #       for name, value in eval_metrics.episode_metrics.items()
     #   })
-    metrics['eval/episode_reward_mean'] = np.mean(eval_metrics.episode_metrics['reward'])
-    metrics['eval/episode_reward_p12'] = np.percentile(eval_metrics.episode_metrics['reward'],12.5)
-    metrics['eval/episode_reward_p25'] = np.percentile(eval_metrics.episode_metrics['reward'],25)
-    metrics['eval/episode_reward_p75'] = np.percentile(eval_metrics.episode_metrics['reward'],75)
-    metrics['eval/episode_reward_std'] = np.std(eval_metrics.episode_metrics['reward'])
-    metrics['eval/episode_reward_min'] = np.min(eval_metrics.episode_metrics['reward'])
-    metrics['eval/episode_reward_max'] = np.max(eval_metrics.episode_metrics['reward'])
-    metrics['eval/episode_reward_iqm'] = scipy.stats.trim_mean(eval_metrics.episode_metrics['reward'], proportiontocut=0.25, axis=None)
+    reward = eval_metrics.episode_metrics['reward']
+    N = reward.shape[0]
+    k20 = int(N* .2)
+    k10 = int(N* .1)
+    sorted_reward = np.sort(reward)
+    metrics['eval/episode_reward_mean'] = np.mean(reward)
+    metrics['eval/episode_reward_p12'] = np.percentile(reward,12.5)
+    metrics['eval/episode_reward_p25'] = np.percentile(reward,25)
+    metrics['eval/episode_reward_p75'] = np.percentile(reward,75)
+    metrics['eval/episode_reward_std'] = np.std(reward)
+    metrics['eval/episode_reward_min'] = np.min(reward)
+    metrics['eval/episode_reward_max'] = np.max(reward)
+    metrics['eval/episode_reward_iqm'] = scipy.stats.trim_mean(reward, proportiontocut=0.25, axis=None)
+    metrics['eval/episode_reward_CVaR20'] = np.mean(sorted_reward[:k20])
+    metrics['eval/episode_reward_CVaR10'] = np.mean(sorted_reward[:k10])
     metrics['eval/avg_episode_length'] = np.mean(eval_metrics.episode_steps)
     metrics['eval/std_episode_length'] = np.std(eval_metrics.episode_steps)
     metrics['eval/epoch_eval_time'] = epoch_eval_time
@@ -430,4 +436,4 @@ class AdvEvaluator:
         **metrics,
     }
 
-    return metrics, reward_2d   # pytype: disable=bad-return-type  # jax-ndarray
+    return metrics, reward   # pytype: disable=bad-return-type  # jax-ndarray

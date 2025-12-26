@@ -1,12 +1,12 @@
 import os
-
+import sys
 from omegaconf import OmegaConf
+sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 os.environ['MUJOCO_GL'] = 'egl'
 os.environ['XLA_PYTHON_CLIENT_PREALLOCATE'] = 'false'
 # @title Import MuJoCo, MJX, and Brax
 from datetime import datetime
 import functools
-import os
 from typing import Any, Callable, Dict, Sequence, Tuple, Union
 from agents.ppo import networks as ppo_networks
 from agents.ppo import train as ppo
@@ -17,8 +17,6 @@ from agents.m2td3 import networks as m2td3_networks
 from etils import epath
 from flax.training import orbax_utils
 import jax
-import mediapy as media
-import mujoco
 from mujoco import mjx
 import numpy as np
 from orbax import checkpoint as ocp
@@ -29,14 +27,13 @@ from learning.configs.manipulation_training_config import manipulation_ppo_confi
 import hydra
 from custom_envs import registry, dm_control_suite, locomotion, manipulation
 from helper import parse_cfg
-from helper import Logger
 from helper import make_dir
 import pickle
 import shutil
-from learning.module.wrapper.wrapper import Wrapper, wrap_for_brax_training
+from learning.module.wrapper.wrapper import Wrapper
 from custom_envs import mjx_env
 from utils import save_configs_to_wandb_and_local
-from learning.module.wrapper.wrapper import Wrapper, wrap_for_brax_training
+from learning.module.wrapper.wrapper import Wrapper
 import scipy
 import jax.numpy as jnp
 # # Ignore the info logs from brax
