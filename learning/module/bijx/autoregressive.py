@@ -1,217 +1,321 @@
-from typing import Sequence, Union
 import jax
 import jax.numpy as jnp
 from flax import nnx
 import bijx
 from bijx.bijections.base import Bijection
+from typing import Sequence, Callable, Optional, Union
 
-from learning.module.bijx.utils import BoxAffine
+# Assuming MaskedMLP is imported correctly
+from learning.module.bijx.utils import BoxAffine, BoxSigmoid, MaskedMLP
 
+import jax
+import jax.numpy as jnp
+from flax import nnx
+import bijx
+from bijx.bijections.base import Bijection
+from typing import Sequence, Callable, Optional, Union
 
-class ARConditioner(nnx.Module):
-    """
-    Autoregressive conditioner:
-      context ∈ R^{..., ndim} -> all_params ∈ R^{..., ndim, param_dim}
-    Then we select params for dimension i inside the flow.
-    """
+# Import your MaskedMLP (assuming it's fixed as per previous steps)
+from learning.module.bijx.utils import MaskedMLP
+import bijx
+from bijx.bijections.base import Bijection
+from learning.module.bijx.utils import BoxAffine # Assuming you still want this available
 
+class ConditionalRQSpline:
+    def __init__(
+        self, 
+        bins: int = 8, 
+        bound: float = 3.0, 
+        min_bin_width: float = 1e-3, 
+        min_bin_height: float = 1e-3, 
+        min_derivative: float = 1e-3
+    ):
+        self.bins = bins
+        self.bound = bound
+        self.param_dim = 3 * bins - 1 
+        
+        # Stability constants
+        self.min_bin_width = min_bin_width
+        self.min_bin_height = min_bin_height
+        self.min_derivative = min_derivative
+
+    @property
+    def param_count(self) -> int:
+        return self.param_dim
+
+    def _split_and_constrain_params(self, params: jax.Array):
+        """
+        Splits raw MLP outputs and enforces spline constraints:
+        - Widths/Heights: Softmax (sum to 1, positive)
+        - Derivatives: Softplus (strictly positive)
+        """
+        # 1. Split raw logits
+        w_logits = params[..., :self.bins]
+        h_logits = params[..., self.bins : 2 * self.bins]
+        d_logits = params[..., 2 * self.bins :]
+
+        # 2. Constrain Widths (Softmax + Min Width)
+        #    Equation: w = softmax(logits) * (1 - N*min) + min
+        w = jax.nn.softmax(w_logits, axis=-1)
+        w = w * (1 - self.bins * self.min_bin_width) + self.min_bin_width
+
+        # 3. Constrain Heights (Softmax + Min Height)
+        h = jax.nn.softmax(h_logits, axis=-1)
+        h = h * (1 - self.bins * self.min_bin_height) + self.min_bin_height
+
+        # 4. Constrain Derivatives (Softplus + Min Slope)
+        d = jax.nn.softplus(d_logits) + self.min_derivative
+
+        return w, h, d
+
+    def forward(self, x: jax.Array, params: jax.Array):
+        # 1. Cast to float64 for calculation stability
+        x_64 = x.astype(jnp.float64)
+        params_64 = params.astype(jnp.float64)
+        
+        # 2. Get VALID spline parameters
+        w, h, d = self._split_and_constrain_params(params_64)
+
+        # 3. Handle Boundaries (Identity outside [-bound, bound])
+        inside_interval = (x_64 >= -self.bound) & (x_64 <= self.bound)
+        x_clamped = jnp.clip(x_64, -self.bound, self.bound)
+
+        # 4. Normalize to [0, 1] for bijx
+        x_norm = (x_clamped + self.bound) / (2 * self.bound)
+        
+        # 5. Compute Spline (Forward)
+        #    Note: inverse=False
+        z_norm, log_det_spline = bijx.rational_quadratic_spline(
+            x_norm, w, h, d, inverse=False
+        )
+        
+        # 6. Denormalize
+        z_spline = z_norm * (2 * self.bound) - self.bound
+
+        # 7. Apply Boundary Mask
+        #    If outside bound, z = x (Identity) and log_det = 0
+        z_final = jnp.where(inside_interval, z_spline, x_64)
+        log_det_final = jnp.where(inside_interval, log_det_spline, 0.0)
+
+        # 8. Cast back to float32
+        return z_final.astype(jnp.float32), log_det_final.astype(jnp.float32)
+
+    def inverse(self, z: jax.Array, params: jax.Array):
+        # 1. Cast to float64
+        z_64 = z.astype(jnp.float64)
+        params_64 = params.astype(jnp.float64)
+
+        # 2. Get VALID spline parameters
+        w, h, d = self._split_and_constrain_params(params_64)
+        
+        # 3. Handle Boundaries
+        inside_interval = (z_64 >= -self.bound) & (z_64 <= self.bound)
+        z_clamped = jnp.clip(z_64, -self.bound, self.bound)
+        
+        # 4. Normalize
+        z_norm = (z_clamped + self.bound) / (2 * self.bound)
+        
+        # 5. Compute Spline (Inverse)
+        #    Note: inverse=True
+        x_norm, log_det_spline = bijx.rational_quadratic_spline(
+            z_norm, w, h, d, inverse=True
+        )
+        
+        # 6. Denormalize
+        x_spline = x_norm * (2 * self.bound) - self.bound
+        
+        # 7. Apply Boundary Mask
+        x_final = jnp.where(inside_interval, x_spline, z_64)
+        log_det_final = jnp.where(inside_interval, log_det_spline, 0.0)
+        
+        return x_final.astype(jnp.float32), log_det_final.astype(jnp.float32)
+# --- Transform ---
+class MaskedAutoregressiveTransform(Bijection):
     def __init__(
         self,
-        ndim: int,
-        param_dim: int,
-        hidden=(64, 64),
-        rngs: nnx.Rngs = nnx.Rngs(0),
+        features: int,
+        rngs: nnx.Rngs,
+        univariate: ConditionalRQSpline,
+        passes: Optional[int] = None,
+        order: Optional[jax.Array] = None,
+        adjacency: Optional[jax.Array] = None,
+        hidden_features: Sequence[int] = (64, 64),
+        activation: Callable = nnx.relu,
     ):
         super().__init__()
-        self.ndim = ndim
-        self.param_dim = param_dim
+        self.features = features
+        self.univariate = univariate
+        self.total_param_dim = self.univariate.param_count
 
-        h1, h2 = hidden
-        self.l1 = nnx.Linear(ndim, h1, rngs=rngs)
-        self.l2 = nnx.Linear(h1, h2, rngs=rngs)
-        self.l3 = nnx.Linear(h2, ndim * param_dim, rngs=rngs)
-        #initialization should not too much perturbed from base distribution
-        self.l3.kernel.value = jnp.zeros_like(self.l3.kernel.value)
-        self.l3.bias.value   = jnp.zeros_like(self.l3.bias.value)
-
-    def __call__(self, context_full):
-        """
-        context_full: (..., ndim)  (we zero out "future" dims by masking)
-        returns: (..., ndim, param_dim)
-        """
-        h = jax.nn.relu(self.l1(context_full))
-        h = jax.nn.relu(self.l2(h))
-        h = self.l3(h)  # (..., ndim * param_dim)
-        return h.reshape(*h.shape[:-1], self.ndim, self.param_dim)
-class AutoregressiveRQS(Bijection):
-    """
-    Autoregressive RQ spline flow (NSF-style) as a bijx.Bijection.
-
-    - base_bij: scalar MonotoneRQSpline (wrapped with ModuleReconstructor)
-    - conditioner: ARConditioner giving params for all dims
-    """
-
-    def __init__(
-        self,
-        ndim: int,
-        bins: int = 16,
-        hidden=(64, 64),
-        rngs: nnx.Rngs = nnx.Rngs(0),
-    ):
-        super().__init__()
-        self.ndim = ndim
-
-        # Scalar monotone RQ spline template
-        base = bijx.MonotoneRQSpline(
-            knots=bins,
-            event_shape=(),  # scalar
+        # --- Adjacency / Masking Logic ---
+        if adjacency is None:
+            if passes is None: passes = features
+            if order is None: order = jnp.arange(features)
+            else: order = jnp.array(order, dtype=int)
+            self.passes = min(max(passes, 1), features)
+            
+            # Simple version of grouping for Made masks
+            groups = jnp.floor(order / jnp.ceil(features / self.passes))
+            adjacency = groups[:, None] > groups 
+        else:
+            adjacency = jnp.array(adjacency, dtype=bool)
+            # Ensure diagonal is zero (autoregressive property)
+            adjacency = adjacency & (~jnp.eye(features, dtype=bool))
+        
+        # Expand adjacency for the parameter dimension of the spline
+        # shape: (features * param_dim, features) if doing dense, 
+        # or handled internally by MaskedMLP logic.
+        # Assuming MaskedMLP handles the repeating:
+        self.hyper = MaskedMLP(
+            features=features,
+            hidden_features=hidden_features,
+            params_per_feature=self.total_param_dim,
             rngs=rngs,
-        )
-        self.base_bij = bijx.ModuleReconstructor(base)
-        self.param_dim = self.base_bij.params_total_size
-
-        # Autoregressive conditioner MLP
-        self.net = ARConditioner(
-            ndim=ndim,
-            param_dim=self.param_dim,
-            hidden=hidden,
-            rngs=rngs,
+            activation=activation,
         )
 
-    # ---------- helpers ----------
+    def _compute_params(self, x: jax.Array):
+        out = self.hyper(x)
+        return out.reshape(out.shape[:-1] + (self.features, self.total_param_dim))
 
-    def _step_forward(self, z, y, logd, i):
+    def forward(self, x: jax.Array, log_density, **kwargs):
         """
-        One AR step in forward direction: z[..., i] -> y[..., i],
-        updating logd with -log|∂y_i/∂z_i|.
+        Forward pass (Sampling direction).
+        Formula: log_prob(y) = log_prob(x) - log|det J_f|
         """
-        # context: previous outputs y_0..y_{i-1}, future dims zeroed
-        idxs = jnp.arange(self.ndim)
-        mask_prev = (idxs < i).astype(z.dtype)  # (ndim,)
-        # broadcast mask to batch
-        while mask_prev.ndim < y.ndim:
-            mask_prev = mask_prev[jnp.newaxis, ...]
-        context_full = y * mask_prev  # (..., ndim)
+        params = self._compute_params(x)
+        z, log_det_per_dim = self.univariate.forward(x, params)
+        
+        # [FIX] Changed from + to - 
+        # We must SUBTRACT the forward log-determinant.
+        return z, log_density - jnp.sum(log_det_per_dim, axis=-1)
 
-        # all params for all dims, slice dim i
-        all_params = self.net(context_full)          # (..., ndim, param_dim)
-        theta_i = all_params[..., i, :]              # (..., param_dim)
-
-        # build scalar bijection for this dim, vmapped over batch
-        scalar_bij = self.base_bij.from_params(theta_i, autovmap=True)
-
-        z_i = z[..., i]                              # (...,)
-        ld0 = jnp.zeros_like(logd)
-        y_i, ld1 = scalar_bij.forward(z_i, ld0)      # ld1 = -log|∂y_i/∂z_i|
-
-        y = y.at[..., i].set(y_i)
-        logd = logd + ld1
-        return z, y, logd
-
-    def _step_reverse(self, x, z, logd, i):
+    def reverse(self, z: jax.Array, log_density, **kwargs):
         """
-        One AR step in reverse direction: x[..., i] -> z[..., i],
-        updating logd with +log|∂z_i/∂x_i|.
+        Reverse pass (Density evaluation direction).
+        Formula: return (x, delta) such that result = prior - delta
+        This implies delta should be +log|det J_f|.
         """
-        idxs = jnp.arange(self.ndim)
-        mask_prev = (idxs < i).astype(x.dtype)
-        while mask_prev.ndim < x.ndim:
-            mask_prev = mask_prev[jnp.newaxis, ...]
-        context_full = x * mask_prev  # (..., ndim)
+        def body_fn(carry, i):
+            x_curr, log_det_inv_acc = carry
+            
+            # 1. Compute params based on currently known x values (autoregressive)
+            all_params = self._compute_params(x_curr)
+            params_i = all_params[..., i, :]
+            
+            # 2. Invert the i-th dimension
+            z_i = z[..., i]
+            x_i, log_det_inv_i = self.univariate.inverse(z_i, params_i)
+            
+            # 3. Update x and accumulate INVERSE log det
+            x_new = x_curr.at[..., i].set(x_i)
+            return (x_new, log_det_inv_acc + log_det_inv_i), None
 
-        all_params = self.net(context_full)          # (..., ndim, param_dim)
-        theta_i = all_params[..., i, :]              # (..., param_dim)
-        scalar_bij = self.base_bij.from_params(theta_i, autovmap=True)
+        init_x = jnp.zeros_like(z)
+        init_log = jnp.zeros(z.shape[:-1])
 
-        x_i = x[..., i]                              # (...,)
-        ld0 = jnp.zeros_like(logd)
-        z_i, ld1 = scalar_bij.reverse(x_i, ld0)      # ld1 = +log|∂z_i/∂x_i|
+        (x_final, total_inverse_log_det), _ = jax.lax.scan(
+            body_fn, (init_x, init_log), jnp.arange(self.features)
+        )
+        
+        return x_final, log_density - total_inverse_log_det
 
-        z = z.at[..., i].set(z_i)
-        logd = logd + ld1
-        return x, z, logd
-
-    # ---------- bijection API ----------
-
-    def forward(self, x, log_density, **kwargs):
-        """
-        x: base samples z ~ N(0,I)  (shape: batch + (ndim,))
-        log_density: log p_base(z)
-        returns: y, log p_base(z) - log|det J(z -> y)|
-        """
-        z = x
-        y = jnp.zeros_like(z)
-        logd = log_density
-
-        for i in range(self.ndim):
-            z, y, logd = self._step_forward(z, y, logd, i)
-
-        return y, logd
-
-    def reverse(self, y, log_density, **kwargs):
-        """
-        y: transformed samples x
-        log_density: typically zeros when used in log_density evaluation
-        returns: z, log p_base(z) = log_density + log|det J^{-1}(y -> z)|
-        """
-        x = y
-        z = jnp.zeros_like(x)
-        logd = log_density
-
-        for i in range(self.ndim):
-            x, z, logd = self._step_reverse(x, z, logd, i)
-
-        return z, logd
-
-
+# --- Factory ---
 def make_autoregressive_nsf_bijx(
     ndim: int,
     bins: int = 16,
     hidden_features=(64, 64),
     n_transforms: int = 3,
     seed: int = 0,
-    domain_range : Union[Sequence[float], None] = None,
+    domain_range: Union[Sequence[float], None] = None,
 ):
-    """
-    Zuko-style NSF-AR in bijx with `n_transforms` AR blocks.
-
-    Rough analogue of:
-        MAF(
-            features=ndim,
-            univariate=MonotonicRQSTransform,
-            shapes=[(bins,), (bins,), (bins-1,)],
-            hidden_features=hidden,
-            transforms=n_transforms,
-        )
-    Flow = Chain( AR_block_1, ..., AR_block_n_transforms )
-    """
-
-    # base distribution ~ N(0, I_ndim)
-    # prior = bijx.IndependentNormal(event_shape=(ndim,))
-    # prior = bijx.DiagonalNormal(jnp.zeros(ndim), jnp.ones(ndim)/2)
-    prior = bijx.IndependentUniform(event_shape=(ndim,))
-# 
-    # build multiple AR blocks with different RNG seeds
+    prior = bijx.IndependentNormal(event_shape=(ndim,))
     layers = []
     key = jax.random.PRNGKey(seed)
+    
     for k in range(n_transforms):
         key, k_block = jax.random.split(key)
         rngs_block = nnx.Rngs(params=int(jax.random.randint(k_block, (), 0, 1_000_000)))
-
-        ar_block = AutoregressiveRQS(
-            ndim=ndim,
-            bins=bins,
-            hidden=hidden_features,
+        
+        layers.append(MaskedAutoregressiveTransform(
+            features=ndim,
             rngs=rngs_block,
-        )
-        layers.append(ar_block)
-    # pre = SigmoidToUnit()
+            hidden_features=hidden_features,
+            univariate=ConditionalRQSpline(bins=bins, bound=4.0)
+        ))
+
     if domain_range is not None:
         low, high = domain_range
-        post = BoxAffine(low=low, high=high)
+        post = BoxSigmoid(low=low, high=high)
         flow_bij = bijx.Chain( *layers, post)
     else:
         flow_bij = bijx.Chain( *layers)
-    dist = bijx.Transformed(prior, flow_bij)
-    return dist
+    return bijx.Transformed(prior, flow_bij)
 
+if __name__ == "__main__":
+    D = 2
+    print(f"Initializing for D={D}...")
+    dist = make_autoregressive_nsf_bijx(D, bins=12, n_transforms=3, seed=1) # Start with 1 transform to debug
+
+    # 1. Check Jacobian Triangularity (Autoregressive Property)
+    print("Checking Autoregressive Property (Jacobian)...")
+    def get_z(x):
+        z, _ = dist.bijection.forward(x, 0)
+        return z
+        
+    x_dummy = jnp.ones(D)
+    jac = jax.jacfwd(get_z)(x_dummy)
+    
+    # Check strictly lower triangular (diagonal is allowed, upper must be 0)
+    # Actually, for x->z (MAF), the Jacobian is Triangular.
+    # Specifically, z_i depends on x_<=i. So dz_i/dx_j is non-zero if j <= i.
+    # This means Lower Triangular.
+    is_lower_triangular = jnp.allclose(jnp.triu(jac, k=1), 0.0, atol=1e-5)
+    
+    print(f"Jacobian:\n{jnp.round(jac, 2)}")
+    print(f"Is Lower Triangular (No Leakage)? {is_lower_triangular}")
+    
+    if not is_lower_triangular:
+        print("CRITICAL ERROR: Masking is failing. Future features are leaking into past.")
+    else:
+        # 2. Check Density Consistency
+        key = jax.random.PRNGKey(123)
+        print("\nSampling...")
+        x, logp_sample = dist.sample(batch_shape=(1024,), rng=key)
+        
+        print("Computing density...")
+        logp_density = dist.log_density(x)
+        
+        diff = jnp.max(jnp.abs(logp_sample - logp_density))
+        print(f"Max Diff: {diff:.6e}")
+
+    # Insert this after your Jacobian check
+    print("\n--- Diagnostic: Bijector Consistency ---")
+    key = jax.random.PRNGKey(55)
+    x_in = jax.random.normal(key, (1, D)) # Single sample
+
+    # 1. Forward Pass
+    z_fwd, log_det_fwd = dist.bijection.forward(x_in, 0.0)
+
+    # 2. Reverse Pass (using the z we just calculated)
+    x_rec, log_density_out = dist.bijection.reverse(z_fwd, 0.0) 
+    # Note: reverse returns (log_density_in - total_log_det)
+    # So log_det_rev_accumulated = -log_density_out
+
+
+    # 3. Analysis
+    rec_error = jnp.max(jnp.abs(x_in - x_rec))
+    det_sum = log_det_fwd + log_density_out  # Should be 0.0 ideally
+
+    print(f"Original x:  {x_in[0, :3]} ...")
+    print(f"Reconst x:   {x_rec[0, :3]} ...")
+    print(f"Reconstruction Error (x - x_rec): {rec_error:.2e}")
+    print(f"Log Det Forward: {log_det_fwd[0]:.4f}")
+    print(f"Log Det Reverse: {log_density_out[0]:.4f}")
+    print(f"Det Consistency (Sum should be 0): {det_sum[0]:.4f}")
+
+    if jnp.abs(det_sum) > 1e-4:
+        if jnp.isclose(log_det_fwd, log_density_out, rtol=1e-2):
+            print(">>> DIAGNOSIS: Sign Error. 'reverse' returns Forward Det. Flip the sign in reverse().")
+        else:
+            print(">>> DIAGNOSIS: Value Mismatch. The Spline inputs (params) differ between passes.")

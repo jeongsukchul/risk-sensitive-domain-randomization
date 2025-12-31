@@ -25,7 +25,7 @@ from ml_collections import config_dict
 from custom_envs import mjx_env
 # from mujoco_playground._src.dm_control_suite import acrobot
 # from mujoco_playground._src.dm_control_suite import ball_in_cup
-from custom_envs.dm_control_suite import cartpole
+from custom_envs.dm_control_suite import cartpole, humanoid
 from custom_envs.dm_control_suite import cheetah
 # from mujoco_playground._src.dm_control_suite import finger
 # from mujoco_playground._src.dm_control_suite import fish
@@ -60,9 +60,9 @@ _envs = {
     # "FishSwim": fish.Swim,
     "HopperHop": partial(hopper.Hopper, hopping=True),
     "HopperStand": partial(hopper.Hopper, hopping=False),
-    # "HumanoidStand": partial(humanoid.Humanoid, move_speed=0.0),
-    # "HumanoidWalk": partial(humanoid.Humanoid, move_speed=humanoid.WALK_SPEED),
-    # "HumanoidRun": partial(humanoid.Humanoid, move_speed=humanoid.RUN_SPEED),
+    "HumanoidStand": partial(humanoid.Humanoid, move_speed=0.0),
+    "HumanoidWalk": partial(humanoid.Humanoid, move_speed=humanoid.WALK_SPEED),
+    "HumanoidRun": partial(humanoid.Humanoid, move_speed=humanoid.RUN_SPEED),
     "PendulumSwingup": pendulum.SwingUp,
     # "PointMass": point_mass.PointMass,
     # "ReacherEasy": partial(reacher.Reacher, target_size=reacher.BIG_TARGET),
@@ -89,9 +89,9 @@ _cfgs = {
     # "FishSwim": fish.default_config,
     "HopperHop": hopper.default_config,
     "HopperStand": hopper.default_config,
-    # "HumanoidRun": humanoid.default_config,
-    # "HumanoidStand": humanoid.default_config,
-    # "HumanoidWalk": humanoid.default_config,
+    "HumanoidRun": humanoid.default_config,
+    "HumanoidStand": humanoid.default_config,
+    "HumanoidWalk": humanoid.default_config,
     "PendulumSwingup": pendulum.default_config,
     # "PointMass": point_mass.default_config,
     # "ReacherEasy": reacher.default_config,
@@ -108,12 +108,24 @@ _randomizer = {
   "CartpoleSwingup": cartpole.domain_randomize,
   "HopperHop" : hopper.domain_randomize,
   "CheetahRun" : cheetah.domain_randomize,
+  "WalkerRun" : walker.domain_randomize,
+  "WalkerWalk" : walker.domain_randomize,
+  "WalkerStand" : walker.domain_randomize,
+  "HumanoidRun": humanoid.domain_randomize,
+  "HumanoidStand": humanoid.domain_randomize,
+  "HumanoidWalk": humanoid.domain_randomize,
 }
 _randomizer_eval = {
 
   "CartpoleSwingup": cartpole.domain_randomize_eval,
   "HopperHop" : hopper.domain_randomize_eval,
   "CheetahRun" : cheetah.domain_randomize_eval,
+  "WalkerRun" : walker.domain_randomize_eval,
+  "WalkerWalk" : walker.domain_randomize_eval,
+  "WalkerStand" : walker.domain_randomize_eval,
+  "HumanoidRun": humanoid.domain_randomize_eval,
+  "HumanoidStand": humanoid.domain_randomize_eval,
+  "HumanoidWalk": humanoid.domain_randomize_eval,
 }
 
 def __getattr__(name):

@@ -32,6 +32,7 @@ from brax.training import types
 from brax.training.acme import running_statistics
 from brax.training.acme import specs
 from matplotlib.ticker import MaxNLocator
+import scipy
 from agents.sampler_ppo import losses as samplerppo_losses
 from agents.sampler_ppo import networks as samplerppo_networks
 from brax.training.types import Params
@@ -39,7 +40,7 @@ from brax.training.types import PRNGKey
 import flax
 import jax
 import jax.numpy as jnp
-from learning.agents.sampler_ppo.distributions import ADRState, DoraemonState, _unpack_beta, get_adr_sample, plot_adr_density_2d, plot_beta_density_2d, sample_beta_on_box
+from learning.agents.sampler_ppo.distributions import ADRState, DoraemonState, _log_prob_beta_on_box, _unpack_beta, get_adr_sample, plot_adr_density_2d, plot_beta_density_2d, sample_beta_on_box
 from learning.helper import make_dir
 from learning.module.gmmvi.network import GMMTrainingState
 from learning.module.bijx.utils import render_flow_pdf_2d_subplots
@@ -228,9 +229,6 @@ def train(
     randomization_fn: Optional[
         Callable[[base.System, jnp.ndarray], Tuple[base.System, base.System]]
     ] = None,
-    eval_randomization_fn: Optional[
-        Callable[[base.System, jnp.ndarray], Tuple[base.System, base.System]]
-    ] = None,
     # ppo params
     learning_rate: float = 1e-4,
     entropy_cost: float = 1e-4,
@@ -282,7 +280,6 @@ def train(
   _validate_madrona_args(
       madrona_backend, num_envs, num_eval_envs, action_repeat, eval_env
   )
-
   xt = time.time()
   process_count = jax.process_count()
   process_id = jax.process_index()
@@ -309,6 +306,7 @@ def train(
   # The number of training_step calls per training_epoch call.
   # equals to ceil(num_timesteps / (num_evals * env_step_per_training_step *
   #                                 num_resets_per_eval))
+
   num_training_steps_per_epoch = np.ceil(
       num_timesteps
       / (
@@ -317,7 +315,7 @@ def train(
           * max(num_resets_per_eval, 1)
       )
   ).astype(int)
-  print("num_trainign_Steps_per_epoch", num_training_steps_per_epoch)
+  
   key = jax.random.PRNGKey(seed)
   global_key, local_key = jax.random.split(key)
   del key
@@ -332,7 +330,12 @@ def train(
   import copy
   env = copy.deepcopy(environment)
   nominal_dynamics_params= env.nominal_params
+  print("num timesteps", num_timesteps)
+  print("num_evals", num_evals)
+  print("num_trainign_Steps_per_epoch", num_training_steps_per_epoch)
   print("nominal params", nominal_dynamics_params)
+  print("dr range", env.dr_range)
+  print("sampler update freq", sampler_update_freq)
   if hasattr(env,'dr_range') :
     low, high = env.dr_range
     dr_mid = (low  + high) / 2.
@@ -347,22 +350,22 @@ def train(
         randomization_fn,
         dr_range=training_dr_range,
     )
-  if sampler_choice == "NODR":
-    env = wrap_for_brax_training(
-      env,
-      episode_length=episode_length,
-      action_repeat=action_repeat,
-    )
-  else:
-    env = wrap_for_adv_training(
-      env,
-      episode_length=episode_length,
-      action_repeat=action_repeat,
-      randomization_fn=training_randomization_fn,
-      param_size = len(dr_range_low),
-      dr_range_low=dr_range_low,
-      dr_range_high=dr_range_high,
-    )
+  # if sampler_choice == "NODR":
+  #   env = wrap_for_brax_training(
+  #     env,
+  #     episode_length=episode_length,
+  #     action_repeat=action_repeat,
+  #   )
+  # else:
+  env = wrap_for_adv_training(
+    env,
+    episode_length=episode_length,
+    action_repeat=action_repeat,
+    randomization_fn=training_randomization_fn,
+    param_size = len(dr_range_low),
+    dr_range_low=dr_range_low,
+    dr_range_high=dr_range_high,
+  )
 
   key_envs = jax.random.split(key_env, num_envs // process_count)
   key_envs = jnp.reshape(
@@ -564,16 +567,23 @@ def train(
         a, b = _unpack_beta(training_state.doraemon_state.x_opt, 2, min_bound, max_bound)
         dynamics_params = sample_beta_on_box(param_key, a, b, dr_range_low, dr_range_high, num_envs //jax.process_count())
     elif "FLOW" in sampler_choice:
+      param_key, param_key2= jax.random.split(param_key)
       flow_model = nnx.merge(samplerppo_network.flow_network, training_state.flow_state)
-      dynamics_params, logp = flow_model.sample((num_envs // jax.process_count() // local_devices_to_use,),\
+      dynamics_params_sampler, logp = flow_model.sample((num_envs // jax.process_count() // local_devices_to_use,),\
                                                     rng=param_key)
-      # dynamics_params = jax.random.uniform(param_key, shape=(num_envs //jax.process_count(), len(dr_range_low)), minval=dr_range_low, maxval=dr_range_high)
+      data = get_experience(training_state, state, dynamics_params_sampler,\
+            key_generate_unroll, unroll_length, batch_size * num_minibatches // num_envs,)[1]
+      rewards = data.reward
+      
+      dynamics_params = jax.random.uniform(param_key2, shape=(num_envs //jax.process_count(), len(dr_range_low)), minval=dr_range_low, maxval=dr_range_high)
 
     elif sampler_choice == "GMM":
         dynamics_params, mapping = samplerppo_network.gmm_network.model.sample(\
-          training_state.gmm_training_state.model_state.gmm_state, sample_key2, num_envs //jax.process_count())
+          training_state.gmm_training_state.model_state.gmm_state, param_key, num_envs //jax.process_count())
         # dynamics_params_for_training, mapping = samplerppo_network.gmm_network.sample_selector.select_samples(\
         #       training_state.gmm_training_state.model_state, param_key)
+    else:
+      raise ValueError("No Sampler Available")
     # #for debugging
     # dynamics_params = (dr_range_low + dr_range_high)/2 +\
     #   jax.random.normal(key=param_key, shape=(num_envs//jax.process_count(),len(dr_range_low)))\
@@ -582,8 +592,9 @@ def train(
 
     state, data = get_experience(training_state, state, dynamics_params,\
             key_generate_unroll, unroll_length, batch_size * num_minibatches // num_envs,)
-   
-    rewards = data.reward     #(K, L, B)
+
+    if "FLOW" not in sampler_choice:
+      rewards = data.reward     #(K, L, B)
     # Have leading dimensions (batch_size * num_minibatches, unroll_length)
     data = jax.tree_util.tree_map(lambda x: jnp.swapaxes(x, 1, 2), data)
     data = jax.tree_util.tree_map(
@@ -612,7 +623,6 @@ def train(
         (),
         length=num_updates_per_batch,
     )
-
     values = rewards.mean(axis=(0,1)) #+ bootstrap_value
     cumulated_values += values
     # For Debuggin GMM
@@ -633,7 +643,7 @@ def train(
         fs, fos, prev_sample_carry, prev_logp_carry = carry
         (loss, fs_n, fos_n), (metric, current_sample, current_logq) = flow_update_fn(
             samplerppo_network.flow_network, fs, fos,
-            dynamics_params,
+            dynamics_params_sampler,
             prev_sample_carry,
             prev_logp_carry,
             target_lnpdf,
@@ -678,6 +688,7 @@ def train(
                   lambda: (training_state.gmm_training_state, 0.) )
     else:
       raise ValueError("No Sampler!")
+    # update_signal=1
     metrics.update({
       'target_pdf_min': update_signal* cumulated_values.min(),
       'target_pdf_max': update_signal* cumulated_values.max(),
@@ -858,11 +869,27 @@ def train(
   occupancy_frames = []
   # Run initial eval
   metrics = {}
-  if process_id == 0 and num_evals > 1 and run_evals:
+  if process_id == 0 and num_evals > 1 and run_evals and len(dr_range_low)>2:
+    eval_key, local_key = jax.random.split(local_key)
+    dynamics_params_grid = jax.random.uniform(eval_key, shape=(4096, len(dr_range_low)), minval=dr_range_low, maxval=dr_range_high)
+    metrics, reward_1d, epi_length = evaluator.run_evaluation(
+        _unpmap((
+            training_state.normalizer_params,
+            training_state.params.policy,
+            training_state.params.value,
+        )),
+        dynamics_params=dynamics_params_grid,
+        training_metrics=metrics,
+        num_eval_seeds=10,
+        success_threshold=success_threshold,
+    )
+    logging.info(metrics)
+    progress_fn(0, metrics)
+  elif process_id == 0 and num_evals > 1 and run_evals and len(dr_range_low)==2:
     x, y = jnp.meshgrid(jnp.linspace(dr_range_low[0], dr_range_high[0], 32),\
                               jnp.linspace(dr_range_low[1], dr_range_high[1], 32))
     dynamics_params_grid = jnp.c_[x.ravel(), y.ravel()]
-    metrics, reward_1d = evaluator.run_evaluation(
+    metrics, reward_1d,_ = evaluator.run_evaluation(
         _unpmap((
             training_state.normalizer_params,
             training_state.params.policy,
@@ -871,6 +898,7 @@ def train(
         dynamics_params=dynamics_params_grid,
         training_metrics={},
         num_eval_seeds=10,
+        success_threshold=success_threshold,
     )
     eval_fig = plt.figure()
     reward_2d = reward_1d.reshape(x.shape)
@@ -902,28 +930,28 @@ def train(
       
       if use_wandb:
         wandb.log(
-            {f"autodr_heatmap": wandb.Image(fig)},
+            {f"Sampler Heatmap": wandb.Image(fig)},
             step=int(current_step),
         )
     elif sampler_choice=='DORAEMON':
       fig, ax = plt.subplots()
-      _, reward_1d = evaluator.run_evaluation(
-        _unpmap((
-            training_state.normalizer_params,
-            training_state.params.policy,
-            training_state.params.value,
-        )),
-          dynamics_params=dynamics_params_grid,
-          training_metrics={},
-          num_eval_seeds=10,
-      )
+      # _, reward_1d = evaluator.run_evaluation(
+      #   _unpmap((
+      #       training_state.normalizer_params,
+      #       training_state.params.policy,
+      #       training_state.params.value,
+      #   )),
+      #     dynamics_params=dynamics_params_grid,
+      #     training_metrics={},
+      #     num_eval_seeds=10,
+      # )
       a, b = _unpack_beta(_unpmap(training_state.doraemon_state.x_opt), 2, min_bound, max_bound)
       
       dynamics_params_doraemon = sample_beta_on_box(sample_key, a, b, low, high, num_envs //jax.process_count())
       ax = plot_beta_density_2d(
                 _unpmap(training_state.doraemon_state), low, high, len(low), 0.8, 110.,
                 title=f"Doraemon Result [step={int(current_step)}]",
-                contexts=dynamics_params_doraemon, returns=reward_1d, success_threshold=success_threshold,
+                contexts=dynamics_params_doraemon, success_threshold=success_threshold,
                 ax=ax,
             )
       fig.tight_layout()
@@ -932,7 +960,7 @@ def train(
 
       if use_wandb:
         wandb.log(
-            {f"Doraemon Result": wandb.Image(fig)},
+            {f"Sampler Heatmap": wandb.Image(fig)},
             step=int(current_step),
         )
 
@@ -963,17 +991,17 @@ def train(
       rewards = data_for_gmm.reward
       rewards = rewards.mean(axis=(0,1))
       target_lnpdf = beta * rewards
-      training_fig, _ = plot_reward_heatmap(samples, \
-            target_lnpdf, dr_range_low, dr_range_high, bins=80, \
-            title = f"Training Heatmap with beta={beta} [step={int(current_step)}]")
-      training_fig.tight_layout()
-      training_fig.canvas.draw()
-      gmm_training_frames.append(np.asarray(training_fig.canvas.buffer_rgba())[...,:3])
-      if use_wandb:
-        wandb.log(
-                {"training_heatmap" :wandb.Image(training_fig)},
-                step=int(current_step),
-            )
+      # training_fig, _ = plot_reward_heatmap(samples, \
+      #       target_lnpdf, dr_range_low, dr_range_high, bins=80, \
+      #       title = f"Training Heatmap with beta={beta} [step={int(current_step)}]")
+      # training_fig.tight_layout()
+      # training_fig.canvas.draw()
+      # gmm_training_frames.append(np.asarray(training_fig.canvas.buffer_rgba())[...,:3])
+      # if use_wandb:
+      #   wandb.log(
+      #           {"Training Heatmap" :wandb.Image(training_fig)},
+      #           step=int(current_step),
+      #       )
       eval_samples = samplerppo_network.gmm_network.model.sample(_unpmap(\
         training_state.gmm_training_state.model_state.gmm_state), sample_key2, 1000)[0]
       
@@ -992,7 +1020,7 @@ def train(
       gmm_frames.append(np.asarray(model_fig.canvas.buffer_rgba())[...,:3])
       if use_wandb:
         wandb.log(
-                {"model" :wandb.Image(model_fig)},
+                {"Sampler Heatmap" :wandb.Image(model_fig)},
                 step=int(current_step),
             )
     evaluation_key = jax.random.split(evaluation_key, local_devices_to_use)
@@ -1059,11 +1087,65 @@ def train(
 
     if num_evals > 0:
       metrics = training_metrics
+      
       if run_evals:
+        metric_key, local_key = jax.random.split(local_key)
+        if sampler_choice=="DORAEMON" or "FLOW" in sampler_choice or sampler_choice=="GMM":
+          num_samples_bench = 4096
+          if sampler_choice=="DORAEMON":
+            a, b = _unpack_beta(_unpmap(training_state.doraemon_state.x_opt), len(dr_range_low), min_bound, max_bound)
+            samples = sample_beta_on_box(metric_key, a, b, low, high, num_samples_bench)
+            logq = _log_prob_beta_on_box(a, b, low, high, samples)
+          elif "FLOW" in sampler_choice:
+            samples, logq = flow_model.sample( (num_samples_bench,), metric_key)
+          elif sampler_choice=="GMM":
+            samples, logq = samplerppo_network.gmm_network.model.sample(_unpmap(\
+              training_state.gmm_training_state.model_state.gmm_state), metric_key, num_samples_bench)
+          
+          _, reward_1d, epi_length = evaluator.run_evaluation(
+              _unpmap((
+                  training_state.normalizer_params,
+                  training_state.params.policy,
+                  training_state.params.value,
+              )),
+              dynamics_params=samples,
+              training_metrics=metrics,
+              num_eval_seeds=10,
+              success_threshold=success_threshold,
+          )
+          _beta = 1 if sampler_choice=="DORAEMON" else beta
+          target_lnpdf = _beta* reward_1d/epi_length
+
+          log_ratio = target_lnpdf - logq
+          valid_mask = jnp.isfinite(log_ratio)
+          safe_log_ratio = jnp.where(valid_mask, log_ratio, -1e20)
+          valid_count = jnp.sum(valid_mask)
+          # Prevent div-by-zero if all are NaN
+          safe_denom = jnp.maximum(valid_count, 1.0) 
+          elbo = jnp.sum(jnp.where(valid_mask, log_ratio, 0.0)) / safe_denom
+          metrics['eval/elbo'] = elbo
+          weights = jnp.where(valid_mask, jnp.exp(safe_log_ratio - jnp.max(safe_log_ratio)), 0.)
+          metrics['eval/reverse_ess'] = jnp.sum(weights)**2 / jnp.maximum(num_samples_bench * jnp.sum(weights**2), 1e-10)
+          metrics['eval/ln_z'] = (jnp.log(weights.sum()) + jnp.max(safe_log_ratio)) - jnp.log(num_samples_bench)
+        if len(dr_range_low)>2:
+          eval_key, local_key = jax.random.split(local_key)
+          dynamics_params_grid = jax.random.uniform(eval_key, shape=(4096, len(dr_range_low)), minval=dr_range_low, maxval=dr_range_high)
+          metrics, reward_1d, __cached__ = evaluator.run_evaluation(
+              _unpmap((
+                  training_state.normalizer_params,
+                  training_state.params.policy,
+                  training_state.params.value,
+              )),
+              dynamics_params=dynamics_params_grid,
+              training_metrics=metrics,
+              num_eval_seeds=10,
+              success_threshold=success_threshold,
+          )
+      if run_evals and len(dr_range_low)==2:
         x, y = jnp.meshgrid(jnp.linspace(dr_range_low[0], dr_range_high[0], 32),\
                               jnp.linspace(dr_range_low[1], dr_range_high[1], 32))
         dynamics_params_grid = jnp.c_[x.ravel(), y.ravel()]
-        metrics, reward_1d = evaluator.run_evaluation(
+        metrics, reward_1d, _ = evaluator.run_evaluation(
             _unpmap((
                 training_state.normalizer_params,
                 training_state.params.policy,
@@ -1072,6 +1154,7 @@ def train(
             dynamics_params=dynamics_params_grid,
             training_metrics=metrics,
             num_eval_seeds=10,
+            success_threshold=success_threshold,
         )
         eval_fig = plt.figure()
         reward_2d = reward_1d.reshape(x.shape)
@@ -1107,23 +1190,23 @@ def train(
           autodr_frames.append(np.asarray(fig.canvas.buffer_rgba())[...,:3])
         elif sampler_choice=='DORAEMON':
           fig, ax = plt.subplots()
-          _, reward_1d = evaluator.run_evaluation(
-            _unpmap((
-                training_state.normalizer_params,
-                training_state.params.policy,
-                training_state.params.value,
-            )),
-              dynamics_params=dynamics_params_grid,
-              training_metrics={},
-              num_eval_seeds=10,
-          )
+          # _, reward_1d = evaluator.run_evaluation(
+          #   _unpmap((
+          #       training_state.normalizer_params,
+          #       training_state.params.policy,
+          #       training_state.params.value,
+          #   )),
+          #     dynamics_params=dynamics_params_grid,
+          #     training_metrics={},
+          #     num_eval_seeds=10,
+          # )
           a, b = _unpack_beta(_unpmap(training_state.doraemon_state.x_opt), 2, min_bound, max_bound)
           
           dynamics_params_doraemon = sample_beta_on_box(sample_key, a, b, low, high, num_envs //jax.process_count())
           ax = plot_beta_density_2d(
                     _unpmap(training_state.doraemon_state), low, high, len(low), 0.8, 110.,
                     title=f"Doraemon Result [step={int(current_step)}]",
-                    contexts=dynamics_params_doraemon, returns=reward_1d, success_threshold=success_threshold,
+                    contexts=dynamics_params_doraemon, success_threshold=success_threshold,
                     ax=ax,
                 )
         
@@ -1163,17 +1246,17 @@ def train(
           rewards = data_for_gmm.reward
           rewards = rewards.mean(axis=(0,1))
           target_lnpdf = beta * rewards
-          training_fig, _ = plot_reward_heatmap(samples, \
-                target_lnpdf, dr_range_low, dr_range_high, bins=80,\
-                    title = f"Training Heatmap with beta={beta} [step={int(current_step)}]")
-          training_fig.tight_layout()
-          training_fig.canvas.draw()
-          gmm_training_frames.append(np.asarray(training_fig.canvas.buffer_rgba())[...,:3])
-          if use_wandb:
-            wandb.log(
-                    {"training_heatmap" :wandb.Image(training_fig)},
-                    step=int(current_step),
-                )
+          # training_fig, _ = plot_reward_heatmap(samples, \
+          #       target_lnpdf, dr_range_low, dr_range_high, bins=80,\
+          #           title = f"Training Heatmap with beta={beta} [step={int(current_step)}]")
+          # training_fig.tight_layout()
+          # training_fig.canvas.draw()
+          # gmm_training_frames.append(np.asarray(training_fig.canvas.buffer_rgba())[...,:3])
+          # if use_wandb:
+          #   wandb.log(
+          #           {"training_heatmap" :wandb.Image(training_fig)},
+          #           step=int(current_step),
+          #       )
           eval_samples = samplerppo_network.gmm_network.model.sample(_unpmap(\
             training_state.gmm_training_state.model_state.gmm_state), sample_key2, 1000)[0]
           
@@ -1227,7 +1310,27 @@ def train(
         f'Total steps {total_steps} is less than `num_timesteps`='
         f' {num_timesteps}.'
     )
-
+  print("-------------final metrics------------------", metrics)
+  if work_dir is not None:
+    gif_dir = make_dir(work_dir / "results" / sampler_choice)
+  if len(dr_range_low)==2:
+    if sampler_choice =="AutoDR":
+      imageio.mimsave(os.path.join(gif_dir, f"Evaluation Heatmap [threshold={success_threshold}].gif"), evaluation_frames, fps=4)
+      imageio.mimsave(os.path.join(gif_dir, f"target log prob with current occupancy [threshold={success_threshold}].gif"), occupancy_frames, fps=4)
+      imageio.mimsave(os.path.join(gif_dir, f"Auto DR Heatmap [threshold={success_threshold}].gif"), autodr_frames, fps=4)
+    elif sampler_choice =="DORAEMON":
+      imageio.mimsave(os.path.join(gif_dir, f"Evaluation Heatmap [threshold={success_threshold}_condition={success_rate_condition}].gif"), evaluation_frames, fps=4)
+      imageio.mimsave(os.path.join(gif_dir, f"target log prob with current occupancy [threshold={success_threshold}_condition={success_rate_condition}].gif"), occupancy_frames, fps=4)
+      imageio.mimsave(os.path.join(gif_dir, f"Doraemon Heatmap [threshold={success_threshold}_condition={success_rate_condition}].gif"), doraemon_frames, fps=4)
+    elif "FLOW" in sampler_choice:
+      imageio.mimsave(os.path.join(gif_dir, f"Evaluation Heatmap [beta={beta}_gamma={gamma}].gif"), evaluation_frames, fps=4)
+      imageio.mimsave(os.path.join(gif_dir, f"target log prob with current occupancy [beta={beta}_gamma={gamma}].gif"), occupancy_frames, fps=4)
+      imageio.mimsave(os.path.join(gif_dir, f"Flow Heatmap [beta={beta}_gamma={gamma}].gif"), flow_frames, fps=4)
+    elif sampler_choice =="GMM":
+      imageio.mimsave(os.path.join(gif_dir, f"Evaluation Heatmap [beta={beta}].gif"), evaluation_frames, fps=4)
+      imageio.mimsave(os.path.join(gif_dir, f"target log prob with current occupancy [beta={beta}].gif"), occupancy_frames, fps=4)
+      imageio.mimsave(os.path.join(gif_dir, f"GMM Training Heatmap [beta={beta}].gif"), gmm_training_frames, fps=4)
+      imageio.mimsave(os.path.join(gif_dir, f"GMM Log Prob Heatmap [beta={beta}].gif"), gmm_frames, fps=4)
   # If there was no mistakes the training_state should still be identical on all
   # devices.
   pmap.assert_is_replicated(training_state)
@@ -1238,25 +1341,5 @@ def train(
   ))
   logging.info('total steps: %s', total_steps)
   pmap.synchronize_hosts()
-  print("-------------final metrics------------------", metrics)
-  if work_dir is not None:
-    gif_dir = make_dir(work_dir / "results" / sampler_choice)
-  if sampler_choice =="AutoDR":
-    imageio.mimsave(os.path.join(gif_dir, f"Evaluation Heatmap [threshold={success_threshold}].gif"), evaluation_frames, fps=4)
-    imageio.mimsave(os.path.join(gif_dir, f"target log prob with current occupancy [threshold={success_threshold}].gif"), occupancy_frames, fps=4)
-    imageio.mimsave(os.path.join(gif_dir, f"Auto DR Heatmap [threshold={success_threshold}].gif"), autodr_frames, fps=4)
-  elif sampler_choice =="DORAEMON":
-    imageio.mimsave(os.path.join(gif_dir, f"Evaluation Heatmap [threshold={success_threshold}_condition={success_rate_condition}].gif"), evaluation_frames, fps=4)
-    imageio.mimsave(os.path.join(gif_dir, f"target log prob with current occupancy [threshold={success_threshold}_condition={success_rate_condition}].gif"), occupancy_frames, fps=4)
-    imageio.mimsave(os.path.join(gif_dir, f"Doraemon Heatmap [threshold={success_threshold}_condition={success_rate_condition}].gif"), doraemon_frames, fps=4)
-  elif "FLOW" in sampler_choice:
-    imageio.mimsave(os.path.join(gif_dir, f"Evaluation Heatmap [beta={beta}_gamma={gamma}].gif"), evaluation_frames, fps=4)
-    imageio.mimsave(os.path.join(gif_dir, f"target log prob with current occupancy [beta={beta}_gamma={gamma}].gif"), occupancy_frames, fps=4)
-    imageio.mimsave(os.path.join(gif_dir, f"Flow Heatmap [beta={beta}_gamma={gamma}].gif"), flow_frames, fps=4)
-  elif sampler_choice =="GMM":
-    imageio.mimsave(os.path.join(gif_dir, f"Evaluation Heatmap [beta={beta}].gif"), evaluation_frames, fps=4)
-    imageio.mimsave(os.path.join(gif_dir, f"target log prob with current occupancy [beta={beta}].gif"), occupancy_frames, fps=4)
-    imageio.mimsave(os.path.join(gif_dir, f"GMM Training Heatmap [beta={beta}].gif"), gmm_training_frames, fps=4)
-    imageio.mimsave(os.path.join(gif_dir, f"GMM Log Prob Heatmap [beta={beta}].gif"), gmm_frames, fps=4)
-  print("Saved GIF to NF_NeuralSpline_training.gif")
+
   return (make_policy, params, metrics)

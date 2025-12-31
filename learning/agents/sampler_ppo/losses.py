@@ -256,11 +256,11 @@ def flow_loss(
   loss = value_loss + entropy_loss
 
   # Modivied with REINFORCE + Self normalization style
-  log_weights = data_log_prob-target_lnpdf
-  log_weights = jax.nn.softmax(log_weights)
-  weights = jnp.exp(log_weights)
-  weights = weights / jnp.sum(weights)
-  loss = (weights * data_log_prob).mean()
+  # log_weights = data_log_prob-target_lnpdf
+  # log_weights = jax.nn.softmax(log_weights)
+  # weights = jnp.exp(log_weights)
+  # weights = jax.lax.stop_gradient(weights / jnp.sum(weights))
+  # loss = (weights * data_log_prob).mean()
   return  loss + gamma * kl_loss, ({
       'flow_value_loss': value_loss,
       'flow_entropy_loss': entropy_loss,

@@ -25,7 +25,7 @@ def brax_ppo_config(env_name: str) -> config_dict.ConfigDict:
   env_config = dm_control_suite.get_default_config(env_name)
 
   rl_config = config_dict.create(
-      num_timesteps=60_000_000,
+      num_timesteps=400_000_000,
       num_evals=10,
       reward_scaling=10.0,
       episode_length=env_config.episode_length,
@@ -41,25 +41,16 @@ def brax_ppo_config(env_name: str) -> config_dict.ConfigDict:
       batch_size=1024,
   )
 
-  if env_name.startswith("AcrobotSwingup"):
-    rl_config.num_timesteps = 100_000_000
-  if env_name == "BallInCup":
-    rl_config.discounting = 0.95
-  elif env_name.startswith("Swimmer"):
-    rl_config.num_timesteps = 100_000_000
-  elif env_name == "WalkerRun":
-    rl_config.num_timesteps = 100_000_000
-  elif env_name == "FingerSpin":
+  rl_config.network_factory = config_dict.create(
+        policy_obs_key="state",
+        value_obs_key="privileged_state",
+    )
+  if env_name == "FingerSpin":
     rl_config.discounting = 0.95
   elif env_name == "PendulumSwingUp":
     rl_config.action_repeat = 4
     rl_config.num_updates_per_batch = 4
-  if env_name == "CheetahRun":
-    rl_config.network_factory = config_dict.create(
-        policy_obs_key="state",
-        value_obs_key="privileged_state",
-    )
-    rl_config.num_timesteps=200_000_000
+    
   return rl_config
 
 

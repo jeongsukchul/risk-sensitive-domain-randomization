@@ -1,9 +1,14 @@
 import os
 import sys
+import imageio
+import mediapy as media
 from omegaconf import OmegaConf
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 os.environ['MUJOCO_GL'] = 'egl'
 os.environ['XLA_PYTHON_CLIENT_PREALLOCATE'] = 'false'
+xla_flags = os.environ.get('XLA_FLAGS', '')
+xla_flags += ' --xla_gpu_triton_gemm_any=True'
+os.environ['XLA_FLAGS'] = xla_flags
 # @title Import MuJoCo, MJX, and Brax
 from datetime import datetime
 import functools
@@ -133,7 +138,7 @@ def train_ppo(cfg:dict, randomization_fn, env, eval_env=None):
         # if cfg.custom_wrapper and cfg.adv_wrapper:
         #     wandb_name+=f".adv_wrapper={cfg.adv_wrapper}"#dr_train_ratio={cfg.dr_train_ratio}"
     else:
-        wandb_name = f"{cfg.task}.{cfg.policy}.{cfg.seed}.asym={cfg.asymmetric_critic}.eval_rand={cfg.eval_randomization}"
+        wandb_name = f"{cfg.task}.{cfg.policy}.{cfg.seed}.asym={cfg.asymmetric_critic}.final_rand={cfg.final_randomization}"
     if cfg.custom_wrapper:
         randomizer = registry.get_domain_randomizer_eval(cfg.task)
     else:
@@ -191,7 +196,6 @@ def train_ppo(cfg:dict, randomization_fn, env, eval_env=None):
         progress_fn=progress,
         policy_params_fn=functools.partial(policy_params_fn, ckpt_path=cfg.work_dir / "models" ),
         randomization_fn=randomizer,
-        eval_randomization_fn = randomization_fn,
         use_wandb=cfg.use_wandb,
         seed=cfg.seed,
         sampler_choice=sampler_choice,
@@ -311,46 +315,64 @@ def train(cfg: dict):
 
     # Save config.yaml and randomization config to wandb and local directory
     save_configs_to_wandb_and_local(cfg, cfg.work_dir)
-    # print("eval_randomization", cfg.eval_randomization)
-    # if cfg.eval_randomization:
-    #     eval_rng, rng = jax.random.split(rng)
-    #     randomizer_eval = registry.get_domain_randomizer_eval(cfg.task)
-    #     randomizer_eval = functools.partial(randomizer_eval, rng=eval_rng, dr_range=env.dr_range)
-    #     eval_env = BraxDomainRandomizationWrapper(
-    #         registry.load(cfg.task, config=env_cfg),
-    #         randomization_fn=randomizer_eval,
-    #     )
-    # else:
-    #     eval_env = registry.load(cfg.task, config=env_cfg)
-    # if cfg.save_video and cfg.use_wandb:
-    #     n_episodes = 10
-    #     jit_inference_fn = jax.jit(make_inference_fn(params,deterministic=True))
-    #     jit_reset = jax.jit(eval_env.reset)
-    #     jit_step = jax.jit(eval_env.step)
-    #     reward_list = []
-    #     rollout = []
-    #     rng, eval_rng = jax.random.split(rng)
-    #     rngs = jax.random.split(eval_rng, n_episodes)
-    #     for i in range(n_episodes): #10 episodes
-    #         state = jit_reset(rngs[i])
-    #         rollout = [state]
-    #         rewards = 0
-    #         for _ in range(env_cfg.episode_length):
-    #             act_rng, rng = jax.random.split(rng)
-    #             action, info = jit_inference_fn(state.obs, act_rng)
-    #             state = jit_step(state, action)
-    #             rollout.append(state)
-    #             rewards += state.reward
-    #         reward_list.append(rewards)
-            
-    #     frames = eval_env.render(rollout, camera=CAMERAS[cfg.task],)
-    #     frames = np.stack(frames).transpose(0, 3, 1, 2)
-    #     fps=1.0 / env.dt
-    #     rewards = jnp.asarray(reward_list)
-    #     wandb.log({'final_eval_reward' : rewards.mean()}) 
-    #     wandb.log({'final_eval_reward_iqm' : scipy.stats.trim_mean(rewards, proportiontocut=0.25, axis=None) })
-    #     wandb.log({'final_eval_reward_std' :rewards.std() })
-    #     wandb.log({'eval_video': wandb.Video(frames, fps=fps, format='mp4')})
+    env_cfg['impl'] = 'jax'
+
+    if cfg.final_randomization:
+        eval_rng, rng = jax.random.split(rng)
+        randomizer_eval = registry.get_domain_randomizer_eval(cfg.task)
+        randomizer_eval = functools.partial(randomizer_eval, rng=eval_rng, dr_range=env.dr_range)
+        eval_env = BraxDomainRandomizationWrapper(
+            registry.load(cfg.task, config=env_cfg),
+            randomization_fn=randomizer_eval,
+        )
+    else:
+        eval_env = registry.load(cfg.task, config=env_cfg)
+        
+    if cfg.save_video and cfg.use_wandb:
+        n_episodes = 10
+        jit_inference_fn = jax.jit(make_inference_fn(params,deterministic=True))
+        jit_reset = jax.jit(eval_env.reset)
+        jit_step = jax.jit(eval_env.step)
+        reward_list = []
+        rollout = []
+        rng, eval_rng = jax.random.split(rng)
+        rngs = jax.random.split(eval_rng, n_episodes)
+        import gc  
+        for i in range(n_episodes): #10 episodes
+            state = jit_reset(rngs[i])
+            if i==0:
+                rollout = [state]
+            rewards = 0
+            for _ in range(env_cfg.episode_length):
+                act_rng, rng = jax.random.split(rng)
+                action, info = jit_inference_fn(state.obs, act_rng)
+                state = jit_step(state, action)
+                if i==0:
+                    rollout.append(jax.device_get(state))
+                rewards += state.reward
+            reward_list.append(rewards)
+
+        print("Starting video rendering...")
+        frames = eval_env.render(rollout, camera=CAMERAS[cfg.task])
+        fps = 1.0 / env.sim_dt
+        video_path = f"video_{cfg.policy}_{cfg.task}.mp4"
+        print(f"Encoding video to {video_path}...")
+        media.write_video(video_path, frames, fps=fps)
+        print("Video saved successfully.")
+        # 2. Open the writer
+        print(f"Video saved successfully to {video_path}")
+        
+        # ... (rest of your wandb logging) ...
+        try:
+            del frames
+            gc.collect()
+            wandb.log({'eval_video': wandb.Video(video_path, fps=fps, format='mp4')})
+        except Exception as e:
+            print(f"Could not upload to WandB due to memory limits: {e}")
+
+        wandb.log({'final_eval_reward' : rewards.mean()}) 
+        wandb.log({'final_eval_reward_iqm' : scipy.stats.trim_mean(rewards, proportiontocut=0.25, axis=None) })
+        wandb.log({'final_eval_reward_std' :rewards.std() })
 
    
 if __name__ == "__main__":

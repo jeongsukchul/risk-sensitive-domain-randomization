@@ -385,6 +385,7 @@ class AdvEvaluator:
       training_metrics: Metrics,
       aggregate_episodes: bool = True,
       num_eval_seeds: int = 1,
+      success_threshold : float = None,
   ) -> Metrics:
     """Run one epoch of evaluation."""
     self._key, unroll_key = jax.random.split(self._key)
@@ -415,6 +416,9 @@ class AdvEvaluator:
     k20 = int(N* .2)
     k10 = int(N* .1)
     sorted_reward = np.sort(reward)
+    episode_length = eval_metrics.episode_steps
+    if success_threshold is not None:
+      metrics['eval/coverage'] = np.mean((reward/episode_length)>success_threshold)
     metrics['eval/episode_reward_mean'] = np.mean(reward)
     metrics['eval/episode_reward_p12'] = np.percentile(reward,12.5)
     metrics['eval/episode_reward_p25'] = np.percentile(reward,25)
@@ -425,8 +429,8 @@ class AdvEvaluator:
     metrics['eval/episode_reward_iqm'] = scipy.stats.trim_mean(reward, proportiontocut=0.25, axis=None)
     metrics['eval/episode_reward_CVaR20'] = np.mean(sorted_reward[:k20])
     metrics['eval/episode_reward_CVaR10'] = np.mean(sorted_reward[:k10])
-    metrics['eval/avg_episode_length'] = np.mean(eval_metrics.episode_steps)
-    metrics['eval/std_episode_length'] = np.std(eval_metrics.episode_steps)
+    metrics['eval/avg_episode_length'] = np.mean(episode_length)
+    metrics['eval/std_episode_length'] = np.std(episode_length)
     metrics['eval/epoch_eval_time'] = epoch_eval_time
     metrics['eval/sps'] = self._steps_per_unroll / epoch_eval_time
     self._eval_walltime = self._eval_walltime + epoch_eval_time
@@ -436,4 +440,4 @@ class AdvEvaluator:
         **metrics,
     }
 
-    return metrics, reward   # pytype: disable=bad-return-type  # jax-ndarray
+    return metrics, reward, episode_length   # pytype: disable=bad-return-type  # jax-ndarray

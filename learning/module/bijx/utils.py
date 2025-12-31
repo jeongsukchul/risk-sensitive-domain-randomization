@@ -7,7 +7,105 @@ from bijx.bijections.base import Bijection, ApplyBijection
 import jax
 import jax.numpy as jnp
 # Assuming bijx is your library alias
+import jax
+import jax.numpy as jnp
+from flax import nnx
+from typing import Sequence, Callable, Optional, Any
+import jax
+import jax.numpy as jnp
+from flax import nnx
+from typing import Sequence, Callable, Optional, Union
 
+import jax
+import jax.numpy as jnp
+from flax import nnx
+from typing import Sequence, Callable, Optional
+
+# --- 1. Corrected MaskedLinear ---
+class MaskedLinear(nnx.Linear):
+    def __init__(self, mask: jax.Array, rngs: nnx.Rngs, use_bias: bool = True):
+        out_features, in_features = mask.shape
+        super().__init__(in_features, out_features, use_bias=use_bias, rngs=rngs)
+        self.mask = nnx.Cache(jnp.array(mask, dtype=bool))
+
+    def __call__(self, x: jax.Array) -> jax.Array:
+        # Kernel is (In, Out). Mask is (Out, In).
+        # We must transpose mask to match kernel: (In, Out) * (Out, In).T
+        masked_kernel = self.kernel.value * self.mask.value.T
+        y = jnp.dot(x, masked_kernel)
+        if self.bias is not None:
+            y = y + self.bias.value
+        return y
+
+# --- 2. Robust Mask Generation (MADE) ---
+def create_made_masks(
+    n_in: int,
+    hidden_sizes: Sequence[int],
+    n_out_params: int, # params per feature (e.g., 3*bins-1)
+) -> Sequence[jax.Array]:
+    """
+    Generates strict autoregressive masks using the MADE algorithm.
+    Degrees are assigned to ensure Output_i only depends on Input_{<i}.
+    """
+    masks = []
+    # 1. Assign degrees to inputs (0, 1, ..., D-1)
+    # Input k has degree k
+    m_input = jnp.arange(n_in)
+    
+    m_prev = m_input
+    rng = jax.random.PRNGKey(0) # Deterministic for structure
+    
+    # 2. Hidden Layers
+    for h_size in hidden_sizes:
+        # Hidden units get degrees in [0, D-2] (since they can't depend on D-1)
+        # We sample degrees or just assign cyclically. Cyclic is stable.
+        m_curr = jnp.arange(h_size) % (n_in - 1)
+        
+        # Connection rule: Layer_L -> Layer_L+1 if deg(L+1) >= deg(L)
+        # Shape: (Out, In)
+        mask = m_curr[:, None] >= m_prev[None, :]
+        masks.append(mask)
+        m_prev = m_curr
+        
+    # 3. Output Layer
+    # We have n_in features, each with n_out_params.
+    # Total outputs = n_in * n_out_params.
+    # Output for feature k must have degree k.
+    m_out = jnp.repeat(jnp.arange(n_in), n_out_params)
+    
+    # Connection rule: Output -> Hidden if deg(Output) > deg(Hidden) (Strict!)
+    mask = m_out[:, None] > m_prev[None, :]
+    masks.append(mask)
+    
+    return masks
+
+# --- 3. Robust MaskedMLP ---
+class MaskedMLP(nnx.Module):
+    def __init__(
+        self,
+        features: int,
+        hidden_features: Sequence[int],
+        params_per_feature: int,
+        rngs: nnx.Rngs,
+        activation: Callable = nnx.relu,
+    ):
+        self.activation = activation
+        
+        # Generate Masks
+        masks = create_made_masks(features, hidden_features, params_per_feature)
+        
+        layers = []
+        for mask in masks:
+            layers.append(MaskedLinear(mask, rngs=rngs))
+            
+        self.layers = nnx.List(layers)
+
+    def __call__(self, x: jax.Array):
+        for i, layer in enumerate(self.layers):
+            x = layer(x)
+            if i < len(self.layers) - 1:
+                x = self.activation(x)
+        return x
 class BoxSigmoid(ApplyBijection):
     """
     Elementwise box-sigmoid bijection:

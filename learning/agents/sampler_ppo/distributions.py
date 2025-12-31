@@ -799,7 +799,7 @@ def plot_beta_density_2d(
         extent=[float(low[0]), float(high[0]), float(low[1]), float(high[1])],
         aspect="auto",
     )
-    plt.colorbar(im, ax=ax, label='estimated density (scaled)')
+    # plt.colorbar(im, ax=ax, label='estimated density (scaled)')
 
     if contexts is not None:
         c_np = np.array(contexts)
@@ -812,5 +812,5 @@ def plot_beta_density_2d(
 
     ax.set_xlabel("x1")
     ax.set_ylabel("x2")
-    ax.set_title(title or "Beta-on-box density (scaled)")
+    ax.set_title(title or "Beta-on-box density")
     return ax
