@@ -36,7 +36,7 @@ dr_train_ratio : 1.
 
 #sampler cfg
 sampler_update_freq : 10           #set 10 to take long horizon information despite of policy_updates.
-n_sampler_iters : 100                #need to consider in flow and gmm
+n_sampler_iters : 50                #need to consider in flow and gmm
 success_threshold : .7
 success_rate_condition : 0.7
 gamma : 0.

@@ -88,7 +88,7 @@ def make_samplerppo_networks(
     sampler_choice: str = "NODR",
     success_threshold = 600,
     success_rate_condition = 0.5,
-    kl_upper_bound= 0.8,
+    kl_upper_bound= 0.1,
 ) -> SAMPLERPPONetworks:
   """Make SAMPLERPPO networks with preprocessor."""
   parametric_action_distribution = distribution.NormalTanhDistribution(

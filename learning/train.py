@@ -3,7 +3,7 @@ import sys
 import imageio
 import mediapy as media
 from omegaconf import OmegaConf
-sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
+# sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 os.environ['MUJOCO_GL'] = 'egl'
 os.environ['XLA_PYTHON_CLIENT_PREALLOCATE'] = 'false'
 xla_flags = os.environ.get('XLA_FLAGS', '')

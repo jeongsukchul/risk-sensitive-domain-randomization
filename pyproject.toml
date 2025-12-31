@@ -1,16 +1,31 @@
 [build-system]
-requires = ["poetry-core>=1.9.0"]
-build-backend = "poetry.core.masonry.api"
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
 
-[tool.poetry]
-name = "adversarial-sampler-for-rl"   # distribution name: can have hyphens
+[project]
+name = "adversarial-sampler-for-rl"
 version = "0.1.0"
-description = ""
-authors = ["You <you@example.com>"]
-packages = [{ include = "learning" }] 
+description = "Adversarial Sampler for RL"
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [
+  { name = "Your Name", email = "you@example.com" },
+]
+# List your actual dependencies here so they auto-install for other users
+dependencies = [
+    "numpy",
+    "jax",
+    "flax",
+    "brax",
+    "optax",
+    "wandb",
+    "matplotlib",
+    "imageio",
+    "absl-py",
+    "scipy",
+]
 
-# Tell setuptools: read deps from a file instead of hard-coding here
-dynamic = ["dependencies"]
-
-[tool.poetry.dependencies]
-python = ">=3.10,<3.13"
+# This section automatically finds your 'learning' folder and makes it a package
+[tool.setuptools.packages.find]
+where = ["."]  # Look in the current directory
+include = ["learning*", "custom_envs"]  # Include the 'learning' directory and anything inside it

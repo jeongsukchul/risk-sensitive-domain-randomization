@@ -13,3 +13,4 @@ einops
 warp-lang
 pandas
 wandb
+bijx
