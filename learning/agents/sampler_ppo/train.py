@@ -1312,25 +1312,26 @@ def train(
     )
   print("-------------final metrics------------------", metrics)
   if work_dir is not None:
-    gif_dir = make_dir(work_dir / "results" / sampler_choice)
+    save_dir = make_dir(work_dir / "results" / sampler_choice)
+    np.save(os.path.join(save_dir, f"reward_1d_{current_step}.npy"), reward_1d)
   if len(dr_range_low)==2:
     if sampler_choice =="AutoDR":
-      imageio.mimsave(os.path.join(gif_dir, f"Evaluation Heatmap [threshold={success_threshold}].gif"), evaluation_frames, fps=4)
-      imageio.mimsave(os.path.join(gif_dir, f"target log prob with current occupancy [threshold={success_threshold}].gif"), occupancy_frames, fps=4)
-      imageio.mimsave(os.path.join(gif_dir, f"Auto DR Heatmap [threshold={success_threshold}].gif"), autodr_frames, fps=4)
+      imageio.mimsave(os.path.join(save_dir, f"Evaluation Heatmap [threshold={success_threshold}].gif"), evaluation_frames, fps=4)
+      imageio.mimsave(os.path.join(save_dir, f"target log prob with current occupancy [threshold={success_threshold}].gif"), occupancy_frames, fps=4)
+      imageio.mimsave(os.path.join(save_dir, f"Auto DR Heatmap [threshold={success_threshold}].gif"), autodr_frames, fps=4)
     elif sampler_choice =="DORAEMON":
-      imageio.mimsave(os.path.join(gif_dir, f"Evaluation Heatmap [threshold={success_threshold}_condition={success_rate_condition}].gif"), evaluation_frames, fps=4)
-      imageio.mimsave(os.path.join(gif_dir, f"target log prob with current occupancy [threshold={success_threshold}_condition={success_rate_condition}].gif"), occupancy_frames, fps=4)
-      imageio.mimsave(os.path.join(gif_dir, f"Doraemon Heatmap [threshold={success_threshold}_condition={success_rate_condition}].gif"), doraemon_frames, fps=4)
+      imageio.mimsave(os.path.join(save_dir, f"Evaluation Heatmap [threshold={success_threshold}_condition={success_rate_condition}].gif"), evaluation_frames, fps=4)
+      imageio.mimsave(os.path.join(save_dir, f"target log prob with current occupancy [threshold={success_threshold}_condition={success_rate_condition}].gif"), occupancy_frames, fps=4)
+      imageio.mimsave(os.path.join(save_dir, f"Doraemon Heatmap [threshold={success_threshold}_condition={success_rate_condition}].gif"), doraemon_frames, fps=4)
     elif "FLOW" in sampler_choice:
-      imageio.mimsave(os.path.join(gif_dir, f"Evaluation Heatmap [beta={beta}_gamma={gamma}].gif"), evaluation_frames, fps=4)
-      imageio.mimsave(os.path.join(gif_dir, f"target log prob with current occupancy [beta={beta}_gamma={gamma}].gif"), occupancy_frames, fps=4)
-      imageio.mimsave(os.path.join(gif_dir, f"Flow Heatmap [beta={beta}_gamma={gamma}].gif"), flow_frames, fps=4)
+      imageio.mimsave(os.path.join(save_dir, f"Evaluation Heatmap [beta={beta}_gamma={gamma}].gif"), evaluation_frames, fps=4)
+      imageio.mimsave(os.path.join(save_dir, f"target log prob with current occupancy [beta={beta}_gamma={gamma}].gif"), occupancy_frames, fps=4)
+      imageio.mimsave(os.path.join(save_dir, f"Flow Heatmap [beta={beta}_gamma={gamma}].gif"), flow_frames, fps=4)
     elif sampler_choice =="GMM":
-      imageio.mimsave(os.path.join(gif_dir, f"Evaluation Heatmap [beta={beta}].gif"), evaluation_frames, fps=4)
-      imageio.mimsave(os.path.join(gif_dir, f"target log prob with current occupancy [beta={beta}].gif"), occupancy_frames, fps=4)
-      imageio.mimsave(os.path.join(gif_dir, f"GMM Training Heatmap [beta={beta}].gif"), gmm_training_frames, fps=4)
-      imageio.mimsave(os.path.join(gif_dir, f"GMM Log Prob Heatmap [beta={beta}].gif"), gmm_frames, fps=4)
+      imageio.mimsave(os.path.join(save_dir, f"Evaluation Heatmap [beta={beta}].gif"), evaluation_frames, fps=4)
+      imageio.mimsave(os.path.join(save_dir, f"target log prob with current occupancy [beta={beta}].gif"), occupancy_frames, fps=4)
+      imageio.mimsave(os.path.join(save_dir, f"GMM Training Heatmap [beta={beta}].gif"), gmm_training_frames, fps=4)
+      imageio.mimsave(os.path.join(save_dir, f"GMM Log Prob Heatmap [beta={beta}].gif"), gmm_frames, fps=4)
   # If there was no mistakes the training_state should still be identical on all
   # devices.
   pmap.assert_is_replicated(training_state)
