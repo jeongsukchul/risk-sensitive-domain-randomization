@@ -38,10 +38,10 @@ class Funnel(Target):
         log_prob = log_density_dominant + log_density_other
         if not batched:
             log_prob = jnp.squeeze(log_prob, axis=0)
-        max_log_prob = jnp.max(log_prob)
+        # max_log_prob = jnp.max(log_prob)
         # log_prob = -10 *jnp.ones_like(log_prob)
-        log_prob = jnp.where(jnp.logical_or(x[:,0] > high[0], x[:,0] < low[0]) , max_log_prob* jnp.ones_like(log_prob), log_prob).squeeze()
-        log_prob = jnp.where(jnp.logical_or(x[:,1] > high[1], x[:,1] < low[1]) , max_log_prob* jnp.ones_like(log_prob), log_prob).squeeze()
+        # log_prob = jnp.where(jnp.logical_or(x[:,0] > high[0], x[:,0] < low[0]) , max_log_prob* jnp.ones_like(log_prob), log_prob).squeeze()
+        # log_prob = jnp.where(jnp.logical_or(x[:,1] > high[1], x[:,1] < low[1]) , max_log_prob* jnp.ones_like(log_prob), log_prob).squeeze()
         
         return log_prob
 
@@ -75,8 +75,8 @@ class Funnel(Target):
         # fig.colorbar(ctf2, ax=ax2)
         if samples is not None:
             idx = jax.random.choice(jax.random.PRNGKey(0), samples.shape[0], (300,))
-            sample_x = jnp.clip(samples[idx, 0],-12,7)
-            sample_y = jnp.clip(samples[idx, 1],-6,6)
+            sample_x = jnp.clip(samples[idx, 0],-10,5)
+            sample_y = jnp.clip(samples[idx, 1],-5,5)
             ax1.scatter(sample_x, sample_y, c='r', alpha=0.5, marker='x')
         if model_log_prob_fn is not None:
             ax3 = fig.add_subplot(122)

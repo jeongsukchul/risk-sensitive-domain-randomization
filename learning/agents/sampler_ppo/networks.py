@@ -113,7 +113,7 @@ def make_samplerppo_networks(
   print('batch size', batch_size)
   init_gmmvi_state, gmm_network = create_gmm_network_and_state(dynamics_param_size, \
                                                                num_envs, batch_size, init_key,\
-                                                               prior_scale=.5,
+                                                               prior_scale=.1,
                                                                 bound_info=bound_info)
   dr_low, dr_high = bound_info
   init_fn, autodr_update_fn = make_adr_update_fn(

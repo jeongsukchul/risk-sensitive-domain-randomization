@@ -73,33 +73,32 @@ class StudentTMixtureModel(Target):
 
     def visualise(self, samples: chex.Array = None, axes=None, model_log_prob_fn=None, show=False, prefix='') -> dict:
         boarder = [-15, 15]
-        if self.dim == 2:
-            fig = plt.figure()
-            ax = fig.add_subplot()
-            x, y = jnp.meshgrid(jnp.linspace(boarder[0], boarder[1], 100),
-                                jnp.linspace(boarder[0], boarder[1], 100))
-            grid = jnp.c_[x.ravel(), y.ravel()]
-            pdf_values = jax.vmap(jnp.exp)(self.log_prob(grid))
-            pdf_values = jnp.reshape(pdf_values, x.shape)
-            # ax.contourf(x, y, pdf_values, levels=20, cmap='viridis')
-            ax.contourf(x, y, pdf_values, levels=50)
+        fig = plt.figure()
+        ax = fig.add_subplot()
+        x, y = jnp.meshgrid(jnp.linspace(boarder[0], boarder[1], 100),
+                            jnp.linspace(boarder[0], boarder[1], 100))
+        grid = jnp.c_[x.ravel(), y.ravel()]
+        pdf_values = jax.vmap(jnp.exp)(self.log_prob(grid))
+        pdf_values = jnp.reshape(pdf_values, x.shape)
+        # ax.contourf(x, y, pdf_values, levels=20, cmap='viridis')
+        ax.contourf(x, y, pdf_values, levels=50)
 
-            if samples is not None:
-                samples = jnp.clip(samples, boarder[0], boarder[1])
-                plt.scatter(samples[:300, 0], samples[:300, 1], c='r', alpha=0.5, marker='x')
+        if samples is not None:
+            idx = jax.random.choice(jax.random.PRNGKey(0), samples.shape[0], (300,))
+            sample_x = jnp.clip(samples[idx, 0],-10,5)
+            sample_y = jnp.clip(samples[idx, 1],-5,5)
+            ax.scatter(sample_x, sample_y, c='r', alpha=0.5, marker='x')
 
-            # plt.xlabel('X')
-            # plt.ylabel('Y')
-            plt.xticks([])
-            plt.yticks([])
-            wb = {"figures/vis": [wandb.Image(fig)]}
-            if show:
-                plt.show()
-            plt.close(fig)
-            return wb
+        # plt.xlabel('X')
+        # plt.ylabel('Y')
+        plt.xticks([])
+        plt.yticks([])
+        wb = {"figures/vis": [wandb.Image(fig)]}
+        if show:
+            plt.show()
+        plt.close(fig)
+        return wb
 
-        else:
-            return {}
 
             # import tikzplotlib
             # plt.savefig(os.path.join(project_path('./figures/'), f"stmm.pdf"), bbox_inches='tight', pad_inches=0.1)

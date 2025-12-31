@@ -213,7 +213,7 @@ def setup_sample_fn(sample_from_component_fn: Callable):
 
         def draw_one(k, comp_idx):
             x = sample_from_component_fn(gmm_state, comp_idx, 1, k)  # (1, *event_shape)
-            return x[0]  # (*event_shape,)
+            return x.squeeze()#x[0]  # (*event_shape,)
 
         samples = jax.vmap(draw_one)(keys, comps)  # (num_samples, *event_shape)
         return samples, comps
@@ -236,7 +236,7 @@ def setup_sample_from_components_shuffle_fn(sample_from_component_fn: Callable):
             # sample a single point from component `comp_idx`
             # Ensure sample_from_component_fn returns shape (N, D)
             x = sample_from_component_fn(gmm_state, comp_idx, 1, key)
-            return x[0]  # (D,)
+            return x.squeeze()# x[0]  # (D,)
 
         samples = jax.vmap(sample_one)(keys, mapping)  # (TOTAL_SAMPLES, D)
         return samples, None

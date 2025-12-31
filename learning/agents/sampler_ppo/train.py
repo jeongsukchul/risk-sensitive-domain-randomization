@@ -761,8 +761,8 @@ def train(
   ) -> Tuple[TrainingState, envs.State, PRNGKey]:
     # shape = np.sqrt(num_envs).astype(int)
     value_apply = samplerppo_network.value_network.apply
-    x, y = jnp.meshgrid(jnp.linspace(dr_range_low[0], dr_range_high[0], 32),\
-                          jnp.linspace(dr_range_low[1], dr_range_high[1], 32))
+    x, y = jnp.meshgrid(jnp.linspace(dr_range_low[0], dr_range_high[0], 64),\
+                          jnp.linspace(dr_range_low[1], dr_range_high[1], 64))
     dynamics_params_grid = jnp.c_[x.ravel(), y.ravel()]
     # print("state in occupancy measure", env_state.obs)
     def f(carry, unused):
@@ -886,8 +886,8 @@ def train(
     logging.info(metrics)
     progress_fn(0, metrics)
   elif process_id == 0 and num_evals > 1 and run_evals and len(dr_range_low)==2:
-    x, y = jnp.meshgrid(jnp.linspace(dr_range_low[0], dr_range_high[0], 32),\
-                              jnp.linspace(dr_range_low[1], dr_range_high[1], 32))
+    x, y = jnp.meshgrid(jnp.linspace(dr_range_low[0], dr_range_high[0], 64),\
+                              jnp.linspace(dr_range_low[1], dr_range_high[1], 64))
     dynamics_params_grid = jnp.c_[x.ravel(), y.ravel()]
     metrics, reward_1d,_ = evaluator.run_evaluation(
         _unpmap((
@@ -902,7 +902,9 @@ def train(
     )
     eval_fig = plt.figure()
     reward_2d = reward_1d.reshape(x.shape)
-    ctf = plt.contourf(x, y, reward_2d, levels=20, cmap='viridis')
+    vmin, vmax = 0, 1000
+    levels = np.linspace(vmin, vmax, 21)  # 21 levels = 20 color intervals
+    ctf = plt.contourf(x, y, reward_2d, levels=levels, cmap='viridis')
     cbar = eval_fig.colorbar(ctf)
     eval_fig.suptitle(f"Evaluation on Each Params [Step={int(current_step)}]")
     eval_fig.tight_layout()
@@ -1003,7 +1005,7 @@ def train(
       #           step=int(current_step),
       #       )
       eval_samples = samplerppo_network.gmm_network.model.sample(_unpmap(\
-        training_state.gmm_training_state.model_state.gmm_state), sample_key2, 1000)[0]
+        training_state.gmm_training_state.model_state.gmm_state), sample_key2, 2**14)[0]
       
       log_prob_fn = jax.vmap(functools.partial(samplerppo_network.gmm_network.model.log_density,\
                   gmm_state=_unpmap(training_state.gmm_training_state.model_state.gmm_state)))
@@ -1029,11 +1031,12 @@ def train(
     )
     jax.tree_util.tree_map(lambda x: x.block_until_ready(), rewards)
     rewards = rewards.mean(axis=0)
-    x, y = jnp.meshgrid(jnp.linspace(dr_range_low[0], dr_range_high[0], 32),\
-                          jnp.linspace(dr_range_low[1], dr_range_high[1], 32))
+    x, y = jnp.meshgrid(jnp.linspace(dr_range_low[0], dr_range_high[0], 64),\
+                          jnp.linspace(dr_range_low[1], dr_range_high[1], 64))
     target_lnpdfs = beta* rewards
     target_lnpdfs = jnp.reshape(target_lnpdfs, x.shape)
     target_fig = plt.figure()
+    
     ctf = plt.contourf(x, y, target_lnpdfs, levels=20, cmap='viridis')
     cbar = target_fig.colorbar(ctf)
     target_fig.suptitle(f"target log prob on current occupancy [step={current_step}]")
@@ -1142,8 +1145,8 @@ def train(
               success_threshold=success_threshold,
           )
       if run_evals and len(dr_range_low)==2:
-        x, y = jnp.meshgrid(jnp.linspace(dr_range_low[0], dr_range_high[0], 32),\
-                              jnp.linspace(dr_range_low[1], dr_range_high[1], 32))
+        x, y = jnp.meshgrid(jnp.linspace(dr_range_low[0], dr_range_high[0], 64),\
+                              jnp.linspace(dr_range_low[1], dr_range_high[1], 64))
         dynamics_params_grid = jnp.c_[x.ravel(), y.ravel()]
         metrics, reward_1d, _ = evaluator.run_evaluation(
             _unpmap((
@@ -1158,7 +1161,9 @@ def train(
         )
         eval_fig = plt.figure()
         reward_2d = reward_1d.reshape(x.shape)
-        ctf = plt.contourf(x, y, reward_2d, levels=20, cmap='viridis')
+        vmin, vmax = 0, 1000
+        levels = np.linspace(vmin, vmax, 21)  # 21 levels = 20 color intervals
+        ctf = plt.contourf(x, y, reward_2d, levels=levels, cmap='viridis')
         cbar = eval_fig.colorbar(ctf)
         eval_fig.suptitle(f"Evaluation on Each Params [Step={int(current_step)}]")
         eval_fig.tight_layout()
@@ -1258,7 +1263,7 @@ def train(
           #           step=int(current_step),
           #       )
           eval_samples = samplerppo_network.gmm_network.model.sample(_unpmap(\
-            training_state.gmm_training_state.model_state.gmm_state), sample_key2, 1000)[0]
+            training_state.gmm_training_state.model_state.gmm_state), sample_key2, 2**14)[0]
           
           log_prob_fn = jax.vmap(functools.partial(samplerppo_network.gmm_network.model.log_density,\
                       gmm_state=_unpmap(training_state.gmm_training_state.model_state.gmm_state)))
@@ -1286,11 +1291,12 @@ def train(
         jax.tree_util.tree_map(lambda x: x.block_until_ready(), rewards)
         rewards = rewards.mean(0)
 
-        x, y = jnp.meshgrid(jnp.linspace(dr_range_low[0], dr_range_high[0], 32),\
-                              jnp.linspace(dr_range_low[1], dr_range_high[1], 32))
+        x, y = jnp.meshgrid(jnp.linspace(dr_range_low[0], dr_range_high[0], 64),\
+                              jnp.linspace(dr_range_low[1], dr_range_high[1], 64))
         target_lnpdfs = beta * rewards
         target_lnpdfs = jnp.reshape(target_lnpdfs, x.shape)
         target_fig = plt.figure()
+        
         ctf = plt.contourf(x, y, target_lnpdfs, levels=20, cmap='viridis')
         cbar = target_fig.colorbar(ctf)
         target_fig.suptitle(f"target log prob on current occupancy [step={current_step}]")
