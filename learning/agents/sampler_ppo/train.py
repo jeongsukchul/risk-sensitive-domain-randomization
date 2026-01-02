@@ -32,6 +32,7 @@ from brax.training import types
 from brax.training.acme import running_statistics
 from brax.training.acme import specs
 from matplotlib.ticker import MaxNLocator
+from learning.agents.sampler_ppo.scheduling import GMMScheduler, SchedulerState
 import scipy
 from agents.sampler_ppo import losses as samplerppo_losses
 from agents.sampler_ppo import networks as samplerppo_networks
@@ -76,7 +77,8 @@ class TrainingState:
   doraemon_state: DoraemonState
   normalizer_params: running_statistics.RunningStatisticsState
   env_steps: types.UInt64
-
+  update_steps: types.UInt64
+  scheduler_state : SchedulerState
 
 def _unpmap(v):
   return jax.tree_util.tree_map(lambda x: x[0], v)
@@ -271,6 +273,9 @@ def train(
     success_threshold : float = .6, 
     success_rate_condition : float = 0.5,
     work_dir: str= None,
+    use_scheduling : bool = False,
+    scheduler_lr: float = 0.2,
+    scheduler_window_size: int = 20,
 ):
   """
   Returns:
@@ -393,6 +398,12 @@ def train(
       sampler_choice = sampler_choice,
     )
   init_autodr_state, init_doraemon_state, init_flow_state, init_gmm_state = init_states
+  scheduler, init_scheduler_state =  GMMScheduler.create(
+        arms=jnp.arange(61)-30, 
+        lr=scheduler_lr, 
+        window_size=scheduler_window_size,
+    )
+  
   make_policy = samplerppo_networks.make_inference_fn(samplerppo_network)
   flow_model = nnx.merge(samplerppo_network.flow_network, init_flow_state)
   optimizer = optax.adam(learning_rate=learning_rate)
@@ -554,7 +565,7 @@ def train(
   def training_step(
       carry: Tuple[TrainingState, envs.State, PRNGKey], unused_t
   ) -> Tuple[Tuple[TrainingState, envs.State, PRNGKey], Metrics]:
-    training_state, state, cumulated_values, key, i = carry
+    training_state, state, cumulated_values, key = carry
     key_sgd, key_generate_unroll, param_key, key_update, new_key = jax.random.split(key, 5)
     if sampler_choice=="NODR":
       dynamics_params = jnp.ones((num_envs// jax.process_count(), len(dr_range_low))) * nominal_dynamics_params[None, :]
@@ -564,7 +575,7 @@ def train(
         dynamics_params = get_adr_sample(training_state.autodr_state, 
                                 num_envs// jax.process_count(),  param_key)
     elif sampler_choice == "DORAEMON":
-        a, b = _unpack_beta(training_state.doraemon_state.x_opt, 2, min_bound, max_bound)
+        a, b = _unpack_beta(training_state.doraemon_state.x_opt, len(dr_range_low), min_bound, max_bound)
         dynamics_params = sample_beta_on_box(param_key, a, b, dr_range_low, dr_range_high, num_envs //jax.process_count())
     elif "FLOW" in sampler_choice:
       param_key, param_key2= jax.random.split(param_key)
@@ -592,6 +603,10 @@ def train(
 
     state, data = get_experience(training_state, state, dynamics_params,\
             key_generate_unroll, unroll_length, batch_size * num_minibatches // num_envs,)
+    obs_for_approx = jax.tree_util.tree_map(lambda x: x.reshape(-1, *x.shape[2:]), data.observation)
+    value_approx = samplerppo_network.value_network.apply(training_state.normalizer_params, training_state.params.value, obs_for_approx)
+    print("value approx", value_approx)
+    value_approx =value_approx.mean(0) / episode_length
 
     if "FLOW" not in sampler_choice:
       rewards = data.reward     #(K, L, B)
@@ -623,19 +638,42 @@ def train(
         (),
         length=num_updates_per_batch,
     )
+    # if sampler_choice != "GMM":
     values = rewards.mean(axis=(0,1)) #+ bootstrap_value
     cumulated_values += values
+    # else:
+    #   cumulated_values +=value_approx
     # For Debuggin GMM
     # target = Funnel(dim=2, sample_bounds=[-30, 30])
     # target_logprob = jax.vmap(target.log_prob)
     # target_pdf = target_logprob(dynamics_params - (dr_range_low + dr_range_high)/2) # [num_envs]
+    # scheduler update
+    if use_scheduling:
+      scheduler_key, key = jax.random.split(key)
+      def update_scheduler(scheduler_state, _cummulated_values):
+        sorted_values = jnp.sort(_cummulated_values)
+        N = _cummulated_values.shape[0]
+        k20 = int(N* .2)
+        CVaR20 = sorted_values[:k20].mean()
+        feedback = CVaR20 - scheduler_state.prev_cvar
+        scheduler_state.prev_cvar = feedback
+        return scheduler.update_dists(scheduler_state, feedback)
+      scheduler_state = jax.lax.cond(training_state.update_steps % sampler_update_freq==0, \
+                lambda: update_scheduler, \
+                 lambda: training_state.scheduler_state )
+      scheduler_state, _beta = scheduler.sample(scheduler_state, scheduler_key)
+    else:
+      scheduler_state = training_state.scheduler_state
+      _beta = beta
+
+  
     gmm_training_state = training_state.gmm_training_state
     flow_state = training_state.flow_state
     flow_opt_state= training_state.flow_opt_state
     autodr_state = training_state.autodr_state
     doraemon_state = training_state.doraemon_state
     def update_flow(flow_state, flow_opt_state):
-      target_lnpdf = beta * cumulated_values/sampler_update_freq
+      target_lnpdf = _beta * cumulated_values/sampler_update_freq
       flow_model = nnx.merge(samplerppo_network.flow_network, flow_state)
       prev_sample, prev_logq = flow_model.sample(
         (10000,), rng=param_key)
@@ -658,7 +696,7 @@ def train(
       return (doraemon_update_fn(doraemon_state, dynamics_params, returns), 1.)
 
     def update_gmm(gts):
-      target_lnpdf = beta * cumulated_values/sampler_update_freq
+      target_lnpdf = _beta * cumulated_values/sampler_update_freq
       new_sample_db_state = samplerppo_network.gmm_network.sample_selector.save_samples(gmm_training_state.model_state, \
                     gts.sample_db_state, dynamics_params, target_lnpdf, \
                       jnp.zeros_like(dynamics_params), mapping)
@@ -667,28 +705,29 @@ def train(
 
       return new_gmm_training_state, 1.
     if sampler_choice=="NODR" or sampler_choice=="UDR":
-        update_signal = jax.lax.cond(i % sampler_update_freq==0, \
+        update_signal = jax.lax.cond(training_state.update_steps % sampler_update_freq==0, \
                 lambda: 1., \
                  lambda: 0., )
     elif sampler_choice=='AutoDR':
-      autodr_state, update_signal = jax.lax.cond(i % sampler_update_freq==0, \
+      autodr_state, update_signal = jax.lax.cond(training_state.update_steps % sampler_update_freq==0, \
             lambda: update_adr(training_state.autodr_state, cumulated_values/sampler_update_freq), \
               lambda: (training_state.autodr_state, 0.) )
     elif sampler_choice=='DORAEMON':
-      doraemon_state, update_signal = jax.lax.cond(i % sampler_update_freq==0, \
+      doraemon_state, update_signal = jax.lax.cond(training_state.update_steps % sampler_update_freq==0, \
             lambda: update_doraemon(training_state.doraemon_state, cumulated_values/sampler_update_freq), \
               lambda: (training_state.doraemon_state, 0.) )
     elif "FLOW" in sampler_choice:
-        flow_state, flow_opt_state, update_signal = jax.lax.cond(i % sampler_update_freq==0, \
+        flow_state, flow_opt_state, update_signal = jax.lax.cond(training_state.update_steps % sampler_update_freq==0, \
                 lambda: update_flow(training_state.flow_state, training_state.flow_opt_state), \
                  lambda: (training_state.flow_state, training_state.flow_opt_state, 0.) )
     elif sampler_choice=="GMM":
-      gmm_training_state, update_signal = jax.lax.cond(i % sampler_update_freq==0, \
+      gmm_training_state, update_signal = jax.lax.cond(training_state.update_steps % sampler_update_freq==0, \
                   lambda: update_gmm(gmm_training_state), \
                   lambda: (training_state.gmm_training_state, 0.) )
     else:
       raise ValueError("No Sampler!")
     # update_signal=1
+    print("beta", _beta)
     metrics.update({
       'target_pdf_min': update_signal* cumulated_values.min(),
       'target_pdf_max': update_signal* cumulated_values.max(),
@@ -697,6 +736,7 @@ def train(
       'target_pdf_q50': update_signal* jnp.quantile(cumulated_values, .50),
       'target_pdf_q75': update_signal* jnp.quantile(cumulated_values, .75),
       'target_pdf_std': update_signal* cumulated_values.std(),
+      'beta': _beta,
     })
     new_training_state = TrainingState(
         optimizer_state=optimizer_state,
@@ -706,17 +746,19 @@ def train(
         flow_opt_state= flow_opt_state,
         autodr_state=autodr_state,
         doraemon_state=doraemon_state,
+        scheduler_state = scheduler_state,
         normalizer_params=normalizer_params,
         env_steps=training_state.env_steps + env_step_per_training_step,
+        update_steps = training_state.update_steps + 1,
     )
-    return (new_training_state, state, cumulated_values, new_key, i+1), metrics
+    return (new_training_state, state, cumulated_values, new_key), metrics
 
   def training_epoch(
       training_state: TrainingState, state: envs.State, key: PRNGKey
   ) -> Tuple[TrainingState, envs.State, Metrics]:
-    (training_state, state, _, _, _), loss_metrics = jax.lax.scan(
+    (training_state, state, _, _), loss_metrics = jax.lax.scan(
         training_step,
-        (training_state, state, jnp.zeros(num_envs//jax.process_count()), key, 1),
+        (training_state, state, jnp.zeros(num_envs//jax.process_count()), key),
         (),
         length=num_training_steps_per_epoch,
     )
@@ -761,8 +803,8 @@ def train(
   ) -> Tuple[TrainingState, envs.State, PRNGKey]:
     # shape = np.sqrt(num_envs).astype(int)
     value_apply = samplerppo_network.value_network.apply
-    x, y = jnp.meshgrid(jnp.linspace(dr_range_low[0], dr_range_high[0], 64),\
-                          jnp.linspace(dr_range_low[1], dr_range_high[1], 64))
+    x, y = jnp.meshgrid(jnp.linspace(dr_range_low[0], dr_range_high[0], 32),\
+                          jnp.linspace(dr_range_low[1], dr_range_high[1], 32))
     dynamics_params_grid = jnp.c_[x.ravel(), y.ravel()]
     # print("state in occupancy measure", env_state.obs)
     def f(carry, unused):
@@ -775,17 +817,23 @@ def train(
           dynamics_params_grid,
           key,
           unroll_length,
-          batch_size * num_minibatches // num_envs * sampler_update_freq,
+          batch_size * num_minibatches // num_envs,# * sampler_update_freq,
       )
-      rewards = datas.reward #* reward_scaling
-      terminal_obs = jax.tree_util.tree_map(lambda x: x[:, -1], datas.next_observation)
-      bootstrap_value = value_apply(training_state.normalizer_params, training_state.params.value, terminal_obs)
-      values = rewards.mean(axis=(0,1))# + bootstrap_value
+      # rewards = datas.reward #* reward_scaling
+      # terminal_obs = jax.tree_util.tree_map(lambda x: x[:, -1], datas.next_observation)
+      first_obs = jax.tree_util.tree_map(lambda x: x.reshape(-1, *x.shape[2:]), datas.next_observation)
+      # first_obs = jax.tree_util.tree_map(lambda x: x[:100], first_obs)
+      # bootstrap_value = value_apply(training_state.normalizer_params, training_state.params.value, terminal_obs)
+      # values = rewards.mean(axis=(0,1))# + bootstrap_value
+      values =  value_apply(training_state.normalizer_params, training_state.params.value, first_obs)
+      # values =  value_apply(training_state.normalizer_params, training_state.params.value, datas.next_observation)
+      values = values.mean(0)
+      values = jax.nn.log_softmax((values - values.mean())/ values.std()+1e-6)
       # vs, advantages = jax.vmap(gae_fn)(truncation, termination, rewards, baseline, bootstrap_value)
       return (new_key, dynamics_params_grid), values#pdf_values
     return jax.lax.scan(
         f,
-        (key, dynamics_params_grid), (), length=1#xs=dynamics_params_grid,
+        (key, dynamics_params_grid), (), length=10#xs=dynamics_params_grid,
     )[1]
   evaluation_on_current_occupancy = jax.pmap(
       evaluation_on_current_occupancy, axis_name=_PMAP_AXIS_NAME
@@ -808,10 +856,12 @@ def train(
       flow_opt_state = init_flow_opt_state,
       autodr_state = init_autodr_state,
       doraemon_state= init_doraemon_state,
+      scheduler_state= init_scheduler_state,
       normalizer_params=running_statistics.init_state(
           _remove_pixels(obs_shape)
       ),
       env_steps=types.UInt64(hi=0, lo=0),
+      update_steps=types.UInt64(hi=0, lo=0),
   )
 
   if num_timesteps == 0:
@@ -902,9 +952,9 @@ def train(
     )
     eval_fig = plt.figure()
     reward_2d = reward_1d.reshape(x.shape)
-    vmin, vmax = 0, 1000
-    levels = np.linspace(vmin, vmax, 21)  # 21 levels = 20 color intervals
-    ctf = plt.contourf(x, y, reward_2d, levels=levels, cmap='viridis')
+    # vmin, vmax = 0, 1000
+    # levels = np.linspace(vmin, vmax, 21)  # 21 levels = 20 color intervals
+    ctf = plt.contourf(x, y, reward_2d, levels=20, cmap='viridis')
     cbar = eval_fig.colorbar(ctf)
     eval_fig.suptitle(f"Evaluation on Each Params [Step={int(current_step)}]")
     eval_fig.tight_layout()
@@ -947,7 +997,7 @@ def train(
       #     training_metrics={},
       #     num_eval_seeds=10,
       # )
-      a, b = _unpack_beta(_unpmap(training_state.doraemon_state.x_opt), 2, min_bound, max_bound)
+      a, b = _unpack_beta(_unpmap(training_state.doraemon_state.x_opt), len(dr_range_low), min_bound, max_bound)
       
       dynamics_params_doraemon = sample_beta_on_box(sample_key, a, b, low, high, num_envs //jax.process_count())
       ax = plot_beta_density_2d(
@@ -1030,9 +1080,10 @@ def train(
         training_state, env_state, evaluation_key
     )
     jax.tree_util.tree_map(lambda x: x.block_until_ready(), rewards)
-    rewards = rewards.mean(axis=0)
-    x, y = jnp.meshgrid(jnp.linspace(dr_range_low[0], dr_range_high[0], 64),\
-                          jnp.linspace(dr_range_low[1], dr_range_high[1], 64))
+    print("rewards", rewards.shape)
+    rewards = rewards.mean((0,1)).squeeze()
+    x, y = jnp.meshgrid(jnp.linspace(dr_range_low[0], dr_range_high[0], 32),\
+                          jnp.linspace(dr_range_low[1], dr_range_high[1], 32))
     target_lnpdfs = beta* rewards
     target_lnpdfs = jnp.reshape(target_lnpdfs, x.shape)
     target_fig = plt.figure()
@@ -1161,9 +1212,9 @@ def train(
         )
         eval_fig = plt.figure()
         reward_2d = reward_1d.reshape(x.shape)
-        vmin, vmax = 0, 1000
-        levels = np.linspace(vmin, vmax, 21)  # 21 levels = 20 color intervals
-        ctf = plt.contourf(x, y, reward_2d, levels=levels, cmap='viridis')
+        # vmin, vmax = 0, 1000
+        # levels = np.linspace(vmin, vmax, 21)  # 21 levels = 20 color intervals
+        ctf = plt.contourf(x, y, reward_2d, levels=20, cmap='viridis')
         cbar = eval_fig.colorbar(ctf)
         eval_fig.suptitle(f"Evaluation on Each Params [Step={int(current_step)}]")
         eval_fig.tight_layout()
@@ -1205,7 +1256,7 @@ def train(
           #     training_metrics={},
           #     num_eval_seeds=10,
           # )
-          a, b = _unpack_beta(_unpmap(training_state.doraemon_state.x_opt), 2, min_bound, max_bound)
+          a, b = _unpack_beta(_unpmap(training_state.doraemon_state.x_opt), len(dr_range_low), min_bound, max_bound)
           
           dynamics_params_doraemon = sample_beta_on_box(sample_key, a, b, low, high, num_envs //jax.process_count())
           ax = plot_beta_density_2d(
@@ -1263,7 +1314,7 @@ def train(
           #           step=int(current_step),
           #       )
           eval_samples = samplerppo_network.gmm_network.model.sample(_unpmap(\
-            training_state.gmm_training_state.model_state.gmm_state), sample_key2, 2**14)[0]
+            training_state.gmm_training_state.model_state.gmm_state), sample_key2, 2**16)[0]
           
           log_prob_fn = jax.vmap(functools.partial(samplerppo_network.gmm_network.model.log_density,\
                       gmm_state=_unpmap(training_state.gmm_training_state.model_state.gmm_state)))
@@ -1289,10 +1340,10 @@ def train(
             training_state, env_state, evaluation_key
         )
         jax.tree_util.tree_map(lambda x: x.block_until_ready(), rewards)
-        rewards = rewards.mean(0)
+        rewards = rewards.mean((0,1)).squeeze()
 
-        x, y = jnp.meshgrid(jnp.linspace(dr_range_low[0], dr_range_high[0], 64),\
-                              jnp.linspace(dr_range_low[1], dr_range_high[1], 64))
+        x, y = jnp.meshgrid(jnp.linspace(dr_range_low[0], dr_range_high[0], 32),\
+                              jnp.linspace(dr_range_low[1], dr_range_high[1], 32))
         target_lnpdfs = beta * rewards
         target_lnpdfs = jnp.reshape(target_lnpdfs, x.shape)
         target_fig = plt.figure()
@@ -1321,7 +1372,10 @@ def train(
     save_dir = make_dir(work_dir / "results" / sampler_choice)
     np.save(os.path.join(save_dir, f"reward_1d_{current_step}.npy"), reward_1d)
   if len(dr_range_low)==2:
-    if sampler_choice =="AutoDR":
+    if sampler_choice == "NODR" or sampler_choice=="UDR":
+      imageio.mimsave(os.path.join(save_dir, f"Evaluation Heatmap [threshold={success_threshold}].gif"), evaluation_frames, fps=4)
+      imageio.mimsave(os.path.join(save_dir, f"Evaluation Heatmap [threshold={success_threshold}].gif"), evaluation_frames, fps=4)
+    elif sampler_choice =="AutoDR":
       imageio.mimsave(os.path.join(save_dir, f"Evaluation Heatmap [threshold={success_threshold}].gif"), evaluation_frames, fps=4)
       imageio.mimsave(os.path.join(save_dir, f"target log prob with current occupancy [threshold={success_threshold}].gif"), occupancy_frames, fps=4)
       imageio.mimsave(os.path.join(save_dir, f"Auto DR Heatmap [threshold={success_threshold}].gif"), autodr_frames, fps=4)

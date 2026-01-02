@@ -23,7 +23,7 @@ from ml_collections import config_dict
 import mujoco
 from mujoco import mjx
 
-from custom_envs import mjx_env
+from mujoco_playground._src import mjx_env
 from mujoco_playground._src.manipulation.leap_hand import leap_hand_constants as consts
 
 
@@ -49,15 +49,16 @@ class LeapHandEnv(mjx_env.MjxEnv):
       config_overrides: Optional[Dict[str, Union[str, int, list[Any]]]] = None,
   ) -> None:
     super().__init__(config, config_overrides)
+    self._model_assets = get_assets()
     self._mj_model = mujoco.MjModel.from_xml_string(
-        epath.Path(xml_path).read_text(), assets=get_assets()
+        epath.Path(xml_path).read_text(), assets=self._model_assets
     )
     self._mj_model.opt.timestep = self._config.sim_dt
 
     self._mj_model.vis.global_.offwidth = 3840
     self._mj_model.vis.global_.offheight = 2160
 
-    self._mjx_model =  mjx.put_model(self._mj_model, impl=self._config.impl)
+    self._mjx_model = mjx.put_model(self._mj_model, impl=self._config.impl)
     self._xml_path = xml_path
 
   # Sensor readings.

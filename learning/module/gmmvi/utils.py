@@ -46,7 +46,7 @@ def visualise(log_prob_fn, dr_range_low:chex.Array, dr_range_high : chex.Array, 
     fig = plt.figure()
     ax = fig.add_subplot()
     low, high = dr_range_low, dr_range_high
-    x, y = jnp.meshgrid(jnp.linspace(low[0], high[0], 100), jnp.linspace(low[1], high[1], 100))
+    x, y = jnp.meshgrid(jnp.linspace(low[0]-0.5, high[0]+0.5, 100), jnp.linspace(low[1]-0.5, high[1]+0.5, 100))
     grid = jnp.c_[x.ravel(), y.ravel()]
     pdf_values = jax.vmap(jnp.exp)(log_prob_fn(sample=grid))
     pdf_values = jnp.reshape(pdf_values, x.shape)

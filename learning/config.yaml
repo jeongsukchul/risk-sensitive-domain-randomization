@@ -33,18 +33,23 @@ randomization: true
 final_randomization: true
 custom_wrapper: true
 dr_train_ratio : 1.
+group: ???
 
+# GMMVI cfg
+scheduler_lr : 0.2
+scheduler_window_size: 20
 #sampler cfg
-sampler_update_freq : 10           #set 10 to take long horizon information despite of policy_updates.
+sampler_update_freq : 50           #set 10 to take long horizon information despite of policy_updates.
 n_sampler_iters : 50                #need to consider in flow and gmm
 success_threshold : .7
 success_rate_condition : 0.7
 gamma : 0.
 beta : 2.
+use_scheduling : False
 # misc
 save_video: true
 save_agent: true
-seed: 1
+seed: 0
 
 # convenience
 work_dir: ???

@@ -145,24 +145,39 @@ def train_ppo(cfg:dict, randomization_fn, env, eval_env=None):
         randomizer = randomization_fn
     if cfg.policy=='ppo_nodr':
         sampler_choice = 'NODR'
+        group = sampler_choice
     elif cfg.policy=='ppo':
         sampler_choice = 'UDR'
+        group = sampler_choice
     elif cfg.policy=='flowppo':
         sampler_choice = 'FLOW_NS'
         wandb_name+= f" [gamma={cfg.gamma}_beta={cfg.beta}_iters={cfg.n_sampler_iters}]"
+        group = sampler_choice
+        group+=f" [gamma={cfg.gamma}_beta={cfg.beta}_iters={cfg.n_sampler_iters}]"
     elif cfg.policy=='gmmppo':
         sampler_choice = 'GMM'
-        wandb_name+= f" [beta={cfg.beta}]_iters={cfg.n_sampler_iters}]"
+        wandb_name+= f" [beta={cfg.beta}]"
+        group = sampler_choice
+        if cfg.use_scheduling:
+            wandb_name+= f" [lr={cfg.scheduler_lr}_window={cfg.scheduler_window_size}]_sampler_update_freq={cfg.sampler_update_freq}"
+            group+=f" [beta={cfg.beta}]_sampler_update_freq={cfg.sampler_update_freq}"
+        else:
+            wandb_name+= f" [beta={cfg.beta}]_sampler_update_freq={cfg.sampler_update_freq}"
+            group+=f" [beta={cfg.beta}]_sampler_update_freq={cfg.sampler_update_freq}"
     elif cfg.policy=='adrppo':
         sampler_choice = 'AutoDR'
         wandb_name+= f" [threshold={cfg.success_threshold}]"
+        group = sampler_choice
+        group += f" [threshold={cfg.success_threshold}]"
     elif cfg.policy=='doraemonppo':
         sampler_choice = 'DORAEMON'
         wandb_name += f" [threshold={cfg.success_threshold}_condition={cfg.success_rate_condition}]"
+        group = sampler_choice
+        group += f" [threshold={cfg.success_threshold}_condition={cfg.success_rate_condition}]"
     else:
         raise ValueError("No ppo variant!")
     wandb_name += cfg.comment
-    
+    cfg.group = group
     if cfg.use_wandb:
         wandb.init(
             project=cfg.wandb_project, 
@@ -206,6 +221,9 @@ def train_ppo(cfg:dict, randomization_fn, env, eval_env=None):
         success_threshold = cfg.success_threshold,
         success_rate_condition = cfg.success_rate_condition,
         work_dir = cfg.work_dir,
+        use_scheduling = cfg.use_scheduling,
+        scheduler_lr =cfg.scheduler_lr,
+        scheduler_window_size = cfg.scheduler_window_size,
     )
     
     make_inference_fn, params, metrics = train_fn(

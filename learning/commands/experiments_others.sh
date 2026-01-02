@@ -1,7 +1,13 @@
-wandb_project="cheetah-sampler"
+wandb_project="cheetah-sampler2"
 success_threshold=0.6
-python train.py policy=ppo  wandb_project=$wandb_project 
-python train.py policy=ppo_nodr wandb_project=$wandb_project
+for seed in 0 1 2 3 4
+do
+    python train.py policy=ppo  wandb_project=$wandb_project seed=$seed
+done
+for seed in 0 1 2 3 4
+do
+    python train.py policy=ppo_nodr wandb_project=$wandb_project seed=$seed
+done
 for success_threshold in 0.65 0.7
 do
     python train.py policy=adrppo wandb_project=$wandb_project success_threshold=$success_threshold

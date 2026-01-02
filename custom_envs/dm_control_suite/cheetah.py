@@ -188,8 +188,8 @@ class Run(mjx_env.MjxEnv):
         # [-0.3] * 3 +                          #com_offset_min
         # [0.1] * (self.mjx_model.nbody - 1)) #body_mass_min
     high = jp.array(
-        [1.] +                             #floor_friction_max
-        [10.0]
+        [3.] +                             #floor_friction_max
+        [20.0]
         # [3.0] 
       )
         # [1.] * (self.mjx_model.nv - 3) +   #dof_friction_max
