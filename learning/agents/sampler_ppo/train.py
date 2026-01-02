@@ -77,7 +77,7 @@ class TrainingState:
   doraemon_state: DoraemonState
   normalizer_params: running_statistics.RunningStatisticsState
   env_steps: types.UInt64
-  update_steps: types.UInt64
+  update_steps: jnp.int32
   scheduler_state : SchedulerState
 
 def _unpmap(v):
@@ -861,7 +861,7 @@ def train(
           _remove_pixels(obs_shape)
       ),
       env_steps=types.UInt64(hi=0, lo=0),
-      update_steps=types.UInt64(hi=0, lo=0),
+      update_steps=0,
   )
 
   if num_timesteps == 0:

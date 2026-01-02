@@ -39,8 +39,8 @@ group: ???
 scheduler_lr : 0.2
 scheduler_window_size: 20
 #sampler cfg
-sampler_update_freq : 50           #set 10 to take long horizon information despite of policy_updates.
-n_sampler_iters : 50                #need to consider in flow and gmm
+sampler_update_freq : 30           #set 10 to take long horizon information despite of policy_updates.
+n_sampler_iters : 50                #need to consider in flow 
 success_threshold : .7
 success_rate_condition : 0.7
 gamma : 0.
@@ -53,17 +53,17 @@ seed: 0
 
 # convenience
 work_dir: ???
-task_title: ???
-multitask: ???
-tasks: ???
-obs_shape: ???
-action_dim: ???
-episode_length: ???
-obs_shapes: ???
-action_dims: ???
-episode_lengths: ???
-seed_steps: ???
-bin_size: ???
+# task_title: ???
+# multitask: ???
+# tasks: ???
+# obs_shape: ???
+# action_dim: ???
+# episode_length: ???
+# obs_shapes: ???
+# action_dims: ???
+# episode_lengths: ???
+# seed_steps: ???
+# bin_size: ???
 
 #simba
 simba : false
