@@ -751,6 +751,7 @@ def train(
         env_steps=training_state.env_steps + env_step_per_training_step,
         update_steps = training_state.update_steps + 1,
     )
+    cumulated_values = (1-update_signal) * cumulated_values
     return (new_training_state, state, cumulated_values, new_key), metrics
 
   def training_epoch(
