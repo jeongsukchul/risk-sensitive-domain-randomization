@@ -229,7 +229,7 @@ class PlanarWalker(mjx_env.MjxEnv):
         [0.98] +                             #thigh mass
         [0.68] +                             #leg mass
         [0.74] +                             #foot mass
-        [-5e-3] * 7                          #body iposx
+        [-5e-2] * 7                          #body iposx
     )
     high = jp.array(
         [1.58] +                             #floor friction
@@ -240,7 +240,7 @@ class PlanarWalker(mjx_env.MjxEnv):
         [6.87] +                             #thigh mass
         [4.75] +                             #leg mass
         [5.15] +                             #foot mass
-        [5e-3] * 7                           #body iposx
+        [5e-2] * 7                           #body iposx
     )
     return low, high
   
