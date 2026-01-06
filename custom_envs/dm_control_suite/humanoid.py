@@ -260,8 +260,8 @@ class Humanoid(mjx_env.MjxEnv):
         # [-.05] * (self.mjx_model.nv-6)       #qpos0(21d)
       )
     high = jp.array(
-        [1.0] +                              #floor_friction_min 
-        [1.3] #*(self.mjx_model.nv-6) +       #dof friciton(21d)
+        [4.0] +                              #floor_friction_min 
+        [7.3] #*(self.mjx_model.nv-6) +       #dof friciton(21d)
         # [1.05] * (self.mjx_model.nv-6) +     #dof armature(21d)
         # [1.0] +                              #torso mass(1d)
         # [1.1] * (self.mjx_model.nbody-2) +   #link masses(15d)
