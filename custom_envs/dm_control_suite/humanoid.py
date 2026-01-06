@@ -133,10 +133,11 @@ class Humanoid(mjx_env.MjxEnv):
     privileged_state = jp.concatenate([
       state,
       self.mjx_model.geom_friction[FLOOR_GEOM_ID, 0:1],
-      self.mjx_model.dof_frictionloss[6:],
-      self.mjx_model.dof_armature[6:],
-      self.mjx_model.body_mass[1:],
-      self.mjx_model.qpos0[7:],
+      self.mjx_model.body_mass[TORSO_BODY_ID][..., None],
+      # self.mjx_model.dof_frictionloss[6:],
+      # self.mjx_model.dof_armature[6:],
+      # self.mjx_model.body_mass[1:],
+      # self.mjx_model.qpos0[7:],
     ])
     # return state
     return {
@@ -309,7 +310,7 @@ def domain_randomize(model: mjx.Model, dr_range, params=None, rng:jax.Array=None
     idx = 0
     geom_friction = model.geom_friction.at[FLOOR_GEOM_ID, 0].set(rng_params[idx])
     idx += 1
-    body_mass = model.body_mass.at[TORSO_BODY_ID].set(params[idx])
+    body_mass = model.body_mass.at[TORSO_BODY_ID].set(rng_params[idx])
     idx +=1
     # dof_frictionloss = model.dof_frictionloss.at[6].set(rng_params[idx])
     # idx+=1
@@ -406,7 +407,7 @@ def domain_randomize_eval(model: mjx.Model, dr_range, params=None, rng:jax.Array
     idx = 0
     geom_friction = model.geom_friction.at[FLOOR_GEOM_ID, 0].set(rng_params[idx])
     idx += 1
-    body_mass = model.body_mass.at[TORSO_BODY_ID].set(params[idx])
+    body_mass = model.body_mass.at[TORSO_BODY_ID].set(rng_params[idx])
     idx +=1
     # dof_frictionloss = model.dof_frictionloss.at[6].set(rng_params[idx])
     # idx+=1

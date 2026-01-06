@@ -299,22 +299,26 @@ class Balance(mjx_env.MjxEnv):
   def mjx_model(self) -> mjx.Model:
     return self._mjx_model
   @property
+  def nominal_params(self)-> jp.ndarray:
+    return jp.ones(2)
+  @property
   def dr_range(self) -> dict:
 
     low = jp.array(
-        [0.9] +                             #floor_friction_min 
+        [0.4] +                             #floor_friction_min 
         # [0.] * self.mjx_model.nv +   # dof_friction_min (2)
         # [-0.3] * 2 +                          #com_offset_min
-        [0.75] #* (self.mjx_model.nbody - 1) #body_mass_min (2)
+        [0.55] #* (self.mjx_model.nbody - 1) #body_mass_min (2)
     )
     high = jp.array(
-        [2.0] +                             #floor_friction_max
+        [5.0] +                             #floor_friction_max
         # [1.] * self.mjx_model.nv+   #dof_friction_max
         # [0.3] * 2 +                          #com_offset_max
-        [1.25] #* (self.mjx_model.nbody - 1) #body_mass_max
+        [5.25] #* (self.mjx_model.nbody - 1) #body_mass_max
     )
     return low, high
 FLOOR_GEOM_ID = 0
+CART_BODY_ID = 1
 POLE_BODY_ID = 2
 
 def domain_randomize(model: mjx.Model, dr_range, params=None, rng:jax.Array=None):
@@ -326,8 +330,10 @@ def domain_randomize(model: mjx.Model, dr_range, params=None, rng:jax.Array=None
   @jax.vmap
   def shift_dynamics(params):
     idx = 0
-    geom_friction = model.geom_friction.at[FLOOR_GEOM_ID, 0].set(params[idx])
-    idx += 1
+    body_mass = model.body_mass.at[CART_BODY_ID].set(
+        model.body_mass[CART_BODY_ID] *params[idx]
+      )
+    idx+=1
     body_mass = model.body_mass.at[POLE_BODY_ID].set(
         model.body_mass[POLE_BODY_ID] *params[idx]
       )
@@ -344,12 +350,12 @@ def domain_randomize(model: mjx.Model, dr_range, params=None, rng:jax.Array=None
     # for i in range(1, model.nbody):
     #   body_mass = model.body_mass.at[i].set(model.body_mass[i] * params[idx])
     #   idx+=1
-    idx += model.nbody-1
+    # idx += model.nbody-1
     assert idx == len(params)
+
     body_ipos = model.body_ipos
     dof_frictionloss = model.dof_frictionloss
     return (
-      geom_friction,
       body_ipos,
       body_mass,
       dof_frictionloss,
@@ -359,10 +365,12 @@ def domain_randomize(model: mjx.Model, dr_range, params=None, rng:jax.Array=None
     # floor friction
     rng_params = dist(rng)
     idx = 0
-    geom_friction = model.geom_friction.at[FLOOR_GEOM_ID, 0].set(rng_params[idx])
-    idx += 1
+    body_mass = model.body_mass.at[CART_BODY_ID].set(
+        model.body_mass[CART_BODY_ID] * rng_params[idx]
+      )
+    idx+=1
     body_mass = model.body_mass.at[POLE_BODY_ID].set(
-        model.body_mass[POLE_BODY_ID] *params[idx]
+        model.body_mass[POLE_BODY_ID] * rng_params[idx]
       )
     idx+=1
     # dof_frictionloss = model.dof_frictionloss.at[:].set(rng_params[idx:idx+ model.nv])
@@ -382,7 +390,6 @@ def domain_randomize(model: mjx.Model, dr_range, params=None, rng:jax.Array=None
     body_ipos = model.body_ipos
     dof_frictionloss = model.dof_frictionloss
     return (
-      geom_friction,
       body_ipos,
       body_mass,
       dof_frictionloss,
@@ -390,10 +397,9 @@ def domain_randomize(model: mjx.Model, dr_range, params=None, rng:jax.Array=None
   
   if rng is None and params is not None:
 
-    (geom_friction, body_ipos, body_mass, dof_frictionloss) = shift_dynamics(params)
+    (body_ipos, body_mass, dof_frictionloss) = shift_dynamics(params)
   elif rng is not None and params is None:
     (
-      geom_friction,
       body_ipos,
       body_mass,
       dof_frictionloss,
@@ -402,13 +408,11 @@ def domain_randomize(model: mjx.Model, dr_range, params=None, rng:jax.Array=None
     raise ValueError("rng and params wrong!")
   in_axes = jax.tree_util.tree_map(lambda x: None, model)
   in_axes = in_axes.tree_replace({
-      "geom_friction": 0,
       "body_ipos": 0,
       "body_mass": 0,
       "dof_frictionloss": 0,
   })
   model = model.tree_replace({
-      "geom_friction": geom_friction,
       "body_ipos": body_ipos,
       "body_mass": body_mass,
       "dof_frictionloss": dof_frictionloss,
@@ -423,8 +427,10 @@ def domain_randomize_eval(model: mjx.Model, dr_range, params=None, rng:jax.Array
 
   def shift_dynamics(params):
     idx = 0
-    geom_friction = model.geom_friction.at[FLOOR_GEOM_ID, 0].set(params[idx])
-    idx += 1
+    body_mass = model.body_mass.at[CART_BODY_ID].set(
+        model.body_mass[CART_BODY_ID] *params[idx]
+      )
+    idx+=1
     body_mass = model.body_mass.at[POLE_BODY_ID].set(
         model.body_mass[POLE_BODY_ID] *params[idx]
       )
@@ -442,7 +448,6 @@ def domain_randomize_eval(model: mjx.Model, dr_range, params=None, rng:jax.Array
     body_ipos = model.body_ipos
     dof_frictionloss = model.dof_frictionloss
     return (
-      geom_friction,
       body_ipos,
       body_mass,
       dof_frictionloss,
@@ -451,12 +456,12 @@ def domain_randomize_eval(model: mjx.Model, dr_range, params=None, rng:jax.Array
     # floor friction
     rng_params = dist(rng)
     idx=0
-    geom_friction = model.geom_friction.at[FLOOR_GEOM_ID, 0].set(
-      rng_params[idx]
-    )
+    body_mass = model.body_mass.at[CART_BODY_ID].set(
+        model.body_mass[CART_BODY_ID] *rng_params[idx]
+      )
     idx+=1
     body_mass = model.body_mass.at[POLE_BODY_ID].set(
-        model.body_mass[POLE_BODY_ID] *params[idx]
+        model.body_mass[POLE_BODY_ID] *rng_params[idx]
       )
     idx+=1
     # static friction
@@ -477,17 +482,15 @@ def domain_randomize_eval(model: mjx.Model, dr_range, params=None, rng:jax.Array
     body_ipos = model.body_ipos
     dof_frictionloss = model.dof_frictionloss
     return (
-      geom_friction,
       body_ipos,
       body_mass,
       dof_frictionloss,
     )
   
   if rng is None and params is not None:
-    (geom_friction, body_ipos, body_mass, dof_frictionloss) = shift_dynamics(params)
+    (body_ipos, body_mass, dof_frictionloss) = shift_dynamics(params)
   elif rng is not None and params is None:
     (
-      geom_friction,
       body_ipos,
       body_mass,
       dof_frictionloss,
@@ -496,13 +499,11 @@ def domain_randomize_eval(model: mjx.Model, dr_range, params=None, rng:jax.Array
     raise ValueError("rng and params wrong!")
   in_axes = jax.tree_util.tree_map(lambda x: None, model)
   in_axes = in_axes.tree_replace({
-      "geom_friction": 0,
       "body_ipos": 0,
       "body_mass": 0,
       "dof_frictionloss": 0,
   })
   model = model.tree_replace({
-      "geom_friction": geom_friction,
       "body_ipos": body_ipos,
       "body_mass": body_mass,
       "dof_frictionloss": dof_frictionloss,
