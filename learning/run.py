@@ -149,6 +149,7 @@ def train_ppo(cfg:dict, randomization_fn, env, eval_env=None):
     elif cfg.policy=='ppo':
         sampler_choice = 'UDR'
         group = sampler_choice
+        group += f"_impl={cfg.impl}"
     elif cfg.policy=='flowppo':
         sampler_choice = 'FLOW_NS'
         wandb_name+= f" [gamma={cfg.gamma}_beta={cfg.beta}_iters={cfg.n_sampler_iters}]"

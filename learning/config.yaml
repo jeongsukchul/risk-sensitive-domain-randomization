@@ -21,7 +21,7 @@ asymmetric_critic: true
 distributional_q : false
 
 # logging
-wandb_project: test-riskppo
+wandb_project: gradient_test
 wandb_entity: tjrcjf410-seoul-national-university
 wandb_silent: false
 use_wandb: true
@@ -44,12 +44,12 @@ n_sampler_iters : 50                #need to consider in flow
 success_threshold : .7
 success_rate_condition : 0.7
 gamma : 0.
-beta : 2.
+beta : 1.
 use_scheduling : False
 # misc
 save_video: true
 save_agent: true
-seed: 0
+seed: 42
 
 # convenience
 work_dir: ???

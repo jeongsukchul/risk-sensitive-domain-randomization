@@ -52,7 +52,12 @@ class AdvEvalWrapper(Wrapper):
       )
     del state.info['eval_metrics']
     nstate = self.env.step(state, action, params)
-    nstate.metrics['reward'] = nstate.reward
+    print("nstate data xpos", nstate.data.xpos.shape)
+    nstate.metrics['reward'] = nstate.reward #* (nstate.data.xpos[:, 1, 0] > 2)    # prevent learning ackward distribution
+    # speed_x =  mjx_env.get_sensor_data(
+    #     self.env.mj_model, nstate.data, "torso_subtreelinvel"
+    # )[0]
+    
     episode_steps = jnp.where(
         state_metrics.active_episodes,
         nstate.info['steps'],

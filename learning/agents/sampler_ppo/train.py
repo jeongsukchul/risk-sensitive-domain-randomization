@@ -320,7 +320,8 @@ def train(
           * max(num_resets_per_eval, 1)
       )
   ).astype(int)
-  
+  num_training_steps = np.ceil(num_timesteps / (num_evals_after_init))
+  print("num_training steps", num_training_steps)
   key = jax.random.PRNGKey(seed)
   global_key, local_key = jax.random.split(key)
   del key
@@ -399,7 +400,7 @@ def train(
     )
   init_autodr_state, init_doraemon_state, init_flow_state, init_gmm_state = init_states
   scheduler, init_scheduler_state =  GMMScheduler.create(
-        arms=jnp.arange(61)-30, 
+        arms=jnp.arange(41)-30, 
         lr=scheduler_lr, 
         window_size=scheduler_window_size,
     )
@@ -656,10 +657,10 @@ def train(
         k20 = int(N* .2)
         CVaR20 = sorted_values[:k20].mean()
         feedback = CVaR20 - scheduler_state.prev_cvar
-        scheduler_state.prev_cvar = feedback
+        scheduler_state = scheduler_state.replace(prev_cvar = CVaR20)
         return scheduler.update_dists(scheduler_state, feedback)
       scheduler_state = jax.lax.cond(training_state.update_steps % sampler_update_freq==0, \
-                lambda: update_scheduler, \
+                lambda: update_scheduler(training_state.scheduler_state, cumulated_values), \
                  lambda: training_state.scheduler_state )
       scheduler_state, _beta = scheduler.sample(scheduler_state, scheduler_key)
     else:
@@ -827,9 +828,14 @@ def train(
       # bootstrap_value = value_apply(training_state.normalizer_params, training_state.params.value, terminal_obs)
       # values = rewards.mean(axis=(0,1))# + bootstrap_value
       values =  value_apply(training_state.normalizer_params, training_state.params.value, first_obs)
+      discounts = jnp.power(discounting, jnp.arange(values.shape[0]))
+      # print("values", values)
+      # print('discounst', discounts)
+      # values= (discounts[...,None]*values).mean(0)
+      values= values.mean(0)
       # values =  value_apply(training_state.normalizer_params, training_state.params.value, datas.next_observation)
-      values = values.mean(0)
-      values = jax.nn.log_softmax((values - values.mean())/ values.std()+1e-6)
+      # values = values.mean(0)/ episode_length
+      # values = jax.nn.log_softmax((values - values.mean())/ values.std()+1e-6)
       # vs, advantages = jax.vmap(gae_fn)(truncation, termination, rewards, baseline, bootstrap_value)
       return (new_key, dynamics_params_grid), values#pdf_values
     return jax.lax.scan(
@@ -919,6 +925,7 @@ def train(
   gmm_training_frames = []
   occupancy_frames = []
   # Run initial eval
+  print("-------------------------len parameter--------------------------------------------", len(dr_range_low))
   metrics = {}
   if process_id == 0 and num_evals > 1 and run_evals and len(dr_range_low)>2:
     eval_key, local_key = jax.random.split(local_key)
@@ -1081,7 +1088,6 @@ def train(
         training_state, env_state, evaluation_key
     )
     jax.tree_util.tree_map(lambda x: x.block_until_ready(), rewards)
-    print("rewards", rewards.shape)
     rewards = rewards.mean((0,1)).squeeze()
     x, y = jnp.meshgrid(jnp.linspace(dr_range_low[0], dr_range_high[0], 32),\
                           jnp.linspace(dr_range_low[1], dr_range_high[1], 32))
@@ -1183,19 +1189,38 @@ def train(
           metrics['eval/reverse_ess'] = jnp.sum(weights)**2 / jnp.maximum(num_samples_bench * jnp.sum(weights**2), 1e-10)
           metrics['eval/ln_z'] = (jnp.log(weights.sum()) + jnp.max(safe_log_ratio)) - jnp.log(num_samples_bench)
         if len(dr_range_low)>2:
-          eval_key, local_key = jax.random.split(local_key)
-          dynamics_params_grid = jax.random.uniform(eval_key, shape=(4096, len(dr_range_low)), minval=dr_range_low, maxval=dr_range_high)
-          metrics, reward_1d, __cached__ = evaluator.run_evaluation(
-              _unpmap((
-                  training_state.normalizer_params,
-                  training_state.params.policy,
-                  training_state.params.value,
-              )),
-              dynamics_params=dynamics_params_grid,
-              training_metrics=metrics,
-              num_eval_seeds=10,
-              success_threshold=success_threshold,
-          )
+          rewards = []
+          for i in range(4): # 16384 envs.
+            eval_key, local_key = jax.random.split(local_key)
+            dynamics_params_grid = jax.random.uniform(eval_key, shape=(4096, len(dr_range_low)), minval=dr_range_low, maxval=dr_range_high)
+            metrics, _reward_1d, ep_length = evaluator.run_evaluation(
+                _unpmap((
+                    training_state.normalizer_params,
+                    training_state.params.policy,
+                    training_state.params.value,
+                )),
+                dynamics_params=dynamics_params_grid,
+                training_metrics=metrics,
+                num_eval_seeds=10,
+                success_threshold=success_threshold,
+            )
+            rewards.append(_reward_1d)
+          rewards = jnp.stack(rewards, axis=-1).reshape(-1)
+          print("16384 ? ", rewards.shape)
+          N = rewards.shape[0]
+          k20 = int(N* .2)
+          k10 = int(N* .1)
+          sorted_rewards = np.sort(rewards)
+          metrics['eval/episode_reward_mean'] = np.mean(rewards)
+          metrics['eval/episode_reward_p12'] = np.percentile(rewards,12.5)
+          metrics['eval/episode_reward_p25'] = np.percentile(rewards,25)
+          metrics['eval/episode_reward_p75'] = np.percentile(rewards,75)
+          metrics['eval/episode_reward_std'] = np.std(rewards)
+          metrics['eval/episode_reward_min'] = np.min(rewards)
+          metrics['eval/episode_reward_max'] = np.max(rewards)
+          metrics['eval/episode_reward_iqm'] = scipy.stats.trim_mean(rewards, proportiontocut=0.25, axis=None)
+          metrics['eval/episode_reward_CVaR20'] = np.mean(sorted_rewards[:k20])
+          metrics['eval/episode_reward_CVaR10'] = np.mean(sorted_rewards[:k10])
       if run_evals and len(dr_range_low)==2:
         x, y = jnp.meshgrid(jnp.linspace(dr_range_low[0], dr_range_high[0], 64),\
                               jnp.linspace(dr_range_low[1], dr_range_high[1], 64))
@@ -1211,6 +1236,7 @@ def train(
             num_eval_seeds=10,
             success_threshold=success_threshold,
         )
+        print("reward_1d", reward_1d.shape)
         eval_fig = plt.figure()
         reward_2d = reward_1d.reshape(x.shape)
         # vmin, vmax = 0, 1000
@@ -1374,8 +1400,7 @@ def train(
     np.save(os.path.join(save_dir, f"reward_1d_{current_step}.npy"), reward_1d)
   if len(dr_range_low)==2:
     if sampler_choice == "NODR" or sampler_choice=="UDR":
-      imageio.mimsave(os.path.join(save_dir, f"Evaluation Heatmap [threshold={success_threshold}].gif"), evaluation_frames, fps=4)
-      imageio.mimsave(os.path.join(save_dir, f"Evaluation Heatmap [threshold={success_threshold}].gif"), evaluation_frames, fps=4)
+      imageio.mimsave(os.path.join(save_dir, f"Evaluation Heatmap.gif"), evaluation_frames, fps=4)
     elif sampler_choice =="AutoDR":
       imageio.mimsave(os.path.join(save_dir, f"Evaluation Heatmap [threshold={success_threshold}].gif"), evaluation_frames, fps=4)
       imageio.mimsave(os.path.join(save_dir, f"target log prob with current occupancy [threshold={success_threshold}].gif"), occupancy_frames, fps=4)

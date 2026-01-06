@@ -44,7 +44,7 @@ def default_config() -> config_dict.ConfigDict:
       vision=False,
       impl="jax",
       nconmax=200_000,
-      njmax=250,
+      njmax=350,
   )
 
 
@@ -247,25 +247,25 @@ class Humanoid(mjx_env.MjxEnv):
     return self._mjx_model
   @property
   def nominal_params(self) -> jp.ndarray:
-    return jp.concatenate([jp.ones(43), jp.zeros(1), jp.ones(15), jp.zeros(21)])
+    return jp.ones(2) #jp.concatenate([jp.ones(43), jp.zeros(1), jp.ones(15), jp.zeros(21)])
   @property
   def dr_range(self) -> dict:
     #total 80d
     low = jp.array(
         [0.4] +                              #floor_friction_min 
-        [0.9] *(self.mjx_model.nv-6) +       #dof friciton(21d)
-        [1.] * (self.mjx_model.nv-6) +       #dof armature(21d)
-        [-1.] +                              #torso mass(1d)
-        [0.9] * (self.mjx_model.nbody-2) +   #link masses(15d)
-        [-.05] * (self.mjx_model.nv-6)       #qpos0(21d)
+        [0.7] #*(self.mjx_model.nv-6) +       #dof friciton(21d)
+        # [1.] * (self.mjx_model.nv-6) +       #dof armature(21d)
+        # [-1.] +                              #torso mass(1d)
+        # [0.9] * (self.mjx_model.nbody-2) +   #link masses(15d)
+        # [-.05] * (self.mjx_model.nv-6)       #qpos0(21d)
       )
     high = jp.array(
         [1.0] +                              #floor_friction_min 
-        [1.1] *(self.mjx_model.nv-6) +       #dof friciton(21d)
-        [1.05] * (self.mjx_model.nv-6) +     #dof armature(21d)
-        [1.0] +                              #torso mass(1d)
-        [1.1] * (self.mjx_model.nbody-2) +   #link masses(15d)
-        [.05] * (self.mjx_model.nv-6)        #qpos0(21d)
+        [1.3] #*(self.mjx_model.nv-6) +       #dof friciton(21d)
+        # [1.05] * (self.mjx_model.nv-6) +     #dof armature(21d)
+        # [1.0] +                              #torso mass(1d)
+        # [1.1] * (self.mjx_model.nbody-2) +   #link masses(15d)
+        # [.05] * (self.mjx_model.nv-6)        #qpos0(21d)
       )
     return low, high
   
@@ -280,16 +280,22 @@ def domain_randomize(model: mjx.Model, dr_range, params=None, rng:jax.Array=None
     idx = 0
     geom_friction = model.geom_friction.at[FLOOR_GEOM_ID, 0].set(params[idx])
     idx += 1
-    dof_frictionloss = model.dof_frictionloss.at[6:].set(params[idx:idx+21])
-    idx += 21
-    dof_armature  = model.dof_armature.at[6:].set(params[idx:idx+21])
-    idx += 21
-    body_mass = model.body_mass.at[1].set(params[idx])
-    body_mass = model.body_mass.at[2:].set(params[idx+1: idx+16])
-    idx += 16
-    qpos0 = model.qpos0.at[7:].set(params[idx:idx+21])
-    idx +=21
+    body_mass = model.body_mass.at[TORSO_BODY_ID].set(params[idx])
+    idx +=1
+    # dof_frictionloss = model.dof_frictionloss.at[6:].set(params[idx:idx+21])
+    # idx += 21
+    # dof_armature  = model.dof_armature.at[6:].set(params[idx:idx+21])
+    # idx += 21
+    # body_mass = model.body_mass.at[1].set(params[idx])
+    # body_mass = model.body_mass.at[2:].set(params[idx+1: idx+16])
+    # idx += 16
+    # qpos0 = model.qpos0.at[7:].set(params[idx:idx+21])
+    # idx +=21
     assert idx == len(params)
+    dof_armature = model.dof_armature
+    dof_frictionloss = model.dof_frictionloss
+    # body_mass = model.body_mass
+    qpos0 = model.qpos0
     return (
       geom_friction,
       dof_frictionloss,
@@ -303,16 +309,24 @@ def domain_randomize(model: mjx.Model, dr_range, params=None, rng:jax.Array=None
     idx = 0
     geom_friction = model.geom_friction.at[FLOOR_GEOM_ID, 0].set(rng_params[idx])
     idx += 1
-    dof_frictionloss = model.dof_frictionloss.at[6:].set(rng_params[idx:idx+21])
-    idx += 21
-    dof_armature  = model.dof_armature.at[6:].set(rng_params[idx:idx+21])
-    idx += 21
-    body_mass = model.body_mass.at[1].set(model.body_mass[1] + rng_params[idx])
-    body_mass = model.body_mass.at[2:].set(rng_params[idx+1: idx+16])
-    idx += 16
-    qpos0 = model.qpos0.at[7:].set(rng_params[idx:idx+21])
-    idx +=21
+    body_mass = model.body_mass.at[TORSO_BODY_ID].set(params[idx])
+    idx +=1
+    # dof_frictionloss = model.dof_frictionloss.at[6].set(rng_params[idx])
+    # idx+=1
+    # dof_frictionloss = model.dof_frictionloss.at[6:].set(rng_params[idx:idx+21])
+    # idx += 21
+    # dof_armature  = model.dof_armature.at[6:].set(rng_params[idx:idx+21])
+    # idx += 21
+    # body_mass = model.body_mass.at[1].set(model.body_mass[1] + rng_params[idx])
+    # body_mass = model.body_mass.at[2:].set(rng_params[idx+1: idx+16])
+    # idx += 16
+    # qpos0 = model.qpos0.at[7:].set(rng_params[idx:idx+21])
+    # idx +=21
     assert idx == len(rng_params)
+    dof_armature = model.dof_armature
+    # body_mass = model.body_mass
+    dof_frictionloss = model.dof_frictionloss
+    qpos0 = model.qpos0
     return (
       geom_friction,
       dof_frictionloss,
@@ -362,15 +376,23 @@ def domain_randomize_eval(model: mjx.Model, dr_range, params=None, rng:jax.Array
     idx = 0
     geom_friction = model.geom_friction.at[FLOOR_GEOM_ID, 0].set(params[idx])
     idx += 1
-    dof_frictionloss = model.dof_frictionloss.at[6:].set(params[idx:idx+21])
-    idx += 21
-    dof_armature  = model.dof_armature.at[6:].set(params[idx:idx+21])
-    idx += 21
-    body_mass = model.body_mass.at[1].set(params[idx])
-    body_mass = model.body_mass.at[2:].set(params[idx+1: idx+16])
-    idx += 16
-    qpos0 = model.qpos0.at[7:].set(params[idx:idx+21])
-    idx +=21
+    # dof_frictionloss = model.dof_frictionloss.at[6].set(params[idx])
+    # idx+=1
+    body_mass = model.body_mass.at[TORSO_BODY_ID].set(params[idx])
+    idx +=1
+    # dof_frictionloss = model.dof_frictionloss.at[6:].set(params[idx:idx+21])
+    # idx += 21
+    # dof_armature  = model.dof_armature.at[6:].set(params[idx:idx+21])
+    # idx += 21
+    # body_mass = model.body_mass.at[1].set(params[idx])
+    # body_mass = model.body_mass.at[2:].set(params[idx+1: idx+16])
+    # idx += 16
+    # qpos0 = model.qpos0.at[7:].set(params[idx:idx+21])
+    # idx +=21
+    dof_armature = model.dof_armature
+    # body_mass = model.body_mass
+    dof_frictionloss = model.dof_frictionloss
+    qpos0 = model.qpos0
     assert idx == len(params)
     return (
       geom_friction,
@@ -384,16 +406,24 @@ def domain_randomize_eval(model: mjx.Model, dr_range, params=None, rng:jax.Array
     idx = 0
     geom_friction = model.geom_friction.at[FLOOR_GEOM_ID, 0].set(rng_params[idx])
     idx += 1
-    dof_frictionloss = model.dof_frictionloss.at[6:].set(rng_params[idx:idx+21])
-    idx += 21
-    dof_armature  = model.dof_armature.at[6:].set(rng_params[idx:idx+21])
-    idx += 21
-    body_mass = model.body_mass.at[1].set(rng_params[idx])
-    body_mass = model.body_mass.at[2:].set(rng_params[idx+1: idx+16])
-    idx += 16
-    qpos0 = model.qpos0.at[7:].set(rng_params[idx:idx+21])
-    idx +=21
+    body_mass = model.body_mass.at[TORSO_BODY_ID].set(params[idx])
+    idx +=1
+    # dof_frictionloss = model.dof_frictionloss.at[6].set(rng_params[idx])
+    # idx+=1
+    # dof_frictionloss = model.dof_frictionloss.at[6:].set(rng_params[idx:idx+21])
+    # idx += 21
+    # dof_armature  = model.dof_armature.at[6:].set(rng_params[idx:idx+21])
+    # idx += 21
+    # body_mass = model.body_mass.at[1].set(rng_params[idx])
+    # body_mass = model.body_mass.at[2:].set(rng_params[idx+1: idx+16])
+    # idx += 16
+    # qpos0 = model.qpos0.at[7:].set(rng_params[idx:idx+21])
+    # idx +=21
     assert idx == len(rng_params)
+    dof_armature = model.dof_armature
+    # body_mass = model.body_mass
+    dof_frictionloss = model.dof_frictionloss
+    qpos0 = model.qpos0
     return (
       geom_friction,
       dof_frictionloss,

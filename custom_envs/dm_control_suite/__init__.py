@@ -28,13 +28,13 @@ from custom_envs import mjx_env
 from custom_envs.dm_control_suite import cartpole, humanoid
 from custom_envs.dm_control_suite import cheetah
 # from mujoco_playground._src.dm_control_suite import finger
-# from mujoco_playground._src.dm_control_suite import fish
+from custom_envs.dm_control_suite import fish
+from custom_envs.dm_control_suite import swimmer
 from custom_envs.dm_control_suite import hopper
 # from mujoco_playground._src.dm_control_suite import humanoid
 from custom_envs.dm_control_suite import pendulum
 # from mujoco_playground._src.dm_control_suite import point_mass
 # from mujoco_playground._src.dm_control_suite import reacher
-# from mujoco_playground._src.dm_control_suite import swimmer
 from custom_envs.dm_control_suite import walker
 
 _envs = {
@@ -57,7 +57,7 @@ _envs = {
     # "FingerTurnHard": partial(
     #     finger.Turn, target_radius=finger.HARD_TARGET_SIZE
     # ),
-    # "FishSwim": fish.Swim,
+    "FishSwim": fish.Swim,
     "HopperHop": partial(hopper.Hopper, hopping=True),
     "HopperStand": partial(hopper.Hopper, hopping=False),
     "HumanoidStand": partial(humanoid.Humanoid, move_speed=0.0),
@@ -67,7 +67,7 @@ _envs = {
     # "PointMass": point_mass.PointMass,
     # "ReacherEasy": partial(reacher.Reacher, target_size=reacher.BIG_TARGET),
     # "ReacherHard": partial(reacher.Reacher, target_size=reacher.SMALL_TARGET),
-    # "SwimmerSwimmer6": partial(swimmer.Swim, n_links=6),
+    "SwimmerSwimmer6": partial(swimmer.Swim, n_links=6),
     "WalkerRun": partial(walker.PlanarWalker, move_speed=walker.RUN_SPEED),
     "WalkerStand": partial(walker.PlanarWalker, move_speed=0.0),
     "WalkerWalk": partial(walker.PlanarWalker, move_speed=walker.WALK_SPEED),
@@ -86,7 +86,7 @@ _cfgs = {
     # "FingerSpin": finger.default_config,
     # "FingerTurnEasy": finger.default_config,
     # "FingerTurnHard": finger.default_config,
-    # "FishSwim": fish.default_config,
+    "FishSwim": fish.default_config,
     "HopperHop": hopper.default_config,
     "HopperStand": hopper.default_config,
     "HumanoidRun": humanoid.default_config,
@@ -96,7 +96,7 @@ _cfgs = {
     # "PointMass": point_mass.default_config,
     # "ReacherEasy": reacher.default_config,
     # "ReacherHard": reacher.default_config,
-    # "SwimmerSwimmer6": swimmer.default_config,
+    "SwimmerSwimmer6": swimmer.default_config,
     "WalkerRun": walker.default_config,
     "WalkerStand": walker.default_config,
     "WalkerWalk": walker.default_config,
@@ -111,6 +111,8 @@ _randomizer = {
   "WalkerRun" : walker.domain_randomize,
   "WalkerWalk" : walker.domain_randomize,
   "WalkerStand" : walker.domain_randomize,
+  "FishSwim" : fish.domain_randomize,
+  "SwimmerSwimmer6" : swimmer.domain_randomize,
   "HumanoidRun": humanoid.domain_randomize,
   "HumanoidStand": humanoid.domain_randomize,
   "HumanoidWalk": humanoid.domain_randomize,
@@ -123,6 +125,8 @@ _randomizer_eval = {
   "WalkerRun" : walker.domain_randomize_eval,
   "WalkerWalk" : walker.domain_randomize_eval,
   "WalkerStand" : walker.domain_randomize_eval,
+  "FishSwim" : fish.domain_randomize_eval,
+  "SwimmerSwimmer6" : swimmer.domain_randomize_eval,
   "HumanoidRun": humanoid.domain_randomize_eval,
   "HumanoidStand": humanoid.domain_randomize_eval,
   "HumanoidWalk": humanoid.domain_randomize_eval,
