@@ -300,7 +300,7 @@ class Balance(mjx_env.MjxEnv):
     return self._mjx_model
   @property
   def nominal_params(self)-> jp.ndarray:
-    return jp.ones(2)
+    return jp.array([1, 0])
   @property
   def dr_range(self) -> dict:
 
@@ -331,8 +331,8 @@ def domain_randomize(model: mjx.Model, dr_range, params=None, rng:jax.Array=None
       )
     offset = jp.array([params[idx], 0, 0])
     idx+=1
-    body_ipos = model.body_ipos.at[CART_BODY_ID].set(
-        model.body_ipos[CART_BODY_ID] + offset
+    body_ipos = model.body_ipos.at[POLE_BODY_ID].set(
+        model.body_ipos[POLE_BODY_ID] + offset
     )
     idx+=1
     
@@ -363,12 +363,12 @@ def domain_randomize(model: mjx.Model, dr_range, params=None, rng:jax.Array=None
     rng_params = dist(rng)
     idx = 0
     body_mass = model.body_mass.at[POLE_BODY_ID].set(
-        model.body_mass[POLE_BODY_ID] *params[idx]
+        model.body_mass[POLE_BODY_ID] * rng_params[idx]
       )
-    offset = jp.array([params[idx], 0, 0])
+    offset = jp.array([rng_params[idx], 0, 0])
     idx+=1
-    body_ipos = model.body_ipos.at[CART_BODY_ID].set(
-        model.body_ipos[CART_BODY_ID] + offset
+    body_ipos = model.body_ipos.at[POLE_BODY_ID].set(
+        model.body_ipos[POLE_BODY_ID] + offset
     )
     idx+=1
     
@@ -430,8 +430,8 @@ def domain_randomize_eval(model: mjx.Model, dr_range, params=None, rng:jax.Array
       )
     offset = jp.array([params[idx], 0, 0])
     idx+=1
-    body_ipos = model.body_ipos.at[CART_BODY_ID].set(
-        model.body_ipos[CART_BODY_ID] + offset
+    body_ipos = model.body_ipos.at[POLE_BODY_ID].set(
+        model.body_ipos[POLE_BODY_ID] + offset
     )
     idx+=1
     # dof_frictionloss = model.dof_frictionloss.at[:].set(params[idx:idx+ model.nv])
@@ -455,12 +455,12 @@ def domain_randomize_eval(model: mjx.Model, dr_range, params=None, rng:jax.Array
     rng_params = dist(rng)
     idx=0
     body_mass = model.body_mass.at[POLE_BODY_ID].set(
-        model.body_mass[POLE_BODY_ID] *params[idx]
+        model.body_mass[POLE_BODY_ID] * rng_params[idx]
       )
-    offset = jp.array([params[idx], 0, 0])
+    offset = jp.array([rng_params[idx], 0, 0])
     idx+=1
-    body_ipos = model.body_ipos.at[CART_BODY_ID].set(
-        model.body_ipos[CART_BODY_ID] + offset
+    body_ipos = model.body_ipos.at[POLE_BODY_ID].set(
+        model.body_ipos[POLE_BODY_ID] + offset
     )
     idx+=1
     # static friction
