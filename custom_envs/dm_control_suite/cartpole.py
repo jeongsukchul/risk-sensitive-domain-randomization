@@ -329,7 +329,7 @@ def domain_randomize(model: mjx.Model, dr_range, params=None, rng:jax.Array=None
     body_mass = model.body_mass.at[POLE_BODY_ID].set(
         model.body_mass[POLE_BODY_ID] *params[idx]
       )
-    offset = jp.array([params[idx], 0, 0])
+    offset = jp.array([0, 0, params[idx]])
     idx+=1
     body_ipos = model.body_ipos.at[POLE_BODY_ID].set(
         model.body_ipos[POLE_BODY_ID] + offset
@@ -365,7 +365,7 @@ def domain_randomize(model: mjx.Model, dr_range, params=None, rng:jax.Array=None
     body_mass = model.body_mass.at[POLE_BODY_ID].set(
         model.body_mass[POLE_BODY_ID] * rng_params[idx]
       )
-    offset = jp.array([rng_params[idx], 0, 0])
+    offset = jp.array([0, 0, rng_params[idx]])
     idx+=1
     body_ipos = model.body_ipos.at[POLE_BODY_ID].set(
         model.body_ipos[POLE_BODY_ID] + offset
@@ -428,7 +428,7 @@ def domain_randomize_eval(model: mjx.Model, dr_range, params=None, rng:jax.Array
     body_mass = model.body_mass.at[POLE_BODY_ID].set(
         model.body_mass[POLE_BODY_ID] *params[idx]
       )
-    offset = jp.array([params[idx], 0, 0])
+    offset = jp.array([0, 0, params[idx]])
     idx+=1
     body_ipos = model.body_ipos.at[POLE_BODY_ID].set(
         model.body_ipos[POLE_BODY_ID] + offset
@@ -457,7 +457,7 @@ def domain_randomize_eval(model: mjx.Model, dr_range, params=None, rng:jax.Array
     body_mass = model.body_mass.at[POLE_BODY_ID].set(
         model.body_mass[POLE_BODY_ID] * rng_params[idx]
       )
-    offset = jp.array([rng_params[idx], 0, 0])
+    offset = jp.array([0, 0, rng_params[idx]])
     idx+=1
     body_ipos = model.body_ipos.at[POLE_BODY_ID].set(
         model.body_ipos[POLE_BODY_ID] + offset

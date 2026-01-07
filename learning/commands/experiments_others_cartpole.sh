@@ -1,4 +1,4 @@
-wandb_project="cartpole-sampler2"
+wandb_project="cartpole-sampler3"
 for seed in 0 1 2 3 4
 do
 python run.py policy=ppo task=CartpoleSwingup wandb_project=$wandb_project seed=$seed
