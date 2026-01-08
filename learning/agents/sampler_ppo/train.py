@@ -740,6 +740,7 @@ def train(
       'target_pdf_q75': update_signal* jnp.quantile(cumulated_values, .75),
       'target_pdf_std': update_signal* cumulated_values.std(),
       'beta': _beta,
+      'update_steps': training_state.update_steps,
     })
     new_training_state = TrainingState(
         optimizer_state=optimizer_state,

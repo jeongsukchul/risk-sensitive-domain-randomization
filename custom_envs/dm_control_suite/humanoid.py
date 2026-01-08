@@ -133,11 +133,10 @@ class Humanoid(mjx_env.MjxEnv):
     privileged_state = jp.concatenate([
       state,
       self.mjx_model.geom_friction[FLOOR_GEOM_ID, 0:1],
-      self.mjx_model.body_mass[TORSO_BODY_ID][..., None],
-      # self.mjx_model.dof_frictionloss[6:],
-      # self.mjx_model.dof_armature[6:],
-      # self.mjx_model.body_mass[1:],
-      # self.mjx_model.qpos0[7:],
+      self.mjx_model.dof_frictionloss[6:],
+      self.mjx_model.dof_armature[6:],
+      self.mjx_model.body_mass[1:],
+      self.mjx_model.qpos0[7:],
     ])
     # return state
     return {
