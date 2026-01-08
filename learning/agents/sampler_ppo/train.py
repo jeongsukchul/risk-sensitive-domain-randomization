@@ -320,7 +320,7 @@ def train(
           * max(num_resets_per_eval, 1)
       )
   ).astype(int)
-  num_training_steps = np.ceil(num_timesteps / (num_evals_after_init))
+  num_training_steps = num_training_steps_per_epoch * num_evals_after_init
   print("num_training steps", num_training_steps)
   key = jax.random.PRNGKey(seed)
   global_key, local_key = jax.random.split(key)
@@ -342,6 +342,7 @@ def train(
   print("nominal params", nominal_dynamics_params)
   print("dr range", env.dr_range)
   print("sampler update freq", sampler_update_freq)
+  save_dir = make_dir(work_dir / "results" / sampler_choice)
   if hasattr(env,'dr_range') :
     low, high = env.dr_range
     dr_mid = (low  + high) / 2.
@@ -663,6 +664,7 @@ def train(
                 lambda: update_scheduler(training_state.scheduler_state, cumulated_values), \
                  lambda: training_state.scheduler_state )
       scheduler_state, _beta = scheduler.sample(scheduler_state, scheduler_key)
+      _beta = 30 - 60 * (training_state.update_steps / num_training_steps)
     else:
       scheduler_state = training_state.scheduler_state
       _beta = beta
@@ -1151,7 +1153,7 @@ def train(
       
       if run_evals:
         metric_key, local_key = jax.random.split(local_key)
-        if sampler_choice=="DORAEMON" or "FLOW" in sampler_choice or sampler_choice=="GMM":
+        if sampler_choice=="DORAEMON" or "FLOW" in sampler_choice or sampler_choice=="GMM" or sampler_choice=="AutoDR":
           num_samples_bench = 4096
           if sampler_choice=="DORAEMON":
             a, b = _unpack_beta(_unpmap(training_state.doraemon_state.x_opt), len(dr_range_low), min_bound, max_bound)
@@ -1162,8 +1164,11 @@ def train(
           elif sampler_choice=="GMM":
             samples, logq = samplerppo_network.gmm_network.model.sample(_unpmap(\
               training_state.gmm_training_state.model_state.gmm_state), metric_key, num_samples_bench)
-          
-          _, reward_1d, epi_length = evaluator.run_evaluation(
+          elif sampler_choice == "AutoDR":
+            samples = get_adr_sample(_unpmap(training_state.autodr_state), num_samples_bench, key)  #
+          np.save(os.path.join(save_dir, f"samples_in_sampler_{current_step}.npy"), samples)
+
+          _, reward_sampler, epi_length = evaluator.run_evaluation(
               _unpmap((
                   training_state.normalizer_params,
                   training_state.params.policy,
@@ -1175,19 +1180,19 @@ def train(
               success_threshold=success_threshold,
           )
           _beta = 1 if sampler_choice=="DORAEMON" else beta
-          target_lnpdf = _beta* reward_1d/epi_length
-
-          log_ratio = target_lnpdf - logq
-          valid_mask = jnp.isfinite(log_ratio)
-          safe_log_ratio = jnp.where(valid_mask, log_ratio, -1e20)
-          valid_count = jnp.sum(valid_mask)
-          # Prevent div-by-zero if all are NaN
-          safe_denom = jnp.maximum(valid_count, 1.0) 
-          elbo = jnp.sum(jnp.where(valid_mask, log_ratio, 0.0)) / safe_denom
-          metrics['eval/elbo'] = elbo
-          weights = jnp.where(valid_mask, jnp.exp(safe_log_ratio - jnp.max(safe_log_ratio)), 0.)
-          metrics['eval/reverse_ess'] = jnp.sum(weights)**2 / jnp.maximum(num_samples_bench * jnp.sum(weights**2), 1e-10)
-          metrics['eval/ln_z'] = (jnp.log(weights.sum()) + jnp.max(safe_log_ratio)) - jnp.log(num_samples_bench)
+          target_lnpdf = _beta* reward_sampler/epi_length
+          if sampler_choice!="AutoDR":
+            log_ratio = target_lnpdf - logq
+            valid_mask = jnp.isfinite(log_ratio)
+            safe_log_ratio = jnp.where(valid_mask, log_ratio, -1e20)
+            valid_count = jnp.sum(valid_mask)
+            # Prevent div-by-zero if all are NaN
+            safe_denom = jnp.maximum(valid_count, 1.0) 
+            elbo = jnp.sum(jnp.where(valid_mask, log_ratio, 0.0)) / safe_denom
+            metrics['eval/elbo'] = elbo
+            weights = jnp.where(valid_mask, jnp.exp(safe_log_ratio - jnp.max(safe_log_ratio)), 0.)
+            metrics['eval/reverse_ess'] = jnp.sum(weights)**2 / jnp.maximum(num_samples_bench * jnp.sum(weights**2), 1e-10)
+            metrics['eval/ln_z'] = (jnp.log(weights.sum()) + jnp.max(safe_log_ratio)) - jnp.log(num_samples_bench)
         if len(dr_range_low)>2:
           rewards = []
           for i in range(4): # 16384 envs.
@@ -1206,7 +1211,7 @@ def train(
             )
             rewards.append(_reward_1d)
           rewards = jnp.stack(rewards, axis=-1).reshape(-1)
-          print("16384 ? ", rewards.shape)
+          reward_1d= rewards
           N = rewards.shape[0]
           k20 = int(N* .2)
           k10 = int(N* .1)
@@ -1361,6 +1366,8 @@ def train(
                     {"Sampler Heatmap" :wandb.Image(model_fig)},
                     step=int(current_step),
                 )
+        np.save(os.path.join(save_dir, f"rewards_{current_step}.npy"), reward_1d)
+        
         evaluation_key, local_key = jax.random.split(local_key)
         evaluation_key = jax.random.split(evaluation_key, local_devices_to_use)
         rewards = evaluation_on_current_occupancy(
