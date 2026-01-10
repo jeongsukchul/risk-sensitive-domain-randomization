@@ -43,7 +43,7 @@ def default_config() -> config_dict.ConfigDict:
       action_repeat=1,
       vision=False,
       impl="jax",
-      nconmax=50_000,
+      nconmax=100_000,
       njmax=100,
   )
 

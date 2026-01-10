@@ -157,11 +157,10 @@ def train_ppo(cfg:dict, randomization_fn, env, eval_env=None):
         group+=f" [gamma={cfg.gamma}_beta={cfg.beta}_iters={cfg.n_sampler_iters}]"
     elif cfg.policy=='gmmppo':
         sampler_choice = 'GMM'
-        wandb_name+= f" [beta={cfg.beta}]"
         group = sampler_choice
         if cfg.use_scheduling:
-            wandb_name+= f" [lr={cfg.scheduler_lr}_window={cfg.scheduler_window_size}]_sampler_update_freq={cfg.sampler_update_freq}"
-            group+=f" [beta={cfg.beta}]_sampler_update_freq={cfg.sampler_update_freq}"
+            wandb_name+= f" scheduling[-30, 30]"
+            group+=f" scheduling[-30, 30]"
         else:
             wandb_name+= f" [beta={cfg.beta}]_sampler_update_freq={cfg.sampler_update_freq}"
             group+=f" [beta={cfg.beta}]_sampler_update_freq={cfg.sampler_update_freq}"

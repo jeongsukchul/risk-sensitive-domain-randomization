@@ -664,7 +664,11 @@ def train(
                 lambda: update_scheduler(training_state.scheduler_state, cumulated_values), \
                  lambda: training_state.scheduler_state )
       scheduler_state, _beta = scheduler.sample(scheduler_state, scheduler_key)
+      # linear schedule
       _beta = 30 - 60 * (training_state.update_steps / num_training_steps)
+      k = 3.
+      # exponential schedule
+      _beta = 30 - 60 * (1 - jnp.exp(-k * training_state.update_steps / num_training_steps))/ (1  - jnp.exp(-training_state.update_steps))
     else:
       scheduler_state = training_state.scheduler_state
       _beta = beta
@@ -740,7 +744,6 @@ def train(
       'target_pdf_q75': update_signal* jnp.quantile(cumulated_values, .75),
       'target_pdf_std': update_signal* cumulated_values.std(),
       'beta': _beta,
-      'update_steps': training_state.update_steps,
     })
     new_training_state = TrainingState(
         optimizer_state=optimizer_state,
@@ -1155,7 +1158,7 @@ def train(
       if run_evals:
         metric_key, local_key = jax.random.split(local_key)
         if sampler_choice=="DORAEMON" or "FLOW" in sampler_choice or sampler_choice=="GMM" or sampler_choice=="AutoDR":
-          num_samples_bench = 4096
+          num_samples_bench = 2**14
           if sampler_choice=="DORAEMON":
             a, b = _unpack_beta(_unpmap(training_state.doraemon_state.x_opt), len(dr_range_low), min_bound, max_bound)
             samples = sample_beta_on_box(metric_key, a, b, low, high, num_samples_bench)
@@ -1166,7 +1169,9 @@ def train(
             samples, logq = samplerppo_network.gmm_network.model.sample(_unpmap(\
               training_state.gmm_training_state.model_state.gmm_state), metric_key, num_samples_bench)
           elif sampler_choice == "AutoDR":
-            samples = get_adr_sample(_unpmap(training_state.autodr_state), num_samples_bench, key)  #
+            samples = get_adr_sample(_unpmap(training_state.autodr_state), num_samples_bench, metric_key)  #
+            np.save(os.path.join(save_dir, f"current_range_{current_step}.npy"), 
+                    np.array([_unpmap(training_state.autodr_state).current_low, _unpmap(training_state.autodr_state).current_high]))
           np.save(os.path.join(save_dir, f"samples_in_sampler_{current_step}.npy"), samples)
 
           _, reward_sampler, epi_length = evaluator.run_evaluation(
@@ -1183,6 +1188,7 @@ def train(
           _beta = 1 if sampler_choice=="DORAEMON" else beta
           target_lnpdf = _beta* reward_sampler/epi_length
           if sampler_choice!="AutoDR":
+            np.save(os.path.join(save_dir, f"logq_in_sampler_{current_step}.npy"), logq)
             log_ratio = target_lnpdf - logq
             valid_mask = jnp.isfinite(log_ratio)
             safe_log_ratio = jnp.where(valid_mask, log_ratio, -1e20)
@@ -1424,7 +1430,7 @@ def train(
     elif sampler_choice =="GMM":
       imageio.mimsave(os.path.join(save_dir, f"Evaluation Heatmap [beta={beta}].gif"), evaluation_frames, fps=4)
       imageio.mimsave(os.path.join(save_dir, f"target log prob with current occupancy [beta={beta}].gif"), occupancy_frames, fps=4)
-      imageio.mimsave(os.path.join(save_dir, f"GMM Training Heatmap [beta={beta}].gif"), gmm_training_frames, fps=4)
+      # imageio.mimsave(os.path.join(save_dir, f"GMM Training Heatmap [beta={beta}].gif"), gmm_training_frames, fps=4)
       imageio.mimsave(os.path.join(save_dir, f"GMM Log Prob Heatmap [beta={beta}].gif"), gmm_frames, fps=4)
   # If there was no mistakes the training_state should still be identical on all
   # devices.

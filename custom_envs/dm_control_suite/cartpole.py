@@ -185,7 +185,9 @@ class Balance(mjx_env.MjxEnv):
         "reward/cart_in_bounds": jp.zeros(()),
         "reward/angle_in_bounds": jp.zeros(()),
     }
-    info = {"rng": rng}
+    info = {"rng": rng,
+            "qvel_history": jp.zeros((8,))
+            }  # 4 history of 2 dim qvel
 
     reward, done = jp.zeros(2)  # pylint: disable=redefined-outer-name
 
@@ -221,17 +223,35 @@ class Balance(mjx_env.MjxEnv):
     return mjx_env.State(data, obs, reward, done, state.metrics, state.info)
 
   def _get_obs(self, data: mjx.Data, info: dict[str, Any]) -> jax.Array:
-    del info  # Unused.
+    # del info  # Unused.
     cart_position = data.qpos[self._slider_qposadr]
     pole_angle_cos = data.xmat[2:, 2, 2]  # zz.
     pole_angle_sin = data.xmat[2:, 0, 2]  # xz.
-    return jp.concatenate([
+    qvel_history = (
+      jp.roll(info["qvel_history"], 2).at[:2].set(data.qvel)
+    )
+    info["qvel_history"] = qvel_history
+    state =  jp.concatenate([
         cart_position.reshape(1),
         pole_angle_cos,
         pole_angle_sin,
-        data.qvel,
+        # data.qvel,
+        qvel_history,
     ])
-
+    privileged_state = jp.concatenate([
+      state,
+      self.mjx_model.body_mass[2:3],
+      self.mjx_model.body_inertia[2,:],
+      # self.mjx_model.dof_frictionloss[1:2],
+      # self.mjx_model.dof_armature[1:2],
+      # self.mjx_model.dof_damping[1:2],
+      self.mjx_model.qpos0[1:2],
+    ])
+    # return state
+    return {
+        "state": state,
+        "privileged_state": privileged_state,
+    }
   def _dense_reward(
       self,
       data: mjx.Data,
@@ -305,12 +325,12 @@ class Balance(mjx_env.MjxEnv):
   def dr_range(self) -> dict:
 
     low = jp.array(
-        [0.4] +                             #Pole mass
-        [0.]                              #friction loss
+        [0.7] +                             
+        [-3]                             
     )
     high = jp.array(
-        [5.0] +                             #Pole mass
-        [1.]                               #friction loss
+        [5.2] +                         
+        [3]                               
     )
     return low, high
 FLOOR_GEOM_ID = 0
@@ -329,30 +349,20 @@ def domain_randomize(model: mjx.Model, dr_range, params=None, rng:jax.Array=None
     body_mass = model.body_mass.at[POLE_BODY_ID].set(
         model.body_mass[POLE_BODY_ID] *params[idx]
       )
-    offset = jp.array([0, 0, params[idx]])
+    body_inertia = model.body_inertia.at[POLE_BODY_ID].set(
+        model.body_inertia[POLE_BODY_ID] *params[idx]
+      )
     idx+=1
-    dof_frictionloss = model.dof_frictionloss.at[1].set(params[idx])
+    # dof_armature = model.dof_armature.at[1].set(params[idx])
+    # idx+=1
+    qpos0 = model.qpos0.at[1].set(params[idx])
     idx+=1
     
-    # dof_frictionloss = model.dof_frictionloss.at[:].set(params[idx:idx+ model.nv])
-    # idx += model.nv
-    # offset = jp.array([params[idx], 0, params[idx+1]])
-    # idx += 2
-    # body_ipos = model.body_ipos.at[POLE_BODY_ID].set(
-    #     model.body_ipos[POLE_BODY_ID] + offset
-    #   )
-    # body_mass = jp.ones((model.nbody,))
-    # body_mass =model.body_mass.at[1:].set(model.body_mass[1:] * params[idx:idx + model.nbody-1])
-    # for i in range(1, model.nbody):
-    #   body_mass = model.body_mass.at[i].set(model.body_mass[i] * params[idx])
-    #   idx+=1
-    # idx += model.nbody-1
     assert idx == len(params)
-
-    dof_frictionloss = model.dof_frictionloss
     return (
+      qpos0,
       body_mass,
-      dof_frictionloss,
+      body_inertia,
     )
   @jax.vmap
   def rand_dynamics(rng):
@@ -362,51 +372,49 @@ def domain_randomize(model: mjx.Model, dr_range, params=None, rng:jax.Array=None
     body_mass = model.body_mass.at[POLE_BODY_ID].set(
         model.body_mass[POLE_BODY_ID] * rng_params[idx]
       )
-    offset = jp.array([0, 0, rng_params[idx]])
-    idx+=1
-    dof_frictionloss = model.dof_frictionloss.at[1].set(rng_params[idx])
-    idx+=1
+    body_inertia = model.body_inertia.at[POLE_BODY_ID].set(
+        model.body_inertia[POLE_BODY_ID] * rng_params[idx]
+      )
     
-    # dof_frictionloss = model.dof_frictionloss.at[:].set(rng_params[idx:idx+ model.nv])
-    # idx += model.nv
-    # offset = jp.array([rng_params[idx], 0, rng_params[idx+1]])
-    # idx += 2
-    # body_ipos = model.body_ipos.at[POLE_BODY_ID].set(
-    #     model.body_ipos[POLE_BODY_ID] + offset
-    #   )
-    # body_mass = jp.ones((model.nbody,))
-    # body_mass =model.body_mass.at[1:].set(model.body_mass[1:] * rng_params[idx:idx + model.nbody-1])
-    # for i in range(1, model.nbody):
-    #   body_mass = model.body_mass.at[i].set(model.body_mass[i] * params[idx])
-    #   idx+=1
-    # idx += model.nbody-1
+    idx+=1
+    # dof_armature = model.dof_armature.at[1].set(rng_params[idx])
+    # idx+=1
+    # dof_damping = model.dof_damping.at[1].set(model.dof_damping[1]* rng_params[idx])
+    # idx+=1
+    qpos0 = model.qpos0.at[1].set(rng_params[idx])
+    idx+=1
     assert idx == len(rng_params)
     return (
+      qpos0,
       body_mass,
-      dof_frictionloss,
+      body_inertia,
     )
   
   if rng is None and params is not None:
 
     (
-      body_mass, 
-      dof_frictionloss
+      qpos0, 
+      body_mass,
+      body_inertia,
     ) = shift_dynamics(params)
   elif rng is not None and params is None:
     (
+      qpos0,
       body_mass,
-      dof_frictionloss,
+      body_inertia,
     ) = rand_dynamics(rng)
   else:
     raise ValueError("rng and params wrong!")
   in_axes = jax.tree_util.tree_map(lambda x: None, model)
   in_axes = in_axes.tree_replace({
+      "qpos0": 0,
       "body_mass": 0,
-      "dof_frictionloss": 0,
+      "body_inertia": 0,
   })
   model = model.tree_replace({
+      "qpos0": qpos0,
       "body_mass": body_mass,
-      "dof_frictionloss": dof_frictionloss,
+      "body_inertia": body_inertia,
   })
   return model, in_axes
 
@@ -421,22 +429,22 @@ def domain_randomize_eval(model: mjx.Model, dr_range, params=None, rng:jax.Array
     body_mass = model.body_mass.at[POLE_BODY_ID].set(
         model.body_mass[POLE_BODY_ID] *params[idx]
       )
+    body_inertia = model.body_inertia.at[POLE_BODY_ID].set(
+        model.body_inertia[POLE_BODY_ID] *params[idx]
+      )
     idx+=1
-    dof_frictionloss = model.dof_frictionloss.at[1].set(params[idx])
+    # dof_armature = model.dof_armature.at[1].set(params[idx])
+    # idx+=1
+    # dof_damping = model.dof_damping.at[1].set(model.dof_damping[1]* params[idx])
+    # idx+=1
+    qpos0 = model.qpos0.at[1].set(params[idx])
     idx+=1
-    # dof_frictionloss = model.dof_frictionloss.at[:].set(params[idx:idx+ model.nv])
-    # idx += model.nv
-    # offset = jp.array([params[idx], 0, params[idx+1]])
-    # idx += 2
-    # body_ipos = model.body_ipos.at[POLE_BODY_ID].set(
-    #     model.body_ipos[POLE_BODY_ID] + offset
-    #   )
-    # body_mass = model.body_mass.at[1:].set(model.body_mass[1:] * params[idx: idx+model.nbody-1])
-    # idx+= model.nbody-1
+
     assert idx == len(params)
     return (
+      qpos0,
       body_mass,
-      dof_frictionloss,
+      body_inertia,
     )
   def rand_dynamics(rng):
     # floor friction
@@ -445,34 +453,48 @@ def domain_randomize_eval(model: mjx.Model, dr_range, params=None, rng:jax.Array
     body_mass = model.body_mass.at[POLE_BODY_ID].set(
         model.body_mass[POLE_BODY_ID] * rng_params[idx]
       )
+    body_inertia = model.body_inertia.at[POLE_BODY_ID].set(
+        model.body_inertia[POLE_BODY_ID] * rng_params[idx]
+      ) 
+    
     idx+=1
-    dof_frictionloss = model.dof_frictionloss.at[1].set(params[idx])
+    # dof_armature = model.dof_armature.at[1].set(rng_params[idx])
+    # idx+=1
+    # dof_damping = model.dof_damping.at[1].set(model.dof_damping[1]* rng_params[idx])
+    # idx+=1
+    qpos0 = model.qpos0.at[1].set(rng_params[idx])
+    # qpos0 = model.qpos0
     idx+=1
     assert idx == len(dr_low)
     return (
+      qpos0,
       body_mass,
-      dof_frictionloss,
+      body_inertia,
     )
   
   if rng is None and params is not None:
     (
-      body_mass, 
-      dof_frictionloss
+      qpos0, 
+      body_mass,
+      body_inertia
       ) = shift_dynamics(params)
   elif rng is not None and params is None:
     (
+      qpos0,
       body_mass,
-      dof_frictionloss,
+      body_inertia
     ) = rand_dynamics(rng)
   else:
     raise ValueError("rng and params wrong!")
   in_axes = jax.tree_util.tree_map(lambda x: None, model)
   in_axes = in_axes.tree_replace({
+      "qpos0": 0,
       "body_mass": 0,
-      "dof_frictionloss": 0,
+      "body_inertia": 0,
   })
   model = model.tree_replace({
+      "qpos0": qpos0,
       "body_mass": body_mass,
-      "dof_frictionloss": dof_frictionloss,
+      "body_inertia": body_inertia, 
   })
   return model, in_axes
