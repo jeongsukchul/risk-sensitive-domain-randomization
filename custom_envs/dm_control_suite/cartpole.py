@@ -325,11 +325,11 @@ class Balance(mjx_env.MjxEnv):
   def dr_range(self) -> dict:
 
     low = jp.array(
-        [0.7] +                             
+        [0.5] +                             
         [-3]                             
     )
     high = jp.array(
-        [5.2] +                         
+        [8.2] +                         
         [3]                               
     )
     return low, high
