@@ -6,7 +6,7 @@ from omegaconf import OmegaConf
 # sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 os.environ['MUJOCO_GL'] = 'egl'
 os.environ['XLA_PYTHON_CLIENT_PREALLOCATE'] = 'false'
-os.environ['XLA_FLAGS'] = '--xla_gpu_autotune_level=0'
+# os.environ['XLA_FLAGS'] = '--xla_gpu_autotune_level=0'
 xla_flags = os.environ.get('XLA_FLAGS', '')
 xla_flags += ' --xla_gpu_triton_gemm_any=True'
 os.environ['XLA_FLAGS'] = xla_flags

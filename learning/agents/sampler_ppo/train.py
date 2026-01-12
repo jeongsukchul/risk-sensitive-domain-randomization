@@ -668,7 +668,7 @@ def train(
       _beta = 30 - 60 * (training_state.update_steps / num_training_steps)
       k = 3.
       # exponential schedule
-      _beta = 30 - 60 * (1 - jnp.exp(-k * training_state.update_steps / num_training_steps))/ (1  - jnp.exp(-training_state.update_steps))
+      # _beta = 30 - 60 * (1 - jnp.exp(-k * training_state.update_steps / num_training_steps))/ (1  - jnp.exp(-training_state.update_steps))
     else:
       scheduler_state = training_state.scheduler_state
       _beta = beta
