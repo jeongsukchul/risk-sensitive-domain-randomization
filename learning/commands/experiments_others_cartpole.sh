@@ -5,8 +5,8 @@ wandb_project="cartpole-sampler6"
 # python run.py policy=ppo task=$task wandb_project=$wandb_project seed=$seed
 # python run.py policy=ppo_nodr task=$task wandb_project=$wandb_project seed=$seed
 # done
-success_threshold= 0.7
-success_rate_condition= 0.8
+success_threshold=0.7
+success_rate_condition=0.8
 for seed in 0 1 2 3 4
 do
     python run.py policy=adrppo wandb_project=$wandb_project  task=$task success_threshold=$success_threshold seed=$seed
