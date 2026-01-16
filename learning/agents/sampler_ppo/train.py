@@ -622,7 +622,7 @@ def train(
         lambda x: jnp.reshape(x, (-1,) + x.shape[2:]), data
     )      # [B * num_minibatches, unroll_length]
     if sampler_choice=="EPOpt":
-      print("data size", data.shape)
+      print("data size", data)
 
       def filter_datas(batched_data):
         returns = jnp.sum(batched_data.reward * batched_data.discount, axis=1)  # [B]
@@ -634,7 +634,7 @@ def train(
         )
         return filtered_data
       data = filter_datas(data)
-      print("filtered data size", data.shape)
+      print("filtered data size", data)
     assert data.discount.shape[1:] == (unroll_length,)
     if log_training_metrics:  # log unroll metrics
       jax.debug.callback(

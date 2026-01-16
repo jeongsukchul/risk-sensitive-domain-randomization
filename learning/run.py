@@ -165,8 +165,8 @@ def train_ppo(cfg:dict, randomization_fn, env, eval_env=None):
         sampler_choice = 'GMM'
         group = sampler_choice
         if cfg.use_scheduling:
-            wandb_name+= f" scheduling[-30, 30]"
-            group+=f" scheduling[-30, 30]"
+            wandb_name+= f" {cfg.scheduler_mode} scheduling[{cfg.start_beta}, {cfg.end_beta}]"
+            group+=f" {cfg.scheduler_mdoe} scheduling[{cfg.start_beta}, {cfg.end_beta}]"
         else:
             wandb_name+= f" [beta={cfg.beta}]_sampler_update_freq={cfg.sampler_update_freq}"
             group+=f" [beta={cfg.beta}]_sampler_update_freq={cfg.sampler_update_freq}"
@@ -230,6 +230,10 @@ def train_ppo(cfg:dict, randomization_fn, env, eval_env=None):
         use_scheduling = cfg.use_scheduling,
         scheduler_lr =cfg.scheduler_lr,
         scheduler_window_size = cfg.scheduler_window_size,
+        epsilon = cfg.epsilon,
+        start_beta = cfg.start_beta,
+        end_beta = cfg.end_beta,
+        scheduler_mode=     cfg.scheduler_mode,
     )
     
     make_inference_fn, params, metrics = train_fn(
