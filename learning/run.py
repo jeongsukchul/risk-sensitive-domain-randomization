@@ -151,6 +151,11 @@ def train_ppo(cfg:dict, randomization_fn, env, eval_env=None):
         sampler_choice = 'UDR'
         group = sampler_choice
         group += f"_impl={cfg.impl}"
+    elif cfg.policy=='epoptppo':
+        sampler_choice = 'EPOpt'
+        wandb_name+= f" [epsilon={cfg.epsilon}]"
+        group = sampler_choice
+        group+=f" [epsilon={cfg.epsilon}]"
     elif cfg.policy=='flowppo':
         sampler_choice = 'FLOW_NS'
         wandb_name+= f" [gamma={cfg.gamma}_beta={cfg.beta}_iters={cfg.n_sampler_iters}]"
@@ -284,6 +289,18 @@ def train(cfg: dict):
     
     cfg = parse_cfg(cfg)
     print("cfg :", cfg)
+    if cfg.policy == "epoptppo":
+        cfg.work_dir = cfg.work_dir / f"epsilon={cfg.epsilon}"
+    elif cfg.policy == "flowppo":
+        cfg.work_dir = cfg.work_dir / f"beta={cfg.beta}_gamma={cfg.gamma}"
+    elif cfg.policy == "gmmppo":
+        cfg.work_dir = cfg.work_dir / f"beta={cfg.beta}"
+    elif cfg.policy == "adrppo":
+        cfg.work_dir = cfg.work_dir / f"threshold={cfg.success_threshold}"
+    elif cfg.policy == "doraemonppo":
+        cfg.work_dir = cfg.work_dir / f"threshold={cfg.success_threshold}_condition={cfg.success_rate_condition}"
+    
+    print("Working directory:", cfg.work_dir)
 
     np.set_printoptions(precision=3, suppress=True, linewidth=100)
 

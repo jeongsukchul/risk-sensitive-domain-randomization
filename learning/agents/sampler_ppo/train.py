@@ -276,6 +276,10 @@ def train(
     use_scheduling : bool = False,
     scheduler_lr: float = 0.2,
     scheduler_window_size: int = 20,
+    epsilon: float = 0.1,
+    start_beta : float =10.,
+    end_beta : float = -40.,
+    scheduler_mode : str = "linear",
 ):
   """
   Returns:
@@ -571,7 +575,7 @@ def train(
     key_sgd, key_generate_unroll, param_key, key_update, new_key = jax.random.split(key, 5)
     if sampler_choice=="NODR":
       dynamics_params = jnp.ones((num_envs// jax.process_count(), len(dr_range_low))) * nominal_dynamics_params[None, :]
-    elif sampler_choice=="UDR":
+    elif sampler_choice=="UDR" or sampler_choice=="EPOpt":
         dynamics_params = jax.random.uniform(param_key, shape=(num_envs //jax.process_count(), len(dr_range_low)), minval=dr_range_low, maxval=dr_range_high)
     elif sampler_choice=="AutoDR":
         dynamics_params = get_adr_sample(training_state.autodr_state, 
@@ -604,7 +608,7 @@ def train(
     # dynamics_params = jnp.clip(dynamics_params, dr_range_low, dr_range_high)
 
     state, data = get_experience(training_state, state, dynamics_params,\
-            key_generate_unroll, unroll_length, batch_size * num_minibatches // num_envs,)
+            key_generate_unroll, unroll_length, batch_size * num_minibatches // num_envs if sampler_choice!="EPOpt" else int(batch_size * num_minibatches/epsilon //num_envs) ,)
     obs_for_approx = jax.tree_util.tree_map(lambda x: x.reshape(-1, *x.shape[2:]), data.observation)
     value_approx = samplerppo_network.value_network.apply(training_state.normalizer_params, training_state.params.value, obs_for_approx)
     print("value approx", value_approx)
@@ -617,6 +621,20 @@ def train(
     data = jax.tree_util.tree_map(
         lambda x: jnp.reshape(x, (-1,) + x.shape[2:]), data
     )      # [B * num_minibatches, unroll_length]
+    if sampler_choice=="EPOpt":
+      print("data size", data.shape)
+
+      def filter_datas(batched_data):
+        returns = jnp.sum(batched_data.reward * batched_data.discount, axis=1)  # [B]
+        k = batch_size*num_minibatches
+        _, indicies = jax.lax.top_k(-returns, k)
+        filtered_data = jax.tree_util.tree_map(
+            lambda x: x[indicies],
+            batched_data,
+        )
+        return filtered_data
+      data = filter_datas(data)
+      print("filtered data size", data.shape)
     assert data.discount.shape[1:] == (unroll_length,)
     if log_training_metrics:  # log unroll metrics
       jax.debug.callback(
@@ -641,7 +659,7 @@ def train(
         length=num_updates_per_batch,
     )
     # if sampler_choice != "GMM":
-    values = rewards.mean(axis=(0,1)) #+ bootstrap_value
+    values = rewards.mean(axis=(0,1)) if sampler_choice!="EPOpt" else 0#+ bootstrap_value 
     cumulated_values += values
     # else:
     #   cumulated_values +=value_approx
@@ -665,10 +683,12 @@ def train(
                  lambda: training_state.scheduler_state )
       scheduler_state, _beta = scheduler.sample(scheduler_state, scheduler_key)
       # linear schedule
-      _beta = 30 - 60 * (training_state.update_steps / num_training_steps)
-      k = 3.
-      # exponential schedule
-      # _beta = 30 - 60 * (1 - jnp.exp(-k * training_state.update_steps / num_training_steps))/ (1  - jnp.exp(-training_state.update_steps))
+      if scheduler_mode=="linear":
+        _beta = start_beta - (start_beta - end_beta) * (training_state.update_steps / num_training_steps)
+      elif scheduler_mode=="exp":
+        k = 3.
+        # exponential schedule
+        _beta = start_beta - (start_beta - end_beta) * (1 - jnp.exp(-k * training_state.update_steps / num_training_steps))/ (1  - jnp.exp(-training_state.update_steps))
     else:
       scheduler_state = training_state.scheduler_state
       _beta = beta
@@ -711,7 +731,7 @@ def train(
       new_gmm_training_state = gmm_update_fn(new_gmm_training_state, key_update)
 
       return new_gmm_training_state, 1.
-    if sampler_choice=="NODR" or sampler_choice=="UDR":
+    if sampler_choice=="NODR" or sampler_choice=="UDR" or sampler_choice=='EPOpt':
         update_signal = jax.lax.cond(training_state.update_steps % sampler_update_freq==0, \
                 lambda: 1., \
                  lambda: 0., )
@@ -1413,7 +1433,7 @@ def train(
     save_dir = make_dir(work_dir / "results" / sampler_choice)
     np.save(os.path.join(save_dir, f"reward_1d_{current_step}.npy"), reward_1d)
   if len(dr_range_low)==2:
-    if sampler_choice == "NODR" or sampler_choice=="UDR":
+    if sampler_choice == "NODR" or sampler_choice=="UDR" or sampler_choice=="EPOpt":
       imageio.mimsave(os.path.join(save_dir, f"Evaluation Heatmap.gif"), evaluation_frames, fps=4)
     elif sampler_choice =="AutoDR":
       imageio.mimsave(os.path.join(save_dir, f"Evaluation Heatmap [threshold={success_threshold}].gif"), evaluation_frames, fps=4)
