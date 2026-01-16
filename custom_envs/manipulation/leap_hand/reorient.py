@@ -23,7 +23,7 @@ from mujoco import mjx
 from mujoco.mjx._src import math
 import numpy as np
 
-from mujoco_playground._src import mjx_env
+from custom_envs import mjx_env
 from mujoco_playground._src import reward
 from mujoco_playground._src.manipulation.leap_hand import base as leap_hand_base
 from mujoco_playground._src.manipulation.leap_hand import leap_hand_constants as consts

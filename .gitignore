@@ -7,3 +7,4 @@ mujoco_menagerie
 checkpoints/
 learning/logs
 learning/outputs
+learning/commands
