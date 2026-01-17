@@ -166,7 +166,7 @@ def train_ppo(cfg:dict, randomization_fn, env, eval_env=None):
         group = sampler_choice
         if cfg.use_scheduling:
             wandb_name+= f" {cfg.scheduler_mode} scheduling[{cfg.start_beta}, {cfg.end_beta}]"
-            group+=f" {cfg.scheduler_mdoe} scheduling[{cfg.start_beta}, {cfg.end_beta}]"
+            group+=f" {cfg.scheduler_mode} scheduling[{cfg.start_beta}, {cfg.end_beta}]"
         else:
             wandb_name+= f" [beta={cfg.beta}]_sampler_update_freq={cfg.sampler_update_freq}"
             group+=f" [beta={cfg.beta}]_sampler_update_freq={cfg.sampler_update_freq}"
