@@ -5,9 +5,9 @@ This repository contains the official implementation of **Risk-Sensitive Domain 
 RSDR utilizes **Gaussian Mixture Model Variational Inference (GMMVI)** to learn a curriculum of dynamics parameters. By adjusting a risk-sensitivity coefficient ($\beta$), the sampler can prioritize "worst-case" scenarios (risk-averse) to improve robustness, or "best-case" scenarios (risk-seeking) for exploration.
 
 We also provide highly optimized, JAX-based reimplementations of several state-of-the-art Domain Randomization baselines:
-* **GOFLOW** (Flow-based DR via Neural Spline Flows)[cite: 75, 934].
+* **GOFLOW** (Flow-based DR via Neural Spline Flows)
 * **EPOpt** (CVaR optimization).
-* **AutoDR / DORAEMON** (Reference implementations)[cite: 73].
+* **AutoDR / DORAEMON** (Reference implementations)
 
 All code is built on **JAX**, **Flax**, and **Brax** for high-performance GPU-accelerated training. We use **Mujoco Playground** for simulation of our algorithms.
 
