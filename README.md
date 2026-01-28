@@ -1,3 +1,5 @@
+
+**"This repository is for ICML 2026 submission and will be de-anonymized upon acceptance."**
 # Risk-Sensitive Domain Randomization (RSDR)
 
 This repository contains the official implementation of **Risk-Sensitive Domain Randomization (RSDR)**, a framework for robust Sim2Real transfer in reinforcement learning.
