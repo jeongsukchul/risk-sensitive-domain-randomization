@@ -52,7 +52,6 @@ class AdvEvalWrapper(Wrapper):
       )
     del state.info['eval_metrics']
     nstate = self.env.step(state, action, params)
-    print("nstate data xpos", nstate.data.xpos.shape)
     nstate.metrics['reward'] = nstate.reward #* (nstate.data.xpos[:, 1, 0] > 2)    # prevent learning ackward distribution
     # speed_x =  mjx_env.get_sensor_data(
     #     self.env.mj_model, nstate.data, "torso_subtreelinvel"
@@ -117,7 +116,6 @@ def adv_step(
 ):
   
   actions, policy_extras = policy(env_state.obs, key)
-
   nstate = env.step(env_state, actions, dynamics_params)
   state_extras = {x: nstate.info[x] for x in extra_fields}
   return nstate, TransitionwithParams(  # pytype: disable=wrong-arg-types  # jax-ndarray
@@ -217,6 +215,7 @@ def generate_adv_unroll(
     extra_fields: Sequence[str] = (),
     use_mpc: bool=False, 
     dummy_plan : jnp.ndarray = jnp.zeros(1),
+    non_stationary: bool=False,
 ) -> Tuple[State, Transition]:
   """Collect trajectories of given unroll_length."""
   @jax.jit
@@ -231,18 +230,28 @@ def generate_adv_unroll(
   def f(carry, unused_t):
     state, current_key = carry
     current_key, next_key = jax.random.split(current_key)
-    nstate, transition = adv_step(
-        env, state, dynamics_params, policy, current_key, extra_fields=extra_fields
-    )
+    if non_stationary:
+      nstate, transition = adv_step(
+          env, state, unused_t, policy, current_key, extra_fields=extra_fields
+      )
+    else:
+      nstate, transition = adv_step(
+          env, state, dynamics_params, policy, current_key, extra_fields=extra_fields
+      )
     return (nstate, next_key), transition
   if use_mpc:
     (final_state, _, _), data = jax.lax.scan(
-        m, (env_state,dummy_plan, key), (), length=unroll_length
+        m, (env_state, dummy_plan, key), (), length=unroll_length
     )
   else:
-    (final_state, _), data = jax.lax.scan(
-        f, (env_state, key), (), length=unroll_length
-    )
+    if non_stationary:
+      (final_state, _), data = jax.lax.scan(
+          f, (env_state, key), (dynamics_params), length=unroll_length
+      )
+    else:
+      (final_state, _), data = jax.lax.scan(
+          f, (env_state, key), (), length=unroll_length
+      )
   return final_state, data
 
 
@@ -348,6 +357,7 @@ class AdvEvaluator:
       key: PRNGKey,
       use_mpc: bool = False,
       dummy_plan:jnp.ndarray = jnp.zeros(1),
+      non_stationary: bool =False, 
   ):
     """Init.
 
@@ -367,7 +377,7 @@ class AdvEvaluator:
     def generate_eval_unroll(
         policy_params: PolicyParams, eval_dynamics_params, key: PRNGKey
     ) -> State:
-      reset_keys = jax.random.split(key, len(eval_dynamics_params))
+      reset_keys = jax.random.split(key, num_eval_envs)
       eval_first_state = eval_env.reset(reset_keys)
       return generate_adv_unroll(
           eval_env,
@@ -378,6 +388,7 @@ class AdvEvaluator:
           unroll_length=episode_length // action_repeat,
           use_mpc=use_mpc,
           dummy_plan=dummy_plan,
+          non_stationary=non_stationary,
       )[0]
 
     self._generate_eval_unroll = jax.jit(generate_eval_unroll) #jax.jit
@@ -403,8 +414,9 @@ class AdvEvaluator:
     _, eval_metrics = jax.lax.scan(f, None, unroll_keys)
     # eval_state = self._generate_eval_unroll(policy_params, dynamics_params, unroll_key)
     # eval_metrics = eval_state.info['eval_metrics']
-    eval_metrics = jax.tree_util.tree_map(lambda x : x.mean(axis=0), eval_metrics)
     eval_metrics.active_episodes.block_until_ready()
+    eval_metrics = jax.tree_util.tree_map(lambda x : x.mean(axis=0), eval_metrics)
+    # eval_metrics = jax.tree_util.tree_map(lambda x : scipy.stats.trim_mean(x, proportiontocut=0.25, axis=0), eval_metrics)
     epoch_eval_time = time.time() - t
     metrics = {}
     iqm_fn = functools.partial(scipy.stats.trim_mean, proportiontocut=0.25, axis=None) 

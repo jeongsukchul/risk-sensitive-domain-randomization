@@ -104,7 +104,6 @@ class AdVmapWrapper(Wrapper):
       mjx_model, inaxes = self.rand_fn(params=params)
       with self.v_env_fn(mjx_model) as v_env:
         return v_env.step(s, a)
-    
     ns = jax.vmap(step)(
       params, state, action
     )

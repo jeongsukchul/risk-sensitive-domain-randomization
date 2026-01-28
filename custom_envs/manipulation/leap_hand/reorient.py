@@ -355,7 +355,10 @@ class CubeReorient(leap_hand_base.LeapHandEnv):
         cube_ori_error_history,  # 6 * history_len
         info["last_act"],  # 16
     ])
-
+    
+    fingertip_geoms = ["th_tip", "if_tip", "mf_tip", "rf_tip"]
+    fingertip_geom_ids = np.array([self.mj_model.geom(g).id for g in fingertip_geoms])
+    
     privileged_state = jp.concatenate([
         state,
         data.qpos[self._hand_qids],
@@ -367,6 +370,11 @@ class CubeReorient(leap_hand_base.LeapHandEnv):
         self.get_cube_angvel(data),
         info["pert_dir"],
         data.xfrc_applied[self._cube_body_id],
+        self.mjx_model.geom_friction[fingertip_geom_ids, 0],
+        self.mjx_model.body_inertia[self._cube_body_id],
+        self.mjx_model.body_ipos[self._cube_body_id],
+        self.mjx_model.actuator_gainprm[:,0],
+
     ])
 
     return {
@@ -479,153 +487,482 @@ class CubeReorient(leap_hand_base.LeapHandEnv):
     state.info["last_pert_step"] = last_pert_step
     data = state.data.replace(xfrc_applied=xfrc)
     return state.replace(data=data)
+  @property
+  def nominal_params(self):
+    cube_body_id = self.mj_model.body("cube").id
+    hand_qids = mjx_env.get_qpos_ids(self.mj_model, consts.JOINT_NAMES)
+    fingertip_geoms = ["th_tip", "if_tip", "mf_tip", "rf_tip"]
+    fingertip_geom_ids = np.array([self.mj_model.geom(g).id for g in fingertip_geoms])
+    return jp.concatenate([
+                           jp.ones(1), jp.zeros(1), jp.zeros(3), jp.zeros(16),
+                           jp.ones(16+16+17+16+16)])
+  @property
+  def dr_range(self):
+    # 1. Fingertip friction (1 param): U(0.5, 1.0)
+    low = [jp.array([0.5])]
+    high = [jp.array([1.0])]
 
+    # 2. Cube mass scale (1 param): U(0.8, 1.2)
+    low.append(jp.array([0.8]))
+    high.append(jp.array([1.2]))
 
-def domain_randomize(model: mjx.Model, rng: jax.Array):
-  mj_model = CubeReorient().mj_model
-  cube_geom_id = mj_model.geom("cube").id
-  cube_body_id = mj_model.body("cube").id
-  hand_qids = mjx_env.get_qpos_ids(mj_model, consts.JOINT_NAMES)
-  hand_body_names = [
-      "palm",
-      "if_bs",
-      "if_px",
-      "if_md",
-      "if_ds",
-      "mf_bs",
-      "mf_px",
-      "mf_md",
-      "mf_ds",
-      "rf_bs",
-      "rf_px",
-      "rf_md",
-      "rf_ds",
-      "th_mp",
-      "th_bs",
-      "th_px",
-      "th_ds",
-  ]
-  hand_body_ids = np.array([mj_model.body(n).id for n in hand_body_names])
-  fingertip_geoms = ["th_tip", "if_tip", "mf_tip", "rf_tip"]
-  fingertip_geom_ids = [mj_model.geom(g).id for g in fingertip_geoms]
+    # 3. Cube position offset (3 params): U(-5e-3, 5e-3)
+    low.append(jp.full((3,), -0.005))
+    high.append(jp.full((3,), 0.005))
 
-  @jax.vmap
-  def rand(rng):
-    rng, key = jax.random.split(rng)
-    # Fingertip friction: =U(0.5, 1.0).
-    fingertip_friction = jax.random.uniform(key, (1,), minval=0.5, maxval=1.0)
-    geom_friction = model.geom_friction.at[fingertip_geom_ids, 0].set(
-        fingertip_friction
-    )
+    # 4. Hand qpos0 jitter (16 params): U(-0.05, 0.05)
+    # Note: Added to base, not scaled.
+    low.append(jp.full((16,), -0.05))
+    high.append(jp.full((16,), 0.05))
 
-    # Scale cube mass: *U(0.8, 1.2).
-    rng, key1, key2 = jax.random.split(rng, 3)
-    dmass = jax.random.uniform(key1, minval=0.8, maxval=1.2)
-    body_inertia = model.body_inertia.at[cube_body_id].set(
-        model.body_inertia[cube_body_id] * dmass
-    )
-    dpos = jax.random.uniform(key2, (3,), minval=-5e-3, maxval=5e-3)
-    body_ipos = model.body_ipos.at[cube_body_id].set(
-        model.body_ipos[cube_body_id] + dpos
-    )
+    # 5. Static friction scale (16 params): U(0.5, 2.0)
+    low.append(jp.full((16,), 0.5))
+    high.append(jp.full((16,), 2.0))
 
-    # Jitter qpos0: +U(-0.05, 0.05).
-    rng, key = jax.random.split(rng)
-    qpos0 = model.qpos0
-    qpos0 = qpos0.at[hand_qids].set(
-        qpos0[hand_qids]
-        + jax.random.uniform(key, shape=(16,), minval=-0.05, maxval=0.05)
-    )
+    # 6. Armature scale (16 params): U(1.0, 1.05)
+    low.append(jp.full((16,), 1.0))
+    high.append(jp.full((16,), 1.05))
 
-    # Scale static friction: *U(0.9, 1.1).
-    rng, key = jax.random.split(rng)
-    frictionloss = model.dof_frictionloss[hand_qids] * jax.random.uniform(
-        key, shape=(16,), minval=0.5, maxval=2.0
-    )
-    dof_frictionloss = model.dof_frictionloss.at[hand_qids].set(frictionloss)
+    # 7. Hand link mass scale (17 params): U(0.9, 1.1)
+    # 17 bodies in the hand definition
+    low.append(jp.full((17,), 0.9))
+    high.append(jp.full((17,), 1.1))
 
-    # Scale armature: *U(1.0, 1.05).
-    rng, key = jax.random.split(rng)
-    armature = model.dof_armature[hand_qids] * jax.random.uniform(
-        key, shape=(16,), minval=1.0, maxval=1.05
-    )
-    dof_armature = model.dof_armature.at[hand_qids].set(armature)
+    # 8. Joint stiffness (kp) scale (16 params): U(0.8, 1.2)
+    low.append(jp.full((16,), 0.8))
+    high.append(jp.full((16,), 1.2))
 
-    # Scale all link masses: *U(0.9, 1.1).
-    rng, key = jax.random.split(rng)
-    dmass = jax.random.uniform(
-        key, shape=(len(hand_body_ids),), minval=0.9, maxval=1.1
-    )
-    body_mass = model.body_mass.at[hand_body_ids].set(
-        model.body_mass[hand_body_ids] * dmass
-    )
+    # 9. Joint damping (kd) scale (16 params): U(0.8, 1.2)
+    low.append(jp.full((16,), 0.8))
+    high.append(jp.full((16,), 1.2))
 
-    # Joint stiffness: *U(0.8, 1.2).
-    rng, key = jax.random.split(rng)
-    kp = model.actuator_gainprm[:, 0] * jax.random.uniform(
-        key, (model.nu,), minval=0.8, maxval=1.2
-    )
-    actuator_gainprm = model.actuator_gainprm.at[:, 0].set(kp)
-    actuator_biasprm = model.actuator_biasprm.at[:, 1].set(-kp)
+    return jp.concatenate(low), jp.concatenate(high)
+import functools
+def domain_randomize(model: mjx.Model, dr_range, params=None, rng: jax.Array = None):
+    # --- Setup IDs (kept self-contained) ---
+    mj_model = CubeReorient().mj_model
+    cube_body_id = mj_model.body("cube").id
+    
+    hand_qids = mjx_env.get_qpos_ids(mj_model, consts.JOINT_NAMES)
+    fingertip_geoms = ["th_tip", "if_tip", "mf_tip", "rf_tip"]
+    fingertip_geom_ids = np.array([mj_model.geom(g).id for g in fingertip_geoms])
+    
+    hand_body_names = [
+        "palm", "if_bs", "if_px", "if_md", "if_ds",
+        "mf_bs", "mf_px", "mf_md", "mf_ds",
+        "rf_bs", "rf_px", "rf_md", "rf_ds",
+        "th_mp", "th_bs", "th_px", "th_ds",
+    ]
+    hand_body_ids = np.array([mj_model.body(n).id for n in hand_body_names])
+    
+    # Pre-calculated counts for slicing
+    n_hand_dofs = 16
+    n_hand_bodies = 17
 
-    # Joint damping: *U(0.8, 1.2).
-    rng, key = jax.random.split(rng)
-    kd = model.dof_damping[hand_qids] * jax.random.uniform(
-        key, (16,), minval=0.8, maxval=1.2
-    )
-    dof_damping = model.dof_damping.at[hand_qids].set(kd)
+    if rng is not None:
+        dr_low, dr_high = dr_range
+        dist = functools.partial(jax.random.uniform, shape=(len(dr_low),), minval=dr_low, maxval=dr_high)
 
-    return (
-        geom_friction,
-        body_mass,
-        body_inertia,
-        body_ipos,
-        qpos0,
-        dof_frictionloss,
-        dof_armature,
-        dof_damping,
-        actuator_gainprm,
-        actuator_biasprm,
-    )
+    @jax.vmap
+    def shift_dynamics(params):
+        idx = 0
+        
+        # 1. Fingertip friction (1 param)
+        fingertip_friction = params[idx]
+        geom_friction = model.geom_friction.at[fingertip_geom_ids, 0].set(fingertip_friction)
+        idx += 1
 
-  (
-      geom_friction,
-      body_mass,
-      body_inertia,
-      body_ipos,
-      qpos0,
-      dof_frictionloss,
-      dof_armature,
-      dof_damping,
-      actuator_gainprm,
-      actuator_biasprm,
-  ) = rand(rng)
+        # 2. Cube mass scale (1 param)
+        dmass_cube = params[idx]
+        body_inertia = model.body_inertia.at[cube_body_id].set(
+            model.body_inertia[cube_body_id] * dmass_cube
+        )
+        idx += 1
 
-  in_axes = jax.tree_util.tree_map(lambda x: None, model)
-  in_axes = in_axes.tree_replace({
-      "geom_friction": 0,
-      "body_mass": 0,
-      "body_inertia": 0,
-      "body_ipos": 0,
-      "qpos0": 0,
-      "dof_frictionloss": 0,
-      "dof_armature": 0,
-      "dof_damping": 0,
-      "actuator_gainprm": 0,
-      "actuator_biasprm": 0,
-  })
+        # 3. Cube pos offset (3 params)
+        dpos_cube = params[idx : idx + 3]
+        body_ipos = model.body_ipos.at[cube_body_id].set(
+            model.body_ipos[cube_body_id] + dpos_cube
+        )
+        idx += 3
 
-  model = model.tree_replace({
-      "geom_friction": geom_friction,
-      "body_mass": body_mass,
-      "body_inertia": body_inertia,
-      "body_ipos": body_ipos,
-      "qpos0": qpos0,
-      "dof_frictionloss": dof_frictionloss,
-      "dof_armature": dof_armature,
-      "dof_damping": dof_damping,
-      "actuator_gainprm": actuator_gainprm,
-      "actuator_biasprm": actuator_biasprm,
-  })
+        # 4. Qpos0 jitter (16 params)
+        # Additive jitter
+        dqpos = params[idx : idx + n_hand_dofs]
+        qpos0 = model.qpos0.at[hand_qids].set(
+            model.qpos0[hand_qids] + dqpos
+        )
+        idx += n_hand_dofs
 
-  return model, in_axes
+        # 5. Frictionloss scale (16 params)
+        scale_friction = params[idx : idx + n_hand_dofs]
+        dof_frictionloss = model.dof_frictionloss.at[hand_qids].set(
+            model.dof_frictionloss[hand_qids] * scale_friction
+        )
+        idx += n_hand_dofs
+
+        # 6. Armature scale (16 params)
+        scale_armature = params[idx : idx + n_hand_dofs]
+        dof_armature = model.dof_armature.at[hand_qids].set(
+            model.dof_armature[hand_qids] * scale_armature
+        )
+        idx += n_hand_dofs
+
+        # 7. Hand link mass scale (17 params)
+        scale_mass = params[idx : idx + n_hand_bodies]
+        body_mass = model.body_mass.at[hand_body_ids].set(
+            model.body_mass[hand_body_ids] * scale_mass
+        )
+        idx += n_hand_bodies
+
+        # 8. Joint stiffness (kp) scale (16 params)
+        scale_kp = params[idx : idx + n_hand_dofs]
+        actuator_gainprm = model.actuator_gainprm.at[:, 0].set(
+            model.actuator_gainprm[:, 0] * scale_kp
+        )
+        # Bias usually scales inversely to maintain behavior, or matches kp. 
+        # Original code: biasprm set to -kp. 
+        # Here we scale the *existing* gain, then update bias to match new gain.
+        new_kp = model.actuator_gainprm[:, 0] * scale_kp
+        actuator_biasprm = model.actuator_biasprm.at[:, 1].set(-new_kp)
+        idx += n_hand_dofs
+
+        # 9. Joint damping (kd) scale (16 params)
+        scale_kd = params[idx : idx + n_hand_dofs]
+        dof_damping = model.dof_damping.at[hand_qids].set(
+            model.dof_damping[hand_qids] * scale_kd
+        )
+        idx += n_hand_dofs
+
+        assert idx == len(params), f"Params length mismatch! Expected {idx}, got {len(params)}"
+        
+        return (
+            geom_friction, body_inertia, body_ipos, qpos0, 
+            dof_frictionloss, dof_armature, body_mass, 
+            actuator_gainprm, actuator_biasprm, dof_damping
+        )
+
+    @jax.vmap
+    def rand_dynamics(rng):
+        rng_params = dist(rng)
+        
+        # We can simply reuse the logic by calling the internal logic, 
+        # but to strictly follow CartPole structure where logic is repeated:
+        
+        idx = 0
+        # 1. Fingertip friction
+        geom_friction = model.geom_friction.at[fingertip_geom_ids, 0].set(rng_params[idx])
+        idx += 1
+        
+        # 2. Cube mass
+        body_inertia = model.body_inertia.at[cube_body_id].set(
+            model.body_inertia[cube_body_id] * rng_params[idx]
+        )
+        idx += 1
+        
+        # 3. Cube pos
+        body_ipos = model.body_ipos.at[cube_body_id].set(
+            model.body_ipos[cube_body_id] + rng_params[idx:idx+3]
+        )
+        idx += 3
+        
+        # 4. Qpos jitter
+        qpos0 = model.qpos0.at[hand_qids].set(
+            model.qpos0[hand_qids] + rng_params[idx:idx+n_hand_dofs]
+        )
+        idx += n_hand_dofs
+        
+        # 5. Frictionloss
+        dof_frictionloss = model.dof_frictionloss.at[hand_qids].set(
+            model.dof_frictionloss[hand_qids] * rng_params[idx:idx+n_hand_dofs]
+        )
+        idx += n_hand_dofs
+        
+        # 6. Armature
+        dof_armature = model.dof_armature.at[hand_qids].set(
+            model.dof_armature[hand_qids] * rng_params[idx:idx+n_hand_dofs]
+        )
+        idx += n_hand_dofs
+        
+        # 7. Mass
+        body_mass = model.body_mass.at[hand_body_ids].set(
+            model.body_mass[hand_body_ids] * rng_params[idx:idx+n_hand_bodies]
+        )
+        idx += n_hand_bodies
+        
+        # 8. Stiffness
+        kp_scale = rng_params[idx:idx+n_hand_dofs]
+        new_kp = model.actuator_gainprm[:, 0] * kp_scale
+        actuator_gainprm = model.actuator_gainprm.at[:, 0].set(new_kp)
+        actuator_biasprm = model.actuator_biasprm.at[:, 1].set(-new_kp)
+        idx += n_hand_dofs
+        
+        # 9. Damping
+        dof_damping = model.dof_damping.at[hand_qids].set(
+            model.dof_damping[hand_qids] * rng_params[idx:idx+n_hand_dofs]
+        )
+        idx += n_hand_dofs
+        
+        return (
+            geom_friction, body_inertia, body_ipos, qpos0, 
+            dof_frictionloss, dof_armature, body_mass, 
+            actuator_gainprm, actuator_biasprm, dof_damping
+        )
+
+    if rng is None and params is not None:
+        (
+            geom_friction, body_inertia, body_ipos, qpos0, 
+            dof_frictionloss, dof_armature, body_mass, 
+            actuator_gainprm, actuator_biasprm, dof_damping
+        ) = shift_dynamics(params)
+        
+    elif rng is not None and params is None:
+        (
+            geom_friction, body_inertia, body_ipos, qpos0, 
+            dof_frictionloss, dof_armature, body_mass, 
+            actuator_gainprm, actuator_biasprm, dof_damping
+        ) = rand_dynamics(rng)
+    else:
+        raise ValueError("rng and params wrong!")
+
+    in_axes = jax.tree_util.tree_map(lambda x: None, model)
+    in_axes = in_axes.tree_replace({
+        "geom_friction": 0,
+        "body_inertia": 0,
+        "body_ipos": 0,
+        "qpos0": 0,
+        "dof_frictionloss": 0,
+        "dof_armature": 0,
+        "body_mass": 0,
+        "actuator_gainprm": 0,
+        "actuator_biasprm": 0,
+        "dof_damping": 0,
+    })
+
+    model = model.tree_replace({
+        "geom_friction": geom_friction,
+        "body_inertia": body_inertia,
+        "body_ipos": body_ipos,
+        "qpos0": qpos0,
+        "dof_frictionloss": dof_frictionloss,
+        "dof_armature": dof_armature,
+        "body_mass": body_mass,
+        "actuator_gainprm": actuator_gainprm,
+        "actuator_biasprm": actuator_biasprm,
+        "dof_damping": dof_damping,
+    })
+
+    return model, in_axes
+def domain_randomize_eval(model: mjx.Model, dr_range, params=None, rng: jax.Array = None):
+    # --- Setup IDs (kept self-contained) ---
+    mj_model = CubeReorient().mj_model
+    cube_body_id = mj_model.body("cube").id
+    
+    hand_qids = mjx_env.get_qpos_ids(mj_model, consts.JOINT_NAMES)
+    fingertip_geoms = ["th_tip", "if_tip", "mf_tip", "rf_tip"]
+    fingertip_geom_ids = jp.array([mj_model.geom(g).id for g in fingertip_geoms])
+    
+    hand_body_names = [
+        "palm", "if_bs", "if_px", "if_md", "if_ds",
+        "mf_bs", "mf_px", "mf_md", "mf_ds",
+        "rf_bs", "rf_px", "rf_md", "rf_ds",
+        "th_mp", "th_bs", "th_px", "th_ds",
+    ]
+    hand_body_ids = np.array([mj_model.body(n).id for n in hand_body_names])
+    
+    # Pre-calculated counts for slicing
+    n_hand_dofs = 16
+    n_hand_bodies = 17
+
+    if rng is not None:
+        dr_low, dr_high = dr_range
+        dist = functools.partial(jax.random.uniform, shape=(len(dr_low),), minval=dr_low, maxval=dr_high)
+    print("params in reorient", params)
+    def shift_dynamics(params):
+        idx = 0
+        
+        # 1. Fingertip friction (1 param)
+        fingertip_friction = params[idx]
+        geom_friction = model.geom_friction.at[fingertip_geom_ids, 0].set(fingertip_friction)
+        idx += 1
+
+        # 2. Cube mass scale (1 param)
+        dmass_cube = params[idx]
+        body_inertia = model.body_inertia.at[cube_body_id].set(
+            model.body_inertia[cube_body_id] * dmass_cube
+        )
+        idx += 1
+
+        # 3. Cube pos offset (3 params)
+        dpos_cube = params[idx : idx + 3]
+        body_ipos = model.body_ipos.at[cube_body_id].set(
+            model.body_ipos[cube_body_id] + dpos_cube
+        )
+        idx += 3
+
+        # 4. Qpos0 jitter (16 params)
+        # Additive jitter
+        dqpos = params[idx : idx + n_hand_dofs]
+        qpos0 = model.qpos0.at[hand_qids].set(
+            model.qpos0[hand_qids] + dqpos
+        )
+        idx += n_hand_dofs
+
+        # 5. Frictionloss scale (16 params)
+        scale_friction = params[idx : idx + n_hand_dofs]
+        dof_frictionloss = model.dof_frictionloss.at[hand_qids].set(
+            model.dof_frictionloss[hand_qids] * scale_friction
+        )
+        idx += n_hand_dofs
+
+        # 6. Armature scale (16 params)
+        scale_armature = params[idx : idx + n_hand_dofs]
+        dof_armature = model.dof_armature.at[hand_qids].set(
+            model.dof_armature[hand_qids] * scale_armature
+        )
+        idx += n_hand_dofs
+
+        # 7. Hand link mass scale (17 params)
+        scale_mass = params[idx : idx + n_hand_bodies]
+        body_mass = model.body_mass.at[hand_body_ids].set(
+            model.body_mass[hand_body_ids] * scale_mass
+        )
+        idx += n_hand_bodies
+
+        # 8. Joint stiffness (kp) scale (16 params)
+        scale_kp = params[idx : idx + n_hand_dofs]
+        actuator_gainprm = model.actuator_gainprm.at[:, 0].set(
+            model.actuator_gainprm[:, 0] * scale_kp
+        )
+        # Bias usually scales inversely to maintain behavior, or matches kp. 
+        # Original code: biasprm set to -kp. 
+        # Here we scale the *existing* gain, then update bias to match new gain.
+        new_kp = model.actuator_gainprm[:, 0] * scale_kp
+        actuator_biasprm = model.actuator_biasprm.at[:, 1].set(-new_kp)
+        idx += n_hand_dofs
+
+        # 9. Joint damping (kd) scale (16 params)
+        scale_kd = params[idx : idx + n_hand_dofs]
+        dof_damping = model.dof_damping.at[hand_qids].set(
+            model.dof_damping[hand_qids] * scale_kd
+        )
+        idx += n_hand_dofs
+
+        assert idx == len(params), f"Params length mismatch! Expected {idx}, got {len(params)}"
+        
+        return (
+            geom_friction, body_inertia, body_ipos, qpos0, 
+            dof_frictionloss, dof_armature, body_mass, 
+            actuator_gainprm, actuator_biasprm, dof_damping
+        )
+
+    def rand_dynamics(rng):
+        rng_params = dist(rng)
+        
+        # We can simply reuse the logic by calling the internal logic, 
+        # but to strictly follow CartPole structure where logic is repeated:
+        
+        idx = 0
+        # 1. Fingertip friction
+        geom_friction = model.geom_friction.at[fingertip_geom_ids, 0].set(rng_params[idx])
+        idx += 1
+        
+        # 2. Cube mass
+        body_inertia = model.body_inertia.at[cube_body_id].set(
+            model.body_inertia[cube_body_id] * rng_params[idx]
+        )
+        idx += 1
+        
+        # 3. Cube pos
+        body_ipos = model.body_ipos.at[cube_body_id].set(
+            model.body_ipos[cube_body_id] + rng_params[idx:idx+3]
+        )
+        idx += 3
+        
+        # 4. Qpos jitter
+        qpos0 = model.qpos0.at[hand_qids].set(
+            model.qpos0[hand_qids] + rng_params[idx:idx+n_hand_dofs]
+        )
+        idx += n_hand_dofs
+        
+        # 5. Frictionloss
+        dof_frictionloss = model.dof_frictionloss.at[hand_qids].set(
+            model.dof_frictionloss[hand_qids] * rng_params[idx:idx+n_hand_dofs]
+        )
+        idx += n_hand_dofs
+        
+        # 6. Armature
+        dof_armature = model.dof_armature.at[hand_qids].set(
+            model.dof_armature[hand_qids] * rng_params[idx:idx+n_hand_dofs]
+        )
+        idx += n_hand_dofs
+        
+        # 7. Mass
+        body_mass = model.body_mass.at[hand_body_ids].set(
+            model.body_mass[hand_body_ids] * rng_params[idx:idx+n_hand_bodies]
+        )
+        idx += n_hand_bodies
+        
+        # 8. Stiffness
+        kp_scale = rng_params[idx:idx+n_hand_dofs]
+        new_kp = model.actuator_gainprm[:, 0] * kp_scale
+        actuator_gainprm = model.actuator_gainprm.at[:, 0].set(new_kp)
+        actuator_biasprm = model.actuator_biasprm.at[:, 1].set(-new_kp)
+        idx += n_hand_dofs
+        
+        # 9. Damping
+        dof_damping = model.dof_damping.at[hand_qids].set(
+            model.dof_damping[hand_qids] * rng_params[idx:idx+n_hand_dofs]
+        )
+        idx += n_hand_dofs
+        
+        return (
+            geom_friction, body_inertia, body_ipos, qpos0, 
+            dof_frictionloss, dof_armature, body_mass, 
+            actuator_gainprm, actuator_biasprm, dof_damping
+        )
+
+    if rng is None and params is not None:
+        (
+            geom_friction, body_inertia, body_ipos, qpos0, 
+            dof_frictionloss, dof_armature, body_mass, 
+            actuator_gainprm, actuator_biasprm, dof_damping
+        ) = shift_dynamics(params)
+        
+    elif rng is not None and params is None:
+        (
+            geom_friction, body_inertia, body_ipos, qpos0, 
+            dof_frictionloss, dof_armature, body_mass, 
+            actuator_gainprm, actuator_biasprm, dof_damping
+        ) = rand_dynamics(rng)
+    else:
+        raise ValueError("rng and params wrong!")
+
+    in_axes = jax.tree_util.tree_map(lambda x: None, model)
+    in_axes = in_axes.tree_replace({
+        "geom_friction": 0,
+        "body_inertia": 0,
+        "body_ipos": 0,
+        "qpos0": 0,
+        "dof_frictionloss": 0,
+        "dof_armature": 0,
+        "body_mass": 0,
+        "actuator_gainprm": 0,
+        "actuator_biasprm": 0,
+        "dof_damping": 0,
+    })
+
+    model = model.tree_replace({
+        "geom_friction": geom_friction,
+        "body_inertia": body_inertia,
+        "body_ipos": body_ipos,
+        "qpos0": qpos0,
+        "dof_frictionloss": dof_frictionloss,
+        "dof_armature": dof_armature,
+        "body_mass": body_mass,
+        "actuator_gainprm": actuator_gainprm,
+        "actuator_biasprm": actuator_biasprm,
+        "dof_damping": dof_damping,
+    })
+
+    return model, in_axes

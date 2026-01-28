@@ -285,6 +285,7 @@ def train(
   Returns:
     Tuple of (make_policy function, network params, metrics)
   """
+  num_eval_envs=4096
   assert batch_size * num_minibatches % num_envs == 0
   _validate_madrona_args(
       madrona_backend, num_envs, num_eval_envs, action_repeat, eval_env
@@ -955,7 +956,7 @@ def train(
   metrics = {}
   if process_id == 0 and num_evals > 1 and run_evals and len(dr_range_low)>2:
     eval_key, local_key = jax.random.split(local_key)
-    dynamics_params_grid = jax.random.uniform(eval_key, shape=(4096, len(dr_range_low)), minval=dr_range_low, maxval=dr_range_high)
+    dynamics_params_grid = jax.random.uniform(eval_key, shape=(num_eval_envs, len(dr_range_low)), minval=dr_range_low, maxval=dr_range_high)
     metrics, reward_1d, epi_length = evaluator.run_evaluation(
         _unpmap((
             training_state.normalizer_params,
@@ -1178,7 +1179,7 @@ def train(
       if run_evals:
         metric_key, local_key = jax.random.split(local_key)
         if sampler_choice=="DORAEMON" or "FLOW" in sampler_choice or sampler_choice=="GMM" or sampler_choice=="AutoDR":
-          num_samples_bench = 2**14
+          num_samples_bench = num_eval_envs
           if sampler_choice=="DORAEMON":
             a, b = _unpack_beta(_unpmap(training_state.doraemon_state.x_opt), len(dr_range_low), min_bound, max_bound)
             samples = sample_beta_on_box(metric_key, a, b, low, high, num_samples_bench)
@@ -1224,7 +1225,7 @@ def train(
           rewards = []
           for i in range(4): # 16384 envs.
             eval_key, local_key = jax.random.split(local_key)
-            dynamics_params_grid = jax.random.uniform(eval_key, shape=(4096, len(dr_range_low)), minval=dr_range_low, maxval=dr_range_high)
+            dynamics_params_grid = jax.random.uniform(eval_key, shape=(num_eval_envs, len(dr_range_low)), minval=dr_range_low, maxval=dr_range_high)
             metrics, _reward_1d, ep_length = evaluator.run_evaluation(
                 _unpmap((
                     training_state.normalizer_params,
