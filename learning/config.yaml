@@ -21,8 +21,8 @@ asymmetric_critic: true
 distributional_q : false
 
 # logging
-wandb_project: gradient_test
-wandb_entity: tjrcjf410-seoul-national-university
+wandb_project: test
+wandb_entity: ??? 
 wandb_silent: false
 use_wandb: true
 save_csv: true
