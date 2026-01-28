@@ -8,3 +8,5 @@ checkpoints/
 learning/logs
 learning/outputs
 learning/commands
+.git/
+external_deps/

@@ -280,6 +280,7 @@ def train(
     start_beta : float =10.,
     end_beta : float = -40.,
     scheduler_mode : str = "linear",
+    trust_region : float = 0.005,
 ):
   """
   Returns:
@@ -403,6 +404,7 @@ def train(
       success_threshold= success_threshold,
       success_rate_condition= success_rate_condition,
       sampler_choice = sampler_choice,
+      kl_upper_bound = trust_region,
     )
   init_autodr_state, init_doraemon_state, init_flow_state, init_gmm_state = init_states
   scheduler, init_scheduler_state =  GMMScheduler.create(
@@ -598,8 +600,14 @@ def train(
     elif sampler_choice == "GMM":
         dynamics_params, mapping = samplerppo_network.gmm_network.model.sample(\
           training_state.gmm_training_state.model_state.gmm_state, param_key, num_envs //jax.process_count())
-        # dynamics_params_for_training, mapping = samplerppo_network.gmm_network.sample_selector.select_samples(\
-        #       training_state.gmm_training_state.model_state, param_key)
+        if False: # len(dr_range_low)>20:
+          dynamics_params_sampler, mapping = samplerppo_network.gmm_network.sample_selector.select_samples(\
+                training_state.gmm_training_state.model_state, param_key)
+          data = get_experience(training_state, state, dynamics_params_sampler,\
+              key_generate_unroll, unroll_length, batch_size * num_minibatches // num_envs,)[1]
+          rewards = data.reward
+        else:
+          dynamics_params_sampler=dynamics_params
     else:
       raise ValueError("No Sampler Available")
     # #for debugging
@@ -615,7 +623,7 @@ def train(
     print("value approx", value_approx)
     value_approx =value_approx.mean(0) / episode_length
 
-    if "FLOW" not in sampler_choice:
+    if "FLOW" not in sampler_choice or sampler_choice!="GMM" or len(dr_range_low)<=20:
       rewards = data.reward     #(K, L, B)
     # Have leading dimensions (batch_size * num_minibatches, unroll_length)
     data = jax.tree_util.tree_map(lambda x: jnp.swapaxes(x, 1, 2), data)
@@ -671,28 +679,50 @@ def train(
     # scheduler update
     if use_scheduling:
       scheduler_key, key = jax.random.split(key)
-      def update_scheduler(scheduler_state, _cummulated_values):
-        sorted_values = jnp.sort(_cummulated_values)
-        N = _cummulated_values.shape[0]
-        k20 = int(N* .2)
-        CVaR20 = sorted_values[:k20].mean()
-        feedback = CVaR20 - scheduler_state.prev_cvar
-        scheduler_state = scheduler_state.replace(prev_cvar = CVaR20)
-        return scheduler.update_dists(scheduler_state, feedback)
-      scheduler_state = jax.lax.cond(training_state.update_steps % sampler_update_freq==0, \
-                lambda: update_scheduler(training_state.scheduler_state, cumulated_values), \
-                 lambda: training_state.scheduler_state )
-      scheduler_state, _beta = scheduler.sample(scheduler_state, scheduler_key)
+      # def update_scheduler(scheduler_state, _cummulated_values):
+      #   sorted_values = jnp.sort(_cummulated_values)
+      #   N = _cummulated_values.shape[0]
+      #   k20 = int(N* .2)
+      #   CVaR20 = sorted_values[:k20].mean()
+      #   feedback = CVaR20 - scheduler_state.prev_cvar
+      #   scheduler_state = scheduler_state.replace(prev_cvar = CVaR20)
+      #   return scheduler.update_dists(scheduler_state, feedback)
+      # scheduler_state = jax.lax.cond(training_state.update_steps % sampler_update_freq==0, \
+      #           lambda: update_scheduler(training_state.scheduler_state, cumulated_values), \
+      #            lambda: training_state.scheduler_state )
+      scheduler_state = training_state.scheduler_state
+      # scheduler_state, _beta = scheduler.sample(scheduler_state, scheduler_key)
       # linear schedule
+      _beta=0.0
       if scheduler_mode=="linear":
         _beta = start_beta - (start_beta - end_beta) * (training_state.update_steps / num_training_steps)
       elif scheduler_mode=="exp":
         k = 3.
         # exponential schedule
         _beta = start_beta - (start_beta - end_beta) * (1 - jnp.exp(-k * training_state.update_steps / num_training_steps))/ (1  - jnp.exp(-training_state.update_steps))
+      elif scheduler_mode=="switch":
+        def select_beta(cumulated_values):
+          values75 = jnp.percentile(cumulated_values, 75)
+          values50 = jnp.percentile(cumulated_values, 50)
+          values25 = jnp.percentile(cumulated_values, 25)
+          sb = jnp.array(start_beta, dtype=jnp.float32)
+          eb = jnp.array(end_beta, dtype=jnp.float32)
+
+          # Start with the default value
+          beta_ = sb
+
+          # Chain the updates (logic applied in order)
+          beta_ = jnp.where(values75 > .5, 0., beta_)
+          beta_ = jnp.where(values50 > .5, (sb + eb) / 2., beta_)
+          beta_ = jnp.where(values25 > .5, eb, beta_)
+          return beta_
+        _beta =  jax.lax.cond(training_state.update_steps % sampler_update_freq==0, \
+                  lambda: select_beta(cumulated_values), \
+                  lambda: _beta)
+                  
     else:
-      scheduler_state = training_state.scheduler_state
-      _beta = beta
+        scheduler_state = training_state.scheduler_state
+        _beta = beta
 
   
     gmm_training_state = training_state.gmm_training_state
@@ -711,6 +741,7 @@ def train(
             samplerppo_network.flow_network, fs, fos,
             dynamics_params_sampler,
             prev_sample_carry,
+            
             prev_logp_carry,
             target_lnpdf,
             key_update,
@@ -726,7 +757,7 @@ def train(
     def update_gmm(gts):
       target_lnpdf = _beta * cumulated_values/sampler_update_freq
       new_sample_db_state = samplerppo_network.gmm_network.sample_selector.save_samples(gmm_training_state.model_state, \
-                    gts.sample_db_state, dynamics_params, target_lnpdf, \
+                    gts.sample_db_state, dynamics_params_sampler, target_lnpdf, \
                       jnp.zeros_like(dynamics_params), mapping)
       new_gmm_training_state = gmm_training_state._replace(sample_db_state=new_sample_db_state)
       new_gmm_training_state = gmm_update_fn(new_gmm_training_state, key_update)
@@ -755,7 +786,6 @@ def train(
     else:
       raise ValueError("No Sampler!")
     # update_signal=1
-    print("beta", _beta)
     metrics.update({
       'target_pdf_min': update_signal* cumulated_values.min(),
       'target_pdf_max': update_signal* cumulated_values.max(),
@@ -764,7 +794,7 @@ def train(
       'target_pdf_q50': update_signal* jnp.quantile(cumulated_values, .50),
       'target_pdf_q75': update_signal* jnp.quantile(cumulated_values, .75),
       'target_pdf_std': update_signal* cumulated_values.std(),
-      'beta': _beta,
+      'beta': update_signal * _beta,
     })
     new_training_state = TrainingState(
         optimizer_state=optimizer_state,
@@ -1140,6 +1170,38 @@ def train(
       training_state.params.policy,
       training_state.params.value,
   ))
+  # 1. Define where to save
+  ckpt_dir = make_dir(save_dir / "checkpoints")
+  sampler_save_path = os.path.join(ckpt_dir, f"sampler_state_{current_step}.msgpack")
+  
+  # 2. Select the state based on sampler_choice
+  state_to_save = None
+  
+  if sampler_choice == "AutoDR":
+      # Save the AutoDR state struct
+      state_to_save = _unpmap(training_state.autodr_state)
+      
+  elif sampler_choice == "DORAEMON":
+      # Save the Doraemon state struct
+      state_to_save = _unpmap(training_state.doraemon_state)
+      
+  elif "FLOW" in sampler_choice:
+      # Save the Flow state (GraphState from nnx.split)
+      # If you need to resume training, you might also want flow_opt_state
+      state_to_save = None #_unpmap(training_state.flow_state)
+      
+  elif sampler_choice == "GMM":
+      # Save the GMM Training state
+      state_to_save = _unpmap(training_state.gmm_training_state)
+
+  # 3. Serialize and write to disk
+  if state_to_save is not None:
+      with open(sampler_save_path, "wb") as f:
+          f.write(flax.serialization.to_bytes(state_to_save))
+      logging.info(f"Saved {sampler_choice} state to {sampler_save_path}")
+
+  # --- END INSERT ---
+
   policy_params_fn(current_step, make_policy, params)
     
     
@@ -1422,6 +1484,33 @@ def train(
           }, step=int(current_step))
       logging.info(metrics)
       progress_fn(current_step, metrics)
+      # 2. Select the state based on sampler_choice
+      state_to_save = None
+      
+      if sampler_choice == "AutoDR":
+          # Save the AutoDR state struct
+          state_to_save = _unpmap(training_state.autodr_state)
+          
+      elif sampler_choice == "DORAEMON":
+          # Save the Doraemon state struct
+          state_to_save = _unpmap(training_state.doraemon_state)
+          
+      elif "FLOW" in sampler_choice:
+          # Save the Flow state (GraphState from nnx.split)
+          # If you need to resume training, you might also want flow_opt_state
+          state_to_save = None #_unpmap(training_state.flow_state)
+          
+      elif sampler_choice == "GMM":
+          # Save the GMM Training state
+          state_to_save = _unpmap(training_state.gmm_training_state)
+
+      # 3. Serialize and write to disk
+      if state_to_save is not None:
+          with open(sampler_save_path, "wb") as f:
+              f.write(flax.serialization.to_bytes(state_to_save))
+          logging.info(f"Saved {sampler_choice} state to {sampler_save_path}")
+
+  # --- END INSERT ---
 
   total_steps = current_step
   if not total_steps >= num_timesteps:
@@ -1462,6 +1551,28 @@ def train(
       training_state.params.value,
   ))
   logging.info('total steps: %s', total_steps)
-  pmap.synchronize_hosts()
+  # ... [End of your training loop] ...
 
+  # --- SAVE LATEST STATE START ---
+  if process_id == 0:
+      ckpt_dir = make_dir(save_dir / "checkpoints")
+      latest_save_path = os.path.join(ckpt_dir, "sampler_state_latest.msgpack")
+      
+      state_to_save = None
+      if sampler_choice == "AutoDR":
+          state_to_save = _unpmap(training_state.autodr_state)
+      elif sampler_choice == "DORAEMON":
+          state_to_save = _unpmap(training_state.doraemon_state)
+      elif "FLOW" in sampler_choice:
+          state_to_save = None #_unpmap(training_state.flow_state)
+      elif sampler_choice == "GMM":
+          state_to_save = _unpmap(training_state.gmm_training_state)
+
+      if state_to_save is not None:
+          with open(latest_save_path, "wb") as f:
+              f.write(flax.serialization.to_bytes(state_to_save))
+          logging.info(f"Saved LATEST {sampler_choice} state to {latest_save_path}")
+  # --- SAVE LATEST STATE END ---
+
+  pmap.synchronize_hosts()
   return (make_policy, params, metrics)

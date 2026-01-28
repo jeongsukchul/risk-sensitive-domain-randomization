@@ -86,6 +86,9 @@ CAMERAS = {
     "T1JoystickRoughTerrain" :"track",
     "LeapCubeRotateZAxis" :"side",
     "LeapCubeReorient" :"side",
+    "PandaPickCube" :"fixed",
+    "PandaPickCubeOrientation" :"fixed",
+    "PandaOpenCabinet" :"fixed",
 }
 camera_name = CAMERAS[env_name]
 
@@ -355,66 +358,68 @@ def train(cfg: dict):
 
     # Save config.yaml and randomization config to wandb and local directory
     save_configs_to_wandb_and_local(cfg, cfg.work_dir)
-    env_cfg['impl'] = 'jax'
+    # env_cfg['impl'] = 'jax'
 
-    if cfg.final_randomization:
-        eval_rng, rng = jax.random.split(rng)
-        randomizer_eval = registry.get_domain_randomizer_eval(cfg.task)
-        randomizer_eval = functools.partial(randomizer_eval, rng=eval_rng, dr_range=env.dr_range)
-        eval_env = BraxDomainRandomizationWrapper(
-            registry.load(cfg.task, config=env_cfg),
-            randomization_fn=randomizer_eval,
-        )
-    else:
-        eval_env = registry.load(cfg.task, config=env_cfg)
+    # if cfg.final_randomization:
+    #     eval_rng, rng = jax.random.split(rng)
+    #     randomizer_eval = registry.get_domain_randomizer_eval(cfg.task)
+    #     randomizer_eval = functools.partial(randomizer_eval, rng=eval_rng, dr_range=env.dr_range)
+    #     eval_env = BraxDomainRandomizationWrapper(
+    #         registry.load(cfg.task, config=env_cfg),
+    #         randomization_fn=randomizer_eval,
+    #     )
+    # else:
+    eval_env = registry.load(cfg.task, config=env_cfg)
         
     if cfg.save_video and cfg.use_wandb:
         n_episodes = 10
-        jit_inference_fn = jax.jit(make_inference_fn(params,deterministic=True))
+        # Move JIT outside if this block repeats
+        jit_inference_fn = jax.jit(make_inference_fn(params, deterministic=True))
         jit_reset = jax.jit(eval_env.reset)
         jit_step = jax.jit(eval_env.step)
+        
         reward_list = []
         rollout = []
         rng, eval_rng = jax.random.split(rng)
         rngs = jax.random.split(eval_rng, n_episodes)
-        import gc  
-        for i in range(n_episodes): #10 episodes
+
+        for i in range(n_episodes):
             state = jit_reset(rngs[i])
-            if i==0:
-                rollout = [state]
-            rewards = 0
+            
+            # Pull to CPU immediately to save GPU memory
+            if i == 0:
+                rollout = [jax.device_get(state)] 
+                
+            current_episode_reward = 0
             for _ in range(env_cfg.episode_length):
                 act_rng, rng = jax.random.split(rng)
                 action, info = jit_inference_fn(state.obs, act_rng)
                 state = jit_step(state, action)
-                if i==0:
+                
+                if i == 0:
                     rollout.append(jax.device_get(state))
-                rewards += state.reward
-            reward_list.append(rewards)
+                
+                current_episode_reward += state.reward
+            
+            # Ensure we store a standard float/numpy value
+            reward_list.append(float(current_episode_reward))
 
-        print("Starting video rendering...")
-        frames = eval_env.render(rollout, camera=CAMERAS[cfg.task])
+        # Convert list to numpy for stats
+        reward_array = np.array(reward_list)
+
+        # ... Rendering Logic ...
+        frames = eval_env.render(rollout)
         fps = 1.0 / env.sim_dt
         video_path = f"video_{cfg.policy}_{cfg.task}.mp4"
-        print(f"Encoding video to {video_path}...")
-        media.write_video(video_path, frames, fps=fps)
-        print("Video saved successfully.")
-        # 2. Open the writer
-        print(f"Video saved successfully to {video_path}")
-        
-        # ... (rest of your wandb logging) ...
-        try:
-            del frames
-            gc.collect()
-            wandb.log({'eval_video': wandb.Video(video_path, fps=fps, format='mp4')})
-        except Exception as e:
-            print(f"Could not upload to WandB due to memory limits: {e}")
-
-        wandb.log({'final_eval_reward' : rewards.mean()}) 
-        wandb.log({'final_eval_reward_iqm' : scipy.stats.trim_mean(rewards, proportiontocut=0.25, axis=None) })
-        wandb.log({'final_eval_reward_std' :rewards.std() })
-
-   
+        os.makedirs(video_path, exist_ok=True)
+        # Corrected Logging
+        wandb.log({
+            'final_eval_reward': reward_array.mean(),
+            'final_eval_reward_video': reward_array[0],
+            'final_eval_reward_iqm': scipy.stats.trim_mean(reward_array, 0.25),
+            'final_eval_reward_std': reward_array.std(),
+            'eval_video': wandb.Video(video_path, fps=fps, format='mp4')
+        })
 if __name__ == "__main__":
     xla_flags = os.environ.get("XLA_FLAGS", "")
     xla_flags += " --xla_gpu_triton_gemm_any=True"

@@ -133,7 +133,11 @@ _randomizer_eval = {
   "HumanoidStand": humanoid.domain_randomize_eval,
   "HumanoidWalk": humanoid.domain_randomize_eval,
 }
-
+_randomizer_ood = {
+  "CheetahRun" : cheetah.domain_randomize_ood,
+  "CartpoleSwingupSparse" : cartpole.domain_randomize_ood,
+  "WalkerWalk" : walker.domain_randomize_ood,
+}
 def __getattr__(name):
   if name == "ALL_ENVS":
     return tuple(_envs.keys())
@@ -213,3 +217,15 @@ def get_domain_randomizer_eval(
     )
     return None
   return _randomizer_eval[env_name]
+
+def get_domain_randomizer_ood(
+    env_name: str,
+) -> Optional[Callable[[mjx.Model, jax.Array], Tuple[mjx.Model, mjx.Model]]]:
+  """Get the default domain randomizer for an environment."""
+  if env_name not in _randomizer:
+    print(
+        f"Env '{env_name}' does not have a domain randomizer in the"
+        " manipulation registry."
+    )
+    return None
+  return _randomizer_ood[env_name]

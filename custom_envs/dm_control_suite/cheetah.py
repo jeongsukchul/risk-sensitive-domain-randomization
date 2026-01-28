@@ -198,15 +198,42 @@ class Run(mjx_env.MjxEnv):
     return low, high
 
   @property
+  def dr_range_wide(self) -> dict:
+
+    low = jp.array(
+        [0.01] +                             #floor_friction_min 
+        [0.1] 
+        #[0.1] 
+      )
+        # [0.] * (self.mjx_model.nv - 3) +   # dof_friction_min
+        # [-0.3] * 3 +                          #com_offset_min
+        # [0.1] * (self.mjx_model.nbody - 1)) #body_mass_min
+    high = jp.array(
+        [3.5] +                             #floor_friction_max
+        [23.0]
+        # [3.0] 
+      )
+        # [1.] * (self.mjx_model.nv - 3) +   #dof_friction_max
+        # [0.3] * 3 +                          #com_offset_max
+        # [15.0] * (self.mjx_model.nbody - 1)) #body_mass_max
+    return low, high
+  @property
+  def dr_label(self) -> dict:
+    return ("floor friction", "torso mass")
+  @property
   def ood_range(self) -> dict:
     low = jp.array(
-        [0.6] +                           #BTHIGH body min
-        [.4]                            #dof friction min
+        [0.3] +                           #bthigh body min
+        [-0.4]                            #torso body ipos min
     )
     high = jp.array(
-        [4.0] +                            #BTHIGH body max
-        [2.5]                            #dof friction max
+        [4.0] +                            #bthigh body max
+        [0.4]                            #torso body ipos max
     )
+    return low, high
+  @property
+  def ood_label(self) -> dict:
+    return ("bthigh mass", "torso position offset")
 def domain_randomize_ood(model: mjx.Model, dr_range, params=None, rng:jax.Array=None):
   if rng is not None:
     dr_low, dr_high = dr_range
@@ -216,12 +243,12 @@ def domain_randomize_ood(model: mjx.Model, dr_range, params=None, rng:jax.Array=
     idx = 0
     body_mass = model.body_mass.at[BTHIGH_BODY_ID].set(params[idx])
     idx+=1
-    geom_friction = model.geom_friction.at[FLOOR_GEOM_ID, 0].set(params[idx])
+    body_ipos = model.body_ipos.at[TORSO_BODY_ID, 0].set(params[idx])
     idx += 1
     assert idx == len(params)
     return (
-      geom_friction,
       body_mass,
+      body_ipos
     )
   def rand_dynamics(rng):
     # floor friction
@@ -229,34 +256,35 @@ def domain_randomize_ood(model: mjx.Model, dr_range, params=None, rng:jax.Array=
     idx = 0
     body_mass = model.body_mass.at[BTHIGH_BODY_ID].set(rng_params[idx])
     idx+=1
-    geom_friction = model.geom_friction.at[FLOOR_GEOM_ID, 0].set(rng_params[idx])
+    body_ipos = model.body_ipos.at[TORSO_BODY_ID, 0].set(rng_params[idx])
     idx += 1
     assert idx == len(rng_params)
     return (
-      geom_friction,
       body_mass,
+      body_ipos,
     )
   
   if rng is None and params is not None:
 
-    (geom_friction, 
+    ( 
      body_mass, 
+     body_ipos,
     )= shift_dynamics(params)
   elif rng is not None and params is None:
     (
-      geom_friction,
       body_mass,
+      body_ipos,
     ) = rand_dynamics(rng)
   else:
     raise ValueError("rng and params wrong!")
   in_axes = jax.tree_util.tree_map(lambda x: None, model)
   in_axes = in_axes.tree_replace({
-      "geom_friction": 0,
       "body_mass": 0,
+      "body_ipos": 0,
   })
   model = model.tree_replace({
-      "geom_friction": geom_friction,
       "body_mass": body_mass,
+      "body_ipos": body_ipos,
   })
 
   return model, in_axes
@@ -370,7 +398,7 @@ def domain_randomize_eval(model: mjx.Model, dr_range, params=None, rng:jax.Array
   if rng is not None:
     dr_low, dr_high = dr_range
     dist = functools.partial(jax.random.uniform, shape=(len(dr_low)), minval=dr_low, maxval=dr_high)
-
+  
   def shift_dynamics(params):
     idx = 0
     geom_friction = model.geom_friction.at[FLOOR_GEOM_ID, 0].set(params[idx])

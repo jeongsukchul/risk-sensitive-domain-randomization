@@ -45,6 +45,7 @@ def default_config() -> config_dict.ConfigDict:
       impl="jax",
       nconmax=300_000,
       njmax=350,
+      history_len=1,
   )
 
 
@@ -106,7 +107,11 @@ class Humanoid(mjx_env.MjxEnv):
         "reward/small_control": jp.zeros(()),
         "reward/move": jp.zeros(()),
     }
-    info = {"rng": rng}
+    qpos_history = jp.array([data.qpos[7:]] *self._config.history_len).reshape(-1)
+    qvel_history = jp.zeros(self._config.history_len* 21)
+    info = {"rng": rng,
+            "qpos_history" : qpos_history,
+            "qvel_history" : qvel_history,}
 
     reward, done = jp.zeros(2)  # pylint: disable=redefined-outer-name
     obs = self._get_obs(data, info)
@@ -121,22 +126,27 @@ class Humanoid(mjx_env.MjxEnv):
     return mjx_env.State(data, obs, reward, done, state.metrics, state.info)
 
   def _get_obs(self, data: mjx.Data, info: dict[str, Any]) -> jax.Array:
-    del info  # Unused.
+    qpos_history = jp.roll(info["qpos_history"], 21).at[:21].set(data.qpos[7:])
+    qvel_history = jp.roll(info["qvel_history"], 21).at[:21].set(data.qvel[6:])
+    info["qvel_history"] = qvel_history
+    info["qpos_history"] = qpos_history
+    # del info  # Unused.
     state =  jp.concatenate([
-        self._joint_angles(data),
+        qpos_history,
+        # self._joint_angles(data),
         self._head_height(data).reshape(1),
         self._extremities(data).ravel(),
         self._torso_vertical_orientation(data),
         self._center_of_mass_velocity(data),
-        data.qvel,
+        qvel_history,
+        # data.qvel,
     ])
     privileged_state = jp.concatenate([
       state,
       self.mjx_model.geom_friction[FLOOR_GEOM_ID, 0:1],
       self.mjx_model.dof_frictionloss[6:],
-      self.mjx_model.dof_armature[6:],
+      # self.mjx_model.dof_armature[6:],
       self.mjx_model.body_mass[1:],
-      self.mjx_model.qpos0[7:],
     ])
     # return state
     return {
@@ -151,7 +161,7 @@ class Humanoid(mjx_env.MjxEnv):
       info: dict[str, Any],
       metrics: dict[str, Any],
   ) -> jax.Array:
-    del info  # Unused.
+    # del info  # Unused.
 
     standing = reward.tolerance(
         self._head_height(data),
@@ -247,25 +257,51 @@ class Humanoid(mjx_env.MjxEnv):
     return self._mjx_model
   @property
   def nominal_params(self) -> jp.ndarray:
-    return jp.concatenate([jp.ones(43), jp.zeros(1), jp.ones(15), jp.zeros(21)])
+    return jp.concatenate([jp.ones(1), self.mjx_model.dof_frictionloss[6:], self.mjx_model.body_mass[1:]])
   @property
   def dr_range(self) -> dict:
-    #total 80d
+    #total 38d
     low = jp.array(
-        [0.4] +                              #floor_friction_min 
-        [0.8] *(self.mjx_model.nv-6) +       #dof friciton(21d)
-        [1.] * (self.mjx_model.nv-6) +       #dof armature(21d)
-        [-1.] +                              #torso mass(1d)
-        [0.8] * (self.mjx_model.nbody-2) +   #link masses(15d)
-        [-.05] * (self.mjx_model.nv-6)       #qpos0(21d)
+        [0.3] +                              #floor_friction_min 
+        [0.0] *(self.mjx_model.nv-6) +       #dof friciton(21d)
+        # [0.1] * (self.mjx_model.nv-6) +       #dof armature(21d)
+        [0.1] + #torso [5.85]
+        [0.1] + #head [3.05]
+        [1.5] + #lower_waist [2.26]
+        [5.0] + #pelvis [6.16]
+        [3.5] + #right_thigh [4.75]
+        [2.0] + #right_shin [ 2.75]
+        [0.5] + #right_foot [1.13]
+        [3.5] + #left_thigh [4.75]
+        [2.0] + #left_shi [2.75
+        [0.5] + #left_foot [1.13]
+        [1.0] + #right upper arm [1.66]
+        [0.5] + #right lower arm [0.95]
+        [0.1] + #right hand [0.26]
+        [1.0] + #left upper arm [1.66]
+        [0.5] + #left lower arm [0.95]
+        [0.1]  #left hand [0.26]
       )
     high = jp.array(
-        [4.0] +                              #floor_friction_min 
-        [1.2] *(self.mjx_model.nv-6) +       #dof friciton(21d)
-        [1.2] * (self.mjx_model.nv-6) +     #dof armature(21d)
-        [1.0] +                              #torso mass(1d)
-        [1.2] * (self.mjx_model.nbody-2) +   #link masses(15d)
-        [.05] * (self.mjx_model.nv-6)        #qpos0(21d)
+        [4.] +                              #floor_friction_min 
+        [2.] *(self.mjx_model.nv-6) +       #dof friciton(21d)
+        # [2.0] * (self.mjx_model.nv-6) +       #dof armature(21d)
+        [25.0] + #torso [5.85]
+        [25.0] + #head [3.05]
+        [3.5] + #lower_waist [2.26]
+        [7.0] + #pelvis [6.16]
+        [6.0] + #right_thigh [4.75]
+        [4.0] + #right_shin [ 2.75]
+        [2.0] + #right_foot [1.13]
+        [6.0] + #left_thigh [4.75]
+        [4.0] + #left_shi [2.75]
+        [2.0] + #left_foot [1.13]
+        [3.0] + #right upper arm [1.66]
+        [2.0] + #right lower arm [0.95]
+        [10.] + #right hand [0.26]
+        [3.0] + #left upper arm [1.66]
+        [2.0] + #left lower arm [0.95]
+        [15.]  #left hand [0.26]
       )
     return low, high
   
@@ -280,22 +316,18 @@ def domain_randomize(model: mjx.Model, dr_range, params=None, rng:jax.Array=None
     idx = 0
     geom_friction = model.geom_friction.at[FLOOR_GEOM_ID, 0].set(params[idx])
     idx += 1
-    dof_frictionloss = model.dof_frictionloss.at[6:].set(params[idx:idx+21])
-    idx += 21
+    # dof_frictionloss = model.dof_frictionloss.at[6:].set(params[idx:idx+21])
+    # idx += 21
     dof_armature  = model.dof_armature.at[6:].set(params[idx:idx+21])
     idx += 21
-    body_mass = model.body_mass.at[1].set(model.body_mass[1] + params[idx] )
-    body_mass = model.body_mass.at[2:].set(params[idx+1: idx+16])
+    body_mass = model.body_mass.at[1:].set(params[idx: idx+16])
     idx += 16
-    qpos0 = model.qpos0.at[7:].set(params[idx:idx+21])
-    idx +=21
     assert idx == len(params)
     return (
       geom_friction,
       dof_frictionloss,
-      dof_armature,
+      # dof_armature,
       body_mass,
-      qpos0
     )
   @jax.vmap
   def rand_dynamics(rng):
@@ -305,35 +337,29 @@ def domain_randomize(model: mjx.Model, dr_range, params=None, rng:jax.Array=None
     idx += 1
     dof_frictionloss = model.dof_frictionloss.at[6:].set(rng_params[idx:idx+21])
     idx += 21
-    dof_armature  = model.dof_armature.at[6:].set(rng_params[idx:idx+21])
-    idx += 21
-    body_mass = model.body_mass.at[1].set(model.body_mass[1] + rng_params[idx])
-    body_mass = model.body_mass.at[2:].set(rng_params[idx+1: idx+16])
+    # dof_armature  = model.dof_armature.at[6:].set(rng_params[idx:idx+21])
+    # idx += 21
+    body_mass = model.body_mass.at[2:].set(rng_params[idx: idx+16])
     idx += 16
-    qpos0 = model.qpos0.at[7:].set(rng_params[idx:idx+21])
-    idx +=21
     assert idx == len(rng_params)
     return (
       geom_friction,
       dof_frictionloss,
-      dof_armature,
+      # dof_armature,
       body_mass,
-      qpos0
     )
   if rng is None and params is not None:
 
     (geom_friction, 
      dof_frictionloss,
-     dof_armature,
+    #  dof_armature,
      body_mass, 
-     qpos0,
      ) = shift_dynamics(params)
   elif rng is not None and params is None:
     (geom_friction, 
      dof_frictionloss,
-     dof_armature,
+    #  dof_armature,
      body_mass, 
-     qpos0,
      ) = rand_dynamics(rng)
   else:
     raise ValueError("rng and params wrong!")
@@ -341,15 +367,14 @@ def domain_randomize(model: mjx.Model, dr_range, params=None, rng:jax.Array=None
   in_axes = in_axes.tree_replace({
       "geom_friction": 0,
       "dof_frictionloss": 0,
-      "dof_armature": 0,
+      # "dof_armature": 0,
       "body_mass": 0,
   })
   model = model.tree_replace({
       "geom_friction": geom_friction,
       "dof_frictionloss": dof_frictionloss,
-      "dof_armature": dof_armature,
+      # "dof_armature": dof_armature,
       "body_mass": body_mass,
-      "qpos0" : qpos0,
   })
 
   return model, in_axes
@@ -364,59 +389,47 @@ def domain_randomize_eval(model: mjx.Model, dr_range, params=None, rng:jax.Array
     idx += 1
     dof_frictionloss = model.dof_frictionloss.at[6:].set(params[idx:idx+21])
     idx += 21
-    dof_armature  = model.dof_armature.at[6:].set(params[idx:idx+21])
-    idx += 21
-    body_mass = model.body_mass.at[1].set(model.body_mass[1] + params[idx])
-    body_mass = model.body_mass.at[2:].set(params[idx+1: idx+16])
+    # dof_armature  = model.dof_armature.at[6:].set(params[idx:idx+21])
+    # idx += 21
+    body_mass = model.body_mass.at[1:].set(params[idx: idx+16])
     idx += 16
-    qpos0 = model.qpos0.at[7:].set(params[idx:idx+21])
-    idx +=21
     assert idx == len(params)
     return (
       geom_friction,
       dof_frictionloss,
-      dof_armature,
+      # dof_armature,
       body_mass,
-      qpos0
     )
   def rand_dynamics(rng):
     rng_params = dist(rng)
     idx = 0
     geom_friction = model.geom_friction.at[FLOOR_GEOM_ID, 0].set(rng_params[idx])
     idx += 1
-    dof_frictionloss = model.dof_frictionloss.at[6].set(rng_params[idx])
-    idx+=1
     dof_frictionloss = model.dof_frictionloss.at[6:].set(rng_params[idx:idx+21])
     idx += 21
-    dof_armature  = model.dof_armature.at[6:].set(rng_params[idx:idx+21])
-    idx += 21
-    body_mass = model.body_mass.at[1].set(model.body_mass[1] + rng_params[idx])
-    body_mass = model.body_mass.at[2:].set(rng_params[idx+1: idx+16])
+    # dof_armature  = model.dof_armature.at[6:].set(rng_params[idx:idx+21])
+    # idx += 21
+    body_mass = model.body_mass.at[1:].set(rng_params[idx: idx+16])
     idx += 16
-    qpos0 = model.qpos0.at[7:].set(rng_params[idx:idx+21])
-    idx +=21
     assert idx == len(rng_params)
     return (
       geom_friction,
       dof_frictionloss,
-      dof_armature,
+      # dof_armature,
       body_mass,
-      qpos0
     )
   if rng is None and params is not None:
 
     (geom_friction, 
      dof_frictionloss,
-     dof_armature,
+    #  dof_armature,
      body_mass, 
-     qpos0,
      ) = shift_dynamics(params)
   elif rng is not None and params is None:
     (geom_friction, 
      dof_frictionloss,
-     dof_armature,
+    #  dof_armature,
      body_mass, 
-     qpos0,
      ) = rand_dynamics(rng)
   else:
     raise ValueError("rng and params wrong!")
@@ -424,14 +437,13 @@ def domain_randomize_eval(model: mjx.Model, dr_range, params=None, rng:jax.Array
   in_axes = in_axes.tree_replace({
       "geom_friction": 0,
       "dof_frictionloss": 0,
-      "dof_armature": 0,
+      # "dof_armature": 0,
       "body_mass": 0,
   })
   model = model.tree_replace({
       "geom_friction": geom_friction,
       "dof_frictionloss": dof_frictionloss,
-      "dof_armature": dof_armature,
+      # "dof_armature": dof_armature,
       "body_mass": body_mass,
-      "qpos0" : qpos0,
   })
   return model, in_axes

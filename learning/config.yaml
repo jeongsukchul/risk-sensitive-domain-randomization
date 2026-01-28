@@ -46,7 +46,7 @@ scheduler_mode : 'linear'  # 'linear' or 'exp'
 #sampler cfg
 sampler_update_freq : 1           #set 10 to take long horizon information despite of policy_updates.
 n_sampler_iters : 50                #need to consider in flow 
-success_threshold : .7
+success_threshold : .6
 success_rate_condition : 0.7
 gamma : 0.
 beta : 1.

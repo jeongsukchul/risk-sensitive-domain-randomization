@@ -243,7 +243,44 @@ class PlanarWalker(mjx_env.MjxEnv):
         [5e-2] * 7                           #body iposx
     )
     return low, high
-  
+  @property
+  def dr_range_wide(self) ->dict:
+    low = jp.array(
+      [1]+                               #floor friction
+      [3] * 3+
+      [0.1] *1 +
+      [3] * 2 +
+      [0.1] * 1+
+      [0] * 7
+    )
+    high = jp.array(
+      [1]+                               #floor friction                             
+      [3] * 3+
+      [10] * 1 +
+      [3] * 2 +
+      [10] * 1+   
+      [0] * 7
+      )
+
+    return low, high
+  @property
+  def dr_label(self) -> dict:
+    return ("Left Foot Mass", "Right Foot Mass")
+  @property
+  def ood_range(self) -> dict:
+    low = jp.array(
+        [0.8] +                             #dof_friction
+        [-1.]                                #qpos0
+    )
+    high = jp.array(
+        [1.2] +                             #dof_friction
+        [1.]                                #qpos0
+       
+    )
+    return low, high
+  @property
+  def ood_label(self) -> dict:
+    return ("dof_friction", "joint stiffness equalibrium")
 FLOOR_GEOM_ID = 0
 TORSO_BODY_ID = 1
 RTHIGH_BODY_ID = 2
@@ -395,6 +432,59 @@ def domain_randomize_eval(model: mjx.Model, dr_range, params=None, rng:jax.Array
       "geom_friction": geom_friction,
       "body_mass": body_mass,
       "body_ipos": body_ipos,
+  })
+
+  return model, in_axes
+
+def domain_randomize_ood(model: mjx.Model, dr_range, params=None, rng:jax.Array=None):
+  if rng is not None:
+    dr_low, dr_high = dr_range
+    dist = functools.partial(jax.random.uniform, shape=(len(dr_low)), minval=dr_low, maxval=dr_high)
+
+  def shift_dynamics(params):
+    idx = 0
+    dof_frictionloss = model.dof_frictionloss.at[3:].set(params[idx])
+    idx += 1
+    qpos0 = model.qpos0.at[3:].set(params[idx])
+    idx += 1
+    assert idx == len(params)
+    return (
+      dof_frictionloss,
+      qpos0,
+    )
+  def rand_dynamics(rng):
+    rng_params = dist(rng)
+    idx = 0
+    dof_frictionloss = model.dof_frictionloss.at[3:].set(params[idx])
+    idx += 1
+    qpos0 = model.qpos0.at[3:].set(params[idx])
+    idx += 1
+    assert idx == len(params)
+    return (
+      dof_frictionloss,
+      qpos0,
+    )
+  
+  if rng is None and params is not None:
+    ( 
+      dof_frictionloss,
+      qpos0,
+     ) = shift_dynamics(params)
+  elif rng is not None and params is None:
+    (
+      dof_frictionloss,
+      qpos0,
+    ) = rand_dynamics(rng)
+  else:
+    raise ValueError("rng and params wrong!")
+  in_axes = jax.tree_util.tree_map(lambda x: None, model)
+  in_axes = in_axes.tree_replace({
+      "dof_frictionloss": 0,
+      "qpos0": 0,
+  })
+  model = model.tree_replace({
+      "dof_frictionloss": dof_frictionloss,
+      "qpos0": qpos0,
   })
 
   return model, in_axes

@@ -23,7 +23,6 @@ from mujoco import mjx
 import mujoco  # pylint: disable=unused-import
 from mujoco.mjx._src import math
 
-from mujoco_playground._src import collision
 from custom_envs import mjx_env
 from mujoco_playground._src.manipulation.franka_emika_panda import panda
 from mujoco_playground._src.mjx_env import State  # pylint: disable=g-importing-member
@@ -34,21 +33,24 @@ def default_config() -> config_dict.ConfigDict:
   return config_dict.create(
       ctrl_dt=0.02,
       sim_dt=0.005,
-      episode_length=150,
+      episode_length=300,
       action_repeat=1,
       action_scale=0.04,
       reward_config=config_dict.create(
           scales=config_dict.create(
               # Gripper goes to the box.
-              gripper_box=4.0,
+              gripper_box= .4, #4.0,
               # Box goes to the target mocap.
-              box_target=8.0,
+              box_target= .8, #8.0,
               # Do not collide the barrier.
-              no_barrier_collision=0.25,
+              no_barrier_collision=0.025, # .25,
               # Arm stays close to target pose.
-              robot_target_qpos=0.3,
+              robot_target_qpos=0.03, #.3,
           )
       ),
+      impl="jax",
+      nconmax=12 * 2048,
+      njmax=96,
   )
 
 
@@ -73,10 +75,16 @@ class PandaOpenCabinet(panda.PandaBase):
 
     # Enable hand base collision to shape learning
     self.mj_model.geom("hand_capsule").conaffinity = 3
-    self._mjx_model = mjx.put_model(self.mj_model)
+    self._mjx_model = mjx.put_model(self.mj_model, impl=self._config.impl)
 
     self._post_init(obj_name="handle", keyframe="upright")
     self._barrier_geom = self._mj_model.geom("barrier").id
+
+    # Contact sensor IDs.
+    self._barrier_hand_found_sensor = [
+        self._mj_model.sensor(f"barrier_{geom}_found").id
+        for geom in ["left_finger_pad", "right_finger_pad", "hand_capsule"]
+    ]
 
   def reset(self, rng: jax.Array) -> State:
     """Resets the environment to an initial state."""
@@ -104,8 +112,14 @@ class PandaOpenCabinet(panda.PandaBase):
         jp.array(self._init_ctrl).at[:7].set(self._init_ctrl[:7] + perturb_arm)
     )
 
-    data: mjx.Data = mjx_env.init(
-        self._mjx_model, init_q, jp.zeros(self._mjx_model.nv), ctrl=init_ctrl
+    data: mjx.Data = mjx_env.make_data(
+        self._mj_model,
+        qpos=init_q,
+        qvel=jp.zeros(self._mjx_model.nv),
+        ctrl=init_ctrl,
+        impl=self._mjx_model.impl.value,
+        nconmax=self._config.nconmax,
+        njmax=self._config.njmax,
     )
 
     info = {
@@ -174,12 +188,8 @@ class PandaOpenCabinet(panda.PandaBase):
 
     # Check for collisions with the barrier
     hand_barrier_collision = [
-        collision.geoms_colliding(data, self._barrier_geom, g)
-        for g in [
-            self._left_finger_geom,
-            self._right_finger_geom,
-            self._hand_geom,
-        ]
+        data.sensordata[self._mj_model.sensor_adr[sensor_id]] > 0
+        for sensor_id in self._barrier_hand_found_sensor
     ]
     barrier_collision = sum(hand_barrier_collision) > 0
     no_barrier_collision = 1 - barrier_collision
@@ -196,11 +206,14 @@ class PandaOpenCabinet(panda.PandaBase):
         "robot_target_qpos": robot_target_qpos,
     }
 
-  def _get_obs(self, data: mjx.Data, info: dict[str, Any]) -> jax.Array:
+
+  def _get_obs(self, data: mjx.Data, info: dict[str, Any]) -> dict[str, jax.Array]:
+    # --- Standard deployable observation ---
     gripper_pos = data.site_xpos[self._gripper_site]
     gripper_mat = data.site_xmat[self._gripper_site].ravel()
     target_mat = math.quat_to_mat(data.mocap_quat[self._mocap_target])
-    obs = jp.concatenate([
+    
+    state = jp.concatenate([
         data.qpos,
         data.qvel,
         gripper_pos,
@@ -212,4 +225,191 @@ class PandaOpenCabinet(panda.PandaBase):
         data.ctrl - data.qpos[self._robot_qposadr[:-1]],
     ])
 
-    return obs
+    # --- Privileged state for Critic ---
+    # Includes ground truth physics and internal simulation values
+    privileged_state = jp.concatenate([
+        state,
+        data.qfrc_bias,               # Coriolis, centrifugal, gravity
+        data.actuator_force,          # Applied forces
+        # We append the actual randomized parameters
+        self.mjx_model.geom_friction[HANDLE_GEOM, 0:1],
+        self.mjx_model.body_mass[:],
+        self.mjx_model.actuator_gainprm[:, 0], # Current KP
+        self.mjx_model.dof_damping[:9],
+        self.mjx_model.dof_armature[:9],
+    ])
+
+    return {
+        "state": state,
+        "privileged_state": privileged_state,
+    }
+  @property
+  def nominal_params(self):
+     return jp.concatenate([jp.ones(38)])
+  @property
+  def dr_range(self):
+    """Defines the lower and upper bounds for randomization."""
+    low, high = [], []
+    #38d
+    # 1. Gripper Friction (1 param): U(0.3, 1.5)
+    low.append(jp.array([0.3])); high.append(jp.array([4.]))
+    # 2. Cabinet Handle/Drawer Mass Scale (1 param): U(0.5, 2.0)
+    low.append(jp.array([0.1])); high.append(jp.array([10.0]))
+    # Franka Mass Scale (11 param)
+    low.append(jp.full((11,), 0.8)); high.append(jp.full((11,), 1.2))
+    # 3. Robot Armature Scale (9 params): U(0.8, 1.2)
+    low.append(jp.full((9,), 0.8)); high.append(jp.full((9,), 1.2))
+    # 4. Joint Damping Scale (9 params): U(0.5, 2.0)
+    low.append(jp.full((9,), 0.8)); high.append(jp.full((9,), 1.2))
+    # 5. Actuator Gain (KP) Scale (7 params): U(0.9, 1.1)
+    low.append(jp.full((7,), 0.9)); high.append(jp.full((7,), 1.1))
+
+    return jp.concatenate(low), jp.concatenate(high)
+LEFT_FINGER_GEOM = 73
+RIGHT_FINGER_GEOM = 80
+HANDLE_GEOM = 80
+import functools
+
+def domain_randomize(model: mjx.Model, dr_range: tuple, params: jax.Array = None, rng: jax.Array = None):
+    """Applies randomization to the MJX Model."""
+    dr_low, dr_high = dr_range
+    
+    from mujoco import mj_id2name, mj_name2id
+    # Identify relevant IDs
+    handle_body = model.body_mass.shape[0] - 3 # Or specific name
+    arm_qids = jp.arange(7) # First 7 joints of Panda
+    joint_qids = jp.arange(9) # First 9 joints of Panda
+    link_ids = jp.arange(11)+1
+    if rng is not None:
+        dist = functools.partial(jax.random.uniform, shape=(len(dr_low)), minval=dr_low, maxval=dr_high)
+        # params = jax.random.uniform(rng, (len(dr_low),), minval=dr_low, maxval=dr_high)
+
+    @jax.vmap
+    def shift_dynamics(p):
+        idx = 0
+        # 1. Friction
+        friction = model.geom_friction.at[HANDLE_GEOM, 0].set(p[idx]); idx += 1
+        # 2. Mass
+        mass = model.body_mass.at[handle_body].set(model.body_mass[handle_body] * p[idx]); idx += 1
+        mass = mass.at[:11].set(model.body_mass[link_ids] * p[idx:idx+11]); idx += 11
+        # 3. Armature
+        armature = model.dof_armature.at[joint_qids].set(model.dof_armature[joint_qids] * p[idx:idx+9]); idx += 9
+        # 4. Damping
+        damping = model.dof_damping.at[joint_qids].set(model.dof_damping[joint_qids] * p[idx:idx+9]); idx += 9
+        # 5. Gain/Bias (KP)
+        kp_val = model.actuator_gainprm[arm_qids, 0] * p[idx:idx+7]
+        gain = model.actuator_gainprm.at[arm_qids, 0].set(kp_val)
+        bias = model.actuator_biasprm.at[arm_qids, 1].set(-kp_val); idx += 7
+        
+        armature=model.dof_armature
+        assert idx ==len(dr_low)
+        return friction, mass, armature, damping, gain, bias
+
+    @jax.vmap
+    def rand_dynamics(rng):
+        p = dist(rng)
+        idx = 0
+        # 1. Friction
+        friction = model.geom_friction.at[HANDLE_GEOM, 0].set(p[idx]); idx += 1
+        # 2. Mass
+        mass = model.body_mass.at[handle_body].set(model.body_mass[handle_body] * p[idx]); idx += 1
+        mass = mass.at[:11].set(model.body_mass[link_ids] * p[idx:idx+11]); idx += 11
+        # 3. Armature
+        armature = model.dof_armature.at[joint_qids].set(model.dof_armature[joint_qids] * p[idx:idx+9]); idx += 9
+        # 4. Damping
+        damping = model.dof_damping.at[joint_qids].set(model.dof_damping[joint_qids] * p[idx:idx+9]); idx += 9
+        # 5. Gain/Bias (KP)
+        kp_val = model.actuator_gainprm[arm_qids, 0] * p[idx:idx+7]
+        gain = model.actuator_gainprm.at[arm_qids, 0].set(kp_val)
+        bias = model.actuator_biasprm.at[arm_qids, 1].set(-kp_val); idx += 7
+        
+        armature=model.dof_armature
+        assert idx ==len(dr_low)
+        return friction, mass, armature, damping, gain, bias
+    friction, mass, armature, damping, gain, bias = rand_dynamics(rng) if rng is not None else shift_dynamics(params) 
+
+    # Replace model fields with randomized arrays
+    model = model.tree_replace({
+        'geom_friction': friction,
+        'body_mass': mass,
+        'dof_armature': armature,
+        'dof_damping': damping,
+        'actuator_gainprm': gain,
+        'actuator_biasprm': bias,
+    })
+    
+    # Generate in_axes for JAX transformation
+    in_axes = jax.tree_util.tree_map(lambda x: None, model)
+    in_axes = in_axes.tree_replace({k: 0 for k in ['geom_friction', 'body_mass', 'dof_armature', 'dof_damping', 'actuator_gainprm', 'actuator_biasprm']})
+
+    return model, in_axes
+
+def domain_randomize_eval(model: mjx.Model, dr_range: tuple, params: jax.Array = None, rng: jax.Array = None):
+    """Applies randomization to the MJX Model."""
+    dr_low, dr_high = dr_range
+    
+    from mujoco import mj_id2name, mj_name2id
+    # Identify relevant IDs
+    handle_body = model.body_mass.shape[0] - 3 # Or specific name
+    arm_qids = jp.arange(7) # First 7 joints of Panda
+    joint_qids = jp.arange(9) # First 9 joints of Panda
+    link_ids = jp.arange(11)+1
+    if rng is not None:
+        dist = functools.partial(jax.random.uniform, shape=(len(dr_low)), minval=dr_low, maxval=dr_high)
+        # params = jax.random.uniform(rng, (len(dr_low),), minval=dr_low, maxval=dr_high)
+
+    def shift_dynamics(p):
+        idx = 0
+        # 1. Friction
+        friction = model.geom_friction.at[HANDLE_GEOM, 0].set(p[idx]); idx += 1
+        # 2. Mass
+        mass = model.body_mass.at[handle_body].set(model.body_mass[handle_body] * p[idx]); idx += 1
+        mass = mass.at[:11].set(model.body_mass[link_ids] * p[idx:idx+11]); idx += 11
+        # 3. Armature
+        armature = model.dof_armature.at[joint_qids].set(model.dof_armature[joint_qids] * p[idx:idx+9]); idx += 9
+        # 4. Damping
+        damping = model.dof_damping.at[joint_qids].set(model.dof_damping[joint_qids] * p[idx:idx+9]); idx += 9
+        # 5. Gain/Bias (KP)
+        kp_val = model.actuator_gainprm[arm_qids, 0] * p[idx:idx+7]
+        gain = model.actuator_gainprm.at[arm_qids, 0].set(kp_val)
+        bias = model.actuator_biasprm.at[arm_qids, 1].set(-kp_val); idx += 7
+        
+        assert idx ==len(dr_low)
+        return friction, mass, armature, damping, gain, bias
+
+    def rand_dynamics(rng):
+        p = dist(rng)
+        idx = 0
+        # 1. Friction
+        friction = model.geom_friction.at[HANDLE_GEOM, 0].set(p[idx]); idx += 1
+        # 2. Mass
+        mass = model.body_mass.at[handle_body].set(model.body_mass[handle_body] * p[idx]); idx += 1
+        mass = mass.at[:11].set(model.body_mass[link_ids] * p[idx:idx+11]); idx += 11
+        # 3. Armature
+        armature = model.dof_armature.at[joint_qids].set(model.dof_armature[joint_qids] * p[idx:idx+9]); idx += 9
+        # 4. Damping
+        damping = model.dof_damping.at[joint_qids].set(model.dof_damping[joint_qids] * p[idx:idx+9]); idx += 9
+        # 5. Gain/Bias (KP)
+        kp_val = model.actuator_gainprm[arm_qids, 0] * p[idx:idx+7]
+        gain = model.actuator_gainprm.at[arm_qids, 0].set(kp_val)
+        bias = model.actuator_biasprm.at[arm_qids, 1].set(-kp_val); idx += 7
+        
+        assert idx ==len(dr_low)
+        return friction, mass, armature, damping, gain, bias
+    friction, mass, armature, damping, gain, bias = rand_dynamics(rng) if rng is not None else shift_dynamics(params) 
+
+    # Replace model fields with randomized arrays
+    model = model.tree_replace({
+        'geom_friction': friction,
+        'body_mass': mass,
+        'dof_armature': armature,
+        'dof_damping': damping,
+        'actuator_gainprm': gain,
+        'actuator_biasprm': bias,
+    })
+    
+    # Generate in_axes for JAX transformation
+    in_axes = jax.tree_util.tree_map(lambda x: None, model)
+    in_axes = in_axes.tree_replace({k: 0 for k in ['geom_friction', 'body_mass', 'dof_armature', 'dof_damping', 'actuator_gainprm', 'actuator_biasprm']})
+
+    return model, in_axes
