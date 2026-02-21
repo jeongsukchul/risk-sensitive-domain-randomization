@@ -621,7 +621,7 @@ def train(
     obs_for_approx = jax.tree_util.tree_map(lambda x: x.reshape(-1, *x.shape[2:]), data.observation)
     value_approx = samplerppo_network.value_network.apply(training_state.normalizer_params, training_state.params.value, obs_for_approx)
     print("value approx", value_approx)
-    value_approx =value_approx.mean(0) / episode_length
+    value_approx =value_approx.mean(0) / 2 / episode_length
 
     if "FLOW" not in sampler_choice or sampler_choice!="GMM" or len(dr_range_low)<=20:
       rewards = data.reward     #(K, L, B)
@@ -669,9 +669,9 @@ def train(
     )
     # if sampler_choice != "GMM":
     values = rewards.mean(axis=(0,1)) if sampler_choice!="EPOpt" else 0#+ bootstrap_value 
-    cumulated_values += values
+    # cumulated_values += values
     # else:
-    #   cumulated_values +=value_approx
+    cumulated_values +=value_approx
     # For Debuggin GMM
     # target = Funnel(dim=2, sample_bounds=[-30, 30])
     # target_logprob = jax.vmap(target.log_prob)
@@ -756,10 +756,10 @@ def train(
 
     def update_gmm(gts):
       target_lnpdf = _beta * cumulated_values/sampler_update_freq
-      new_sample_db_state = samplerppo_network.gmm_network.sample_selector.save_samples(gmm_training_state.model_state, \
+      new_sample_db_state = samplerppo_network.gmm_network.sample_selector.save_samples(gts.model_state, \
                     gts.sample_db_state, dynamics_params_sampler, target_lnpdf, \
                       jnp.zeros_like(dynamics_params), mapping)
-      new_gmm_training_state = gmm_training_state._replace(sample_db_state=new_sample_db_state)
+      new_gmm_training_state = gts._replace(sample_db_state=new_sample_db_state)
       new_gmm_training_state = gmm_update_fn(new_gmm_training_state, key_update)
 
       return new_gmm_training_state, 1.
@@ -885,9 +885,6 @@ def train(
       # bootstrap_value = value_apply(training_state.normalizer_params, training_state.params.value, terminal_obs)
       # values = rewards.mean(axis=(0,1))# + bootstrap_value
       values =  value_apply(training_state.normalizer_params, training_state.params.value, first_obs)
-      discounts = jnp.power(discounting, jnp.arange(values.shape[0]))
-      # print("values", values)
-      # print('discounst', discounts)
       # values= (discounts[...,None]*values).mean(0)
       values= values.mean(0)
       # values =  value_apply(training_state.normalizer_params, training_state.params.value, datas.next_observation)

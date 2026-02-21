@@ -241,7 +241,7 @@ class Balance(mjx_env.MjxEnv):
     privileged_state = jp.concatenate([
       state,
       self.mjx_model.body_mass[2:3],
-      self.mjx_model.body_inertia[2,:],
+      # self.mjx_model.body_inertia[2,:],
       # self.mjx_model.dof_frictionloss[1:2],
       # self.mjx_model.dof_armature[1:2],
       # self.mjx_model.dof_damping[1:2],

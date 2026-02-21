@@ -21,8 +21,8 @@ asymmetric_critic: true
 distributional_q : false
 
 # logging
-wandb_project: test
-wandb_entity: ??? 
+wandb_project: gradient_test
+wandb_entity: tjrcjf410-seoul-national-university
 wandb_silent: false
 use_wandb: true
 save_csv: true
@@ -45,7 +45,7 @@ scheduler_mode : 'linear'  # 'linear' or 'exp'
 
 #sampler cfg
 sampler_update_freq : 1           #set 10 to take long horizon information despite of policy_updates.
-n_sampler_iters : 50                #need to consider in flow 
+n_sampler_iters : 30                #need to consider in flow 
 success_threshold : .6
 success_rate_condition : 0.7
 gamma : 0.
