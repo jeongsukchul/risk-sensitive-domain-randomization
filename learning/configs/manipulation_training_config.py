@@ -50,6 +50,7 @@ def manipulation_ppo_config(env_name: str) -> config_dict.ConfigDict:
     rl_config.batch_size = 512
     rl_config.max_grad_norm = 1.0
     rl_config.network_factory.policy_hidden_layer_sizes = (256, 256, 256)
+    rl_config.network_factory.value_obs_key = "privileged_state"
   elif env_name == "AlohaSinglePegInsertion":
     rl_config.num_timesteps = 150_000_000
     rl_config.num_evals = 10
@@ -62,6 +63,7 @@ def manipulation_ppo_config(env_name: str) -> config_dict.ConfigDict:
     rl_config.num_envs = 1024
     rl_config.batch_size = 512
     rl_config.network_factory.policy_hidden_layer_sizes = (256, 256, 256, 256)
+    rl_config.network_factory.value_obs_key = "privileged_state"
   elif env_name == "PandaOpenCabinet":
     rl_config.num_timesteps = 40_000_000
     rl_config.num_evals = 4
@@ -128,6 +130,7 @@ def manipulation_ppo_config(env_name: str) -> config_dict.ConfigDict:
     rl_config.num_resets_per_eval = 1
     rl_config.num_eval_envs = 32
     rl_config.network_factory.policy_hidden_layer_sizes = (64, 64, 64, 64)
+    rl_config.network_factory.value_obs_key = "privileged_state"
   elif env_name == "LeapCubeRotateZAxis":
     rl_config.num_timesteps = 100_000_000
     rl_config.num_evals = 10

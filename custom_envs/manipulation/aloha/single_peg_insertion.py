@@ -20,11 +20,12 @@ import jax
 from jax import numpy as jp
 from ml_collections import config_dict
 from mujoco import mjx
+import functools
 
 from custom_envs import mjx_env
 from mujoco_playground._src import reward as reward_util
-from mujoco_playground._src.manipulation.aloha import aloha_constants as consts
-from mujoco_playground._src.manipulation.aloha import base as aloha_base
+from custom_envs.manipulation.aloha import aloha_constants as consts
+from custom_envs.manipulation.aloha import base as aloha_base
 
 
 def default_config() -> config_dict.ConfigDict:
@@ -48,6 +49,9 @@ def default_config() -> config_dict.ConfigDict:
               peg_insertion_reward=8,
           )
       ),
+      impl="jax",
+      nconmax=24 * 1024,
+      njmax=256,
   )
 
 
@@ -93,11 +97,14 @@ class SinglePegInsertion(aloha_base.AlohaEnv):
     init_q = self._init_q.at[self._peg_qadr : self._peg_qadr + 2].add(peg_xy)
     init_q = init_q.at[self._socket_qadr : self._socket_qadr + 2].add(socket_xy)
 
-    data = mjx_env.init(
-        self._mjx_model,
-        init_q,
-        jp.zeros(self._mjx_model.nv, dtype=float),
+    data = mjx_env.make_data(
+        self._mj_model,
+        qpos=init_q,
+        qvel=jp.zeros(self._mjx_model.nv, dtype=float),
         ctrl=self._init_ctrl,
+        impl=self._mjx_model.impl.value,
+        nconmax=self._config.nconmax,
+        njmax=self._config.njmax,
     )
 
     info = {"rng": rng}
@@ -144,6 +151,9 @@ class SinglePegInsertion(aloha_base.AlohaEnv):
     )
 
     done = out_of_bounds | jp.isnan(data.qpos).any() | jp.isnan(data.qvel).any()
+    reward_finite = jp.isfinite(reward)
+    done = done | (~reward_finite)
+    reward = jp.where(reward_finite, reward, 0.0)
     done = done.astype(float)
     state.metrics.update(
         **rewards,
@@ -153,7 +163,7 @@ class SinglePegInsertion(aloha_base.AlohaEnv):
     obs = self._get_obs(data)
     return mjx_env.State(data, obs, reward, done, state.metrics, state.info)
 
-  def _get_obs(self, data: mjx.Data) -> jax.Array:
+  def _get_obs(self, data: mjx.Data) -> dict[str, jax.Array]:
     left_gripper_pos = data.site_xpos[self._left_gripper_site]
     socket_pos = data.xpos[self._socket_body]
     right_gripper_pos = data.site_xpos[self._right_gripper_site]
@@ -163,7 +173,7 @@ class SinglePegInsertion(aloha_base.AlohaEnv):
     socket_z = data.xmat[self._socket_body].ravel()[6:]
     peg_z = data.xmat[self._peg_body].ravel()[6:]
 
-    obs = jp.concatenate([
+    state = jp.concatenate([
         data.qpos,
         data.qvel,
         left_gripper_pos,
@@ -176,7 +186,43 @@ class SinglePegInsertion(aloha_base.AlohaEnv):
         peg_z,
     ])
 
-    return obs
+    privileged_state = jp.concatenate([
+        state,
+        data.qfrc_bias,
+        data.actuator_force,
+        jp.mean(self.mjx_model.geom_friction[:, 0:1], axis=0),
+        self.mjx_model.body_mass[:],
+        self.mjx_model.actuator_gainprm[:, 0],
+        self.mjx_model.dof_damping[:16],
+        self.mjx_model.dof_armature[:16],
+    ])
+
+    return {
+        "state": state,
+        "privileged_state": privileged_state,
+    }
+
+  @property
+  def nominal_params(self) -> jax.Array:
+    return jp.ones(5)
+
+  @property
+  def dr_range(self) -> tuple[jax.Array, jax.Array]:
+    low = jp.array([
+        .9,  # geom friction (mu)
+        .9,  # object mass scale (socket & peg)
+        0.9,  # robot mass scale
+        0.9,  # joint damping scale
+        0.9,  # actuator gain scale
+    ])
+    high = jp.array([
+        1.1,
+        1.1,
+        1.1,
+        1.1,
+        1.1,
+    ])
+    return low, high
 
   def _get_reward(
       self, data: mjx.Data, use_peg_insertion_reward: bool
@@ -252,3 +298,100 @@ class SinglePegInsertion(aloha_base.AlohaEnv):
         "peg_z_up": peg_orientation * peg_lift,
         "peg_insertion_reward": peg_insertion_reward,
     }
+
+
+def domain_randomize(
+    model: mjx.Model,
+    dr_range: tuple[jax.Array, jax.Array],
+    params: jax.Array = None,
+    rng: jax.Array = None,
+):
+  """Applies domain randomization to AlohaSinglePegInsertion MJX model.
+
+  Supports both single params (shape [D]) and batched params (shape [B, D]).
+  """
+  dr_low, dr_high = dr_range
+  socket_body = model.body_mass.shape[0] - 2
+  peg_body = model.body_mass.shape[0] - 1
+  obj_dofs = 12  # two free joints
+
+  def _shift(p):
+    idx = 0
+    friction_mu = p[idx]
+    idx += 1
+    obj_mass_scale = p[idx]
+    idx += 1
+    robot_mass_scale = p[idx]
+    idx += 1
+    damping_scale = p[idx]
+    idx += 1
+    gain_scale = p[idx]
+    idx += 1
+    assert idx == len(dr_low)
+
+    geom_friction = model.geom_friction.at[:, 0].set(friction_mu)
+    body_mass = model.body_mass
+    body_mass = body_mass.at[1:socket_body].set(body_mass[1:socket_body] * robot_mass_scale)
+    body_mass = body_mass.at[socket_body].set(body_mass[socket_body] * obj_mass_scale)
+    body_mass = body_mass.at[peg_body].set(body_mass[peg_body] * obj_mass_scale)
+
+    dof_damping = model.dof_damping.at[: model.nv - obj_dofs].set(
+        model.dof_damping[: model.nv - obj_dofs] * damping_scale
+    )
+    dof_armature = model.dof_armature
+
+    kp_val = model.actuator_gainprm[:, 0] * gain_scale
+    actuator_gainprm = model.actuator_gainprm.at[:, 0].set(kp_val)
+    actuator_biasprm = model.actuator_biasprm.at[:, 1].set(-kp_val)
+
+    return geom_friction, body_mass, dof_damping, dof_armature, actuator_gainprm, actuator_biasprm
+
+  if rng is not None:
+    if rng.ndim == 1:
+      p = jax.random.uniform(rng, (len(dr_low),), minval=dr_low, maxval=dr_high)
+      geom_friction, body_mass, dof_damping, dof_armature, actuator_gainprm, actuator_biasprm = _shift(p)
+    else:
+      dist = functools.partial(
+          jax.random.uniform, shape=(len(dr_low),), minval=dr_low, maxval=dr_high
+      )
+      geom_friction, body_mass, dof_damping, dof_armature, actuator_gainprm, actuator_biasprm = jax.vmap(
+          lambda key: _shift(dist(key))
+      )(rng)
+  else:
+    if params.ndim == 1:
+      geom_friction, body_mass, dof_damping, dof_armature, actuator_gainprm, actuator_biasprm = _shift(params)
+    else:
+      geom_friction, body_mass, dof_damping, dof_armature, actuator_gainprm, actuator_biasprm = jax.vmap(_shift)(params)
+
+  model = model.tree_replace({
+      "geom_friction": geom_friction,
+      "body_mass": body_mass,
+      "dof_damping": dof_damping,
+      "dof_armature": dof_armature,
+      "actuator_gainprm": actuator_gainprm,
+      "actuator_biasprm": actuator_biasprm,
+  })
+
+  in_axes = jax.tree_util.tree_map(lambda x: None, model)
+  if (params is not None and getattr(params, "ndim", 0) == 2) or (
+      rng is not None and getattr(rng, "ndim", 0) == 2
+  ):
+    in_axes = in_axes.tree_replace({
+        "geom_friction": 0,
+        "body_mass": 0,
+        "dof_damping": 0,
+        "dof_armature": 0,
+        "actuator_gainprm": 0,
+        "actuator_biasprm": 0,
+    })
+
+  return model, in_axes
+
+
+def domain_randomize_eval(
+    model: mjx.Model,
+    dr_range: tuple[jax.Array, jax.Array],
+    params: jax.Array = None,
+    rng: jax.Array = None,
+):
+  return domain_randomize(model=model, dr_range=dr_range, params=params, rng=rng)

@@ -27,6 +27,7 @@ from custom_envs import mjx_env
 from mujoco_playground._src import reward as reward_util
 from custom_envs.manipulation.franka_emika_panda_robotiq import panda_robotiq
 import numpy as np
+import functools
 
 WORKSPACE_MIN = (0.3, -0.5, 0.0)
 WORKSPACE_MAX = (0.75, 0.7, 0.5)
@@ -265,6 +266,9 @@ class PandaRobotiqPushCube(panda_robotiq.PandaRobotiqBase):
         | jp.isnan(state.data.qpos).any()
         | jp.isnan(state.data.qvel).any()
     )
+    reward_finite = jp.isfinite(reward)
+    done = done | (~reward_finite)
+    reward = jp.where(reward_finite, reward, 0.0)
     done = done.astype(float)
 
     # get observations
@@ -492,7 +496,21 @@ class PandaRobotiqPushCube(panda_robotiq.PandaRobotiqBase):
     )
     obs = obs_history.reshape((-1, obs_size))[obs_idx[0]]
 
-    return obs
+    privileged_state = jp.concatenate([
+        obs,
+        state.data.qfrc_bias,
+        state.data.actuator_force,
+        jp.mean(self.mjx_model.geom_friction[:, 0:1], axis=0),
+        self.mjx_model.body_mass[:],
+        self.mjx_model.actuator_gainprm[:, 0],
+        self.mjx_model.dof_damping[:9],
+        self.mjx_model.dof_armature[:9],
+    ])
+
+    return {
+        "state": obs,
+        "privileged_state": privileged_state,
+    }
 
   def _get_single_obs(self, data: mjx.Data, info: dict[str, Any]) -> jax.Array:
     target_pos = data.mocap_pos[self._mocap_target, :].ravel()
@@ -565,3 +583,120 @@ class PandaRobotiqPushCube(panda_robotiq.PandaRobotiqBase):
   @property
   def action_size(self):
     return 7
+
+  @property
+  def nominal_params(self) -> jax.Array:
+    return jp.ones(5)
+
+  @property
+  def dr_range(self) -> tuple[jax.Array, jax.Array]:
+    low = jp.array([
+        0.3,  # geom friction (mu)
+        0.1,  # box mass scale
+        0.8,  # robot mass scale
+        0.8,  # joint damping scale
+        0.9,  # actuator gain scale
+    ])
+    high = jp.array([
+        3.0,
+        8.0,
+        1.2,
+        1.2,
+        1.1,
+    ])
+    return low, high
+
+
+def domain_randomize(
+    model: mjx.Model,
+    dr_range: tuple[jax.Array, jax.Array],
+    params: jax.Array = None,
+    rng: jax.Array = None,
+):
+  """Applies domain randomization to PandaRobotiqPushCube MJX model.
+
+  Supports both single params (shape [D]) and batched params (shape [B, D]).
+  """
+  dr_low, dr_high = dr_range
+  box_body = model.body_mass.shape[0] - 2  # 'box' (mocap_target is last)
+  obj_dofs = 6  # free joint
+
+  def _shift(p):
+    idx = 0
+    friction_mu = p[idx]
+    idx += 1
+    box_mass_scale = p[idx]
+    idx += 1
+    robot_mass_scale = p[idx]
+    idx += 1
+    damping_scale = p[idx]
+    idx += 1
+    gain_scale = p[idx]
+    idx += 1
+    assert idx == len(dr_low)
+
+    geom_friction = model.geom_friction.at[:, 0].set(friction_mu)
+    body_mass = model.body_mass
+    body_mass = body_mass.at[1:box_body].set(body_mass[1:box_body] * robot_mass_scale)
+    body_mass = body_mass.at[box_body].set(body_mass[box_body] * box_mass_scale)
+
+    dof_damping = model.dof_damping.at[: model.nv - obj_dofs].set(
+        model.dof_damping[: model.nv - obj_dofs] * damping_scale
+    )
+    dof_armature = model.dof_armature
+
+    kp_val = model.actuator_gainprm[:, 0] * gain_scale
+    actuator_gainprm = model.actuator_gainprm.at[:, 0].set(kp_val)
+    actuator_biasprm = model.actuator_biasprm.at[:, 1].set(-kp_val)
+
+    return geom_friction, body_mass, dof_damping, dof_armature, actuator_gainprm, actuator_biasprm
+
+  if rng is not None:
+    if rng.ndim == 1:
+      p = jax.random.uniform(rng, (len(dr_low),), minval=dr_low, maxval=dr_high)
+      geom_friction, body_mass, dof_damping, dof_armature, actuator_gainprm, actuator_biasprm = _shift(p)
+    else:
+      dist = functools.partial(
+          jax.random.uniform, shape=(len(dr_low),), minval=dr_low, maxval=dr_high
+      )
+      geom_friction, body_mass, dof_damping, dof_armature, actuator_gainprm, actuator_biasprm = jax.vmap(
+          lambda key: _shift(dist(key))
+      )(rng)
+  else:
+    if params.ndim == 1:
+      geom_friction, body_mass, dof_damping, dof_armature, actuator_gainprm, actuator_biasprm = _shift(params)
+    else:
+      geom_friction, body_mass, dof_damping, dof_armature, actuator_gainprm, actuator_biasprm = jax.vmap(_shift)(params)
+
+  model = model.tree_replace({
+      "geom_friction": geom_friction,
+      "body_mass": body_mass,
+      "dof_damping": dof_damping,
+      "dof_armature": dof_armature,
+      "actuator_gainprm": actuator_gainprm,
+      "actuator_biasprm": actuator_biasprm,
+  })
+
+  in_axes = jax.tree_util.tree_map(lambda x: None, model)
+  if (params is not None and getattr(params, "ndim", 0) == 2) or (
+      rng is not None and getattr(rng, "ndim", 0) == 2
+  ):
+    in_axes = in_axes.tree_replace({
+        "geom_friction": 0,
+        "body_mass": 0,
+        "dof_damping": 0,
+        "dof_armature": 0,
+        "actuator_gainprm": 0,
+        "actuator_biasprm": 0,
+    })
+
+  return model, in_axes
+
+
+def domain_randomize_eval(
+    model: mjx.Model,
+    dr_range: tuple[jax.Array, jax.Array],
+    params: jax.Array = None,
+    rng: jax.Array = None,
+):
+  return domain_randomize(model=model, dr_range=dr_range, params=params, rng=rng)

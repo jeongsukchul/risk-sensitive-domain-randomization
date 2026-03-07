@@ -25,7 +25,7 @@ import numpy as np
 
 from mujoco_playground._src import collision
 from custom_envs import mjx_env
-from mujoco_playground._src.manipulation.aloha import aloha_constants as consts
+from custom_envs.manipulation.aloha import aloha_constants as consts
 
 
 def get_assets() -> Dict[str, bytes]:
@@ -51,15 +51,16 @@ class AlohaEnv(mjx_env.MjxEnv):
   ) -> None:
     super().__init__(config, config_overrides)
 
+    self._model_assets = get_assets()
     self._mj_model = mujoco.MjModel.from_xml_string(
-        epath.Path(xml_path).read_text(), assets=get_assets()
+        epath.Path(xml_path).read_text(), assets=self._model_assets
     )
     self._mj_model.opt.timestep = self._config.sim_dt
 
     self._mj_model.vis.global_.offwidth = 3840
     self._mj_model.vis.global_.offheight = 2160
 
-    self._mjx_model =  mjx.put_model(self._mj_model, impl=self._config.impl)
+    self._mjx_model = mjx.put_model(self._mj_model, impl=self._config.impl)
     self._xml_path = xml_path
 
   def _post_init_aloha(self, keyframe: str = "home"):
@@ -82,6 +83,23 @@ class AlohaEnv(mjx_env.MjxEnv):
         for j in consts.FINGER_JOINTS
     ])
 
+    # Contact sensor IDs.
+    #
+    # Some ALOHA XMLs may not define these contact sensors. If absent, we fall
+    # back to geometric collision checks in `hand_table_collision`.
+    table_finger_found_sensor: list[int] = []
+    for geom in consts.FINGER_GEOMS:
+      try:
+        table_finger_found_sensor.append(
+            self._mj_model.sensor("table_" + geom + "_found").id
+        )
+      except KeyError:
+        table_finger_found_sensor = []
+        break
+    self._table_finger_found_sensor = (
+        table_finger_found_sensor if table_finger_found_sensor else None
+    )
+
   @property
   def xml_path(self) -> str:
     return self._xml_path
@@ -99,7 +117,14 @@ class AlohaEnv(mjx_env.MjxEnv):
     return self._mjx_model
 
   def hand_table_collision(self, data) -> jp.ndarray:
-    # Check for collisions with the floor.
+    if self._table_finger_found_sensor is not None:
+      hand_table_collisions = [
+          data.sensordata[self._mj_model.sensor_adr[sensorid]] > 0
+          for sensorid in self._table_finger_found_sensor
+      ]
+      return (sum(hand_table_collisions) > 0).astype(float)
+
+    # Fallback: compute collisions directly (works even when sensors are absent).
     hand_table_collisions = [
         collision.geoms_colliding(data, self._table_geom, g)
         for g in self._finger_geoms

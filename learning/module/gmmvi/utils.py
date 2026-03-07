@@ -2,7 +2,7 @@ import jax.numpy as jnp
 import jax
 import matplotlib.pyplot as plt
 import chex
-from typing import List
+from typing import List, Optional, Sequence, Tuple
 import wandb
 import numpy as np
 from matplotlib.ticker import MaxNLocator
@@ -117,3 +117,209 @@ def visualise(log_prob_fn, dr_range_low:chex.Array, dr_range_high : chex.Array, 
         plt.show()
 
     return fig, fig2
+
+
+def _subsample_points(
+    x: Optional[chex.Array],
+    max_points: int,
+    key: jax.Array,
+) -> Optional[chex.Array]:
+    if x is None:
+        return None
+    n = x.shape[0]
+    if n <= max_points:
+        return x
+    idx = jax.random.choice(key, n, shape=(max_points,), replace=False)
+    return x[idx]
+
+
+def _make_2d_grid(low_i, high_i, low_j, high_j, num_grid):
+    xi = jnp.linspace(low_i - 0.5, high_i + 0.5, num_grid)
+    xj = jnp.linspace(low_j - 0.5, high_j + 0.5, num_grid)
+    X, Y = jnp.meshgrid(xi, xj)
+    return X, Y
+
+
+def _evaluate_pair_marginal_mc(
+    log_prob_fn,
+    X: chex.Array,            # (G, G)
+    Y: chex.Array,            # (G, G)
+    dim_x: int,
+    dim_y: int,
+    context_samples: chex.Array,   # (M, D)
+) -> np.ndarray:
+    """
+    Approximate pairwise marginal by averaging p(x_i, x_j, x_-ij)
+    over Monte Carlo context samples for the remaining dimensions.
+    """
+    G1, G2 = X.shape
+    M, D = context_samples.shape
+    N = G1 * G2
+
+    xy = jnp.stack([X.ravel(), Y.ravel()], axis=-1)  # (N, 2)
+
+    # Repeat each grid point for each context sample
+    full = jnp.repeat(context_samples[None, :, :], N, axis=0)   # (N, M, D)
+    full = full.at[:, :, dim_x].set(xy[:, 0][:, None])
+    full = full.at[:, :, dim_y].set(xy[:, 1][:, None])
+
+    full_flat = full.reshape(N * M, D)  # (N*M, D)
+
+    logp = log_prob_fn(sample=full_flat)   # (N*M,)
+    p = jnp.exp(logp).reshape(N, M)        # (N, M)
+
+    # Monte Carlo average over other dimensions
+    p_avg = jnp.mean(p, axis=1)            # (N,)
+
+    return np.asarray(p_avg.reshape(G1, G2))
+
+
+def visualise_pairwise_2d_marginal(
+    log_prob_fn,
+    dr_range_low: chex.Array,
+    dr_range_high: chex.Array,
+    samples: Optional[chex.Array] = None,
+    eval_samples: Optional[chex.Array] = None,
+    dims: Optional[Sequence[int]] = None,
+    max_scatter_points: int = 300,
+    marginal_mc_samples: int = 64,
+    num_grid: int = 80,
+    show: bool = False,
+):
+    """
+    Pairwise 2D visualization using Monte Carlo averaging over non-plotted dimensions.
+
+    If D=2, this reduces to a normal 2D contour.
+    If D>2, each subplot approximates the pairwise marginal by averaging over
+    the remaining dimensions using `samples` or `eval_samples`.
+    """
+    plt.close("all")
+
+    dr_range_low = jnp.asarray(dr_range_low)
+    dr_range_high = jnp.asarray(dr_range_high)
+    D = dr_range_low.shape[0]
+
+    if dims is None:
+        dims = tuple(range(D))
+    else:
+        dims = tuple(dims)
+
+    if len(dims) < 2:
+        raise ValueError("Need at least 2 dimensions.")
+
+    # Context samples used for marginalization
+    if samples is not None:
+        context_source = samples
+    elif eval_samples is not None:
+        context_source = eval_samples
+    else:
+        raise ValueError(
+            "For averaged pairwise plots with D>2, provide `samples` or `eval_samples` "
+            "to use as Monte Carlo context samples."
+        )
+
+    key_ctx = jax.random.PRNGKey(123)
+    context_samples = _subsample_points(context_source, marginal_mc_samples, key_ctx)
+
+    key1 = jax.random.PRNGKey(0)
+    key2 = jax.random.PRNGKey(1)
+    samples_plot = _subsample_points(samples, max_scatter_points, key1) if samples is not None else None
+    eval_samples_plot = _subsample_points(eval_samples, max_scatter_points, key2) if eval_samples is not None else None
+
+    K = len(dims)
+    fig, axes = plt.subplots(K, K, figsize=(3.5 * K, 3.5 * K), squeeze=False)
+    fig.subplots_adjust(wspace=0.15, hspace=0.15)
+
+    mappable = None
+
+    for row, dim_i in enumerate(dims):
+        for col, dim_j in enumerate(dims):
+            ax = axes[row, col]
+
+            if row < col:
+                ax.axis("off")
+                continue
+
+            if row == col:
+                # Simple histogram on diagonal
+                if context_source is not None:
+                    vals = np.asarray(context_source[:, dim_i])
+                    ax.hist(vals, bins=30, density=True, alpha=0.8)
+                ax.set_xlim(float(dr_range_low[dim_i]), float(dr_range_high[dim_i]))
+                ax.xaxis.set_major_locator(MaxNLocator(nbins=6))
+                if row == K - 1:
+                    ax.set_xlabel(f"dim {dim_i}")
+                else:
+                    ax.set_xticklabels([])
+                ax.set_yticklabels([])
+                continue
+
+            X, Y = _make_2d_grid(
+                float(dr_range_low[dim_j]),
+                float(dr_range_high[dim_j]),
+                float(dr_range_low[dim_i]),
+                float(dr_range_high[dim_i]),
+                num_grid,
+            )
+
+            Z = _evaluate_pair_marginal_mc(
+                log_prob_fn=log_prob_fn,
+                X=X,
+                Y=Y,
+                dim_x=dim_j,   # x-axis
+                dim_y=dim_i,   # y-axis
+                context_samples=context_samples,
+            )
+
+            ctf = ax.contourf(X, Y, Z, levels=20, cmap="viridis")
+            mappable = ctf
+
+            if samples_plot is not None:
+                ax.scatter(
+                    np.asarray(samples_plot[:, dim_j]),
+                    np.asarray(samples_plot[:, dim_i]),
+                    c="r",
+                    alpha=0.35,
+                    marker="x",
+                    s=18,
+                    label="samples" if (row == 1 and col == 0) else None,
+                )
+
+            if eval_samples_plot is not None:
+                ax.scatter(
+                    np.asarray(eval_samples_plot[:, dim_j]),
+                    np.asarray(eval_samples_plot[:, dim_i]),
+                    c="b",
+                    alpha=0.35,
+                    marker="x",
+                    s=18,
+                    label="eval_samples" if (row == 1 and col == 0) else None,
+                )
+
+            ax.set_xlim(float(dr_range_low[dim_j]), float(dr_range_high[dim_j]))
+            ax.set_ylim(float(dr_range_low[dim_i]), float(dr_range_high[dim_i]))
+            ax.xaxis.set_major_locator(MaxNLocator(nbins=6))
+            ax.yaxis.set_major_locator(MaxNLocator(nbins=6))
+
+            if row == K - 1:
+                ax.set_xlabel(f"dim {dim_j}")
+            else:
+                ax.set_xticklabels([])
+
+            if col == 0:
+                ax.set_ylabel(f"dim {dim_i}")
+            else:
+                ax.set_yticklabels([])
+
+    if mappable is not None:
+        cbar = fig.colorbar(mappable, ax=axes, shrink=0.9, pad=0.02)
+        cbar.set_label("MC-averaged density")
+
+    handles, labels = axes[min(1, K - 1), 0].get_legend_handles_labels()
+    if handles:
+        fig.legend(handles, labels, loc="upper right", frameon=True)
+
+    if show:
+        plt.show()
+
+    return fig, None

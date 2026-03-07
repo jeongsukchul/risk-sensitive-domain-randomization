@@ -35,6 +35,7 @@ mjx_env.ensure_menagerie_exists()  # Ensure menagerie exists when module is impo
 _envs = {
     "AlohaHandOver": aloha_handover.HandOver,
     "AlohaSinglePegInsertion": aloha_peg.SinglePegInsertion,
+    "AlohaPegInsertion": aloha_peg.SinglePegInsertion,
     "PandaPickCube": panda_pick.PandaPickCube,
     "PandaPickCubeOrientation": panda_pick.PandaPickCubeOrientation,
     "PandaPickCubeCartesian": panda_pick_cartesian.PandaPickCubeCartesian,
@@ -47,6 +48,7 @@ _envs = {
 _cfgs = {
     "AlohaHandOver": aloha_handover.default_config,
     "AlohaSinglePegInsertion": aloha_peg.default_config,
+    "AlohaPegInsertion": aloha_peg.default_config,
     "PandaPickCube": panda_pick.default_config,
     "PandaPickCubeOrientation": panda_pick.default_config,
     "PandaPickCubeCartesian": panda_pick_cartesian.default_config,
@@ -57,19 +59,27 @@ _cfgs = {
 }
 
 _randomizer = {
+    "AlohaHandOver": aloha_handover.domain_randomize,
+    "AlohaSinglePegInsertion": aloha_peg.domain_randomize,
+    "AlohaPegInsertion": aloha_peg.domain_randomize,
     "LeapCubeRotateZAxis": leap_rotate_z.domain_randomize,
     "LeapCubeReorient": leap_cube_reorient.domain_randomize,
     "PandaOpenCabinet": panda_open_cabinet.domain_randomize,
     "PandaPickCube": panda_pick.domain_randomize,
     "PandaPickCubeOrientation": panda_pick.domain_randomize,
+    "PandaRobotiqPushCube": robotiq_push_cube.domain_randomize,
 }
 
 _randomizer_eval = {
     # "LeapCubeRotateZAxis": leap_rotate_z.domain_randomize_eval,
+    "AlohaHandOver": aloha_handover.domain_randomize_eval,
+    "AlohaSinglePegInsertion": aloha_peg.domain_randomize_eval,
+    "AlohaPegInsertion": aloha_peg.domain_randomize_eval,
     "LeapCubeReorient": leap_cube_reorient.domain_randomize_eval,
     "PandaOpenCabinet": panda_open_cabinet.domain_randomize_eval,
     "PandaPickCube": panda_pick.domain_randomize_eval,
     "PandaPickCubeOrientation": panda_pick.domain_randomize_eval,
+    "PandaRobotiqPushCube": robotiq_push_cube.domain_randomize_eval,
 }
 
 def __getattr__(name):

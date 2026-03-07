@@ -576,6 +576,7 @@ def train(
   ) -> Tuple[Tuple[TrainingState, envs.State, PRNGKey], Metrics]:
     training_state, state, cumulated_values, key = carry
     key_sgd, key_generate_unroll, param_key, key_update, new_key = jax.random.split(key, 5)
+    rewards = None
     if sampler_choice=="NODR":
       dynamics_params = jnp.ones((num_envs// jax.process_count(), len(dr_range_low))) * nominal_dynamics_params[None, :]
     elif sampler_choice=="UDR" or sampler_choice=="EPOpt":
@@ -591,21 +592,22 @@ def train(
       flow_model = nnx.merge(samplerppo_network.flow_network, training_state.flow_state)
       dynamics_params_sampler, logp = flow_model.sample((num_envs // jax.process_count() // local_devices_to_use,),\
                                                     rng=param_key)
-      data = get_experience(training_state, state, dynamics_params_sampler,\
+      sampler_data = get_experience(training_state, state, dynamics_params_sampler,\
             key_generate_unroll, unroll_length, batch_size * num_minibatches // num_envs,)[1]
-      rewards = data.reward
+      rewards = sampler_data.reward
       
       dynamics_params = jax.random.uniform(param_key2, shape=(num_envs //jax.process_count(), len(dr_range_low)), minval=dr_range_low, maxval=dr_range_high)
 
     elif sampler_choice == "GMM":
         dynamics_params, mapping = samplerppo_network.gmm_network.model.sample(\
           training_state.gmm_training_state.model_state.gmm_state, param_key, num_envs //jax.process_count())
-        if False: # len(dr_range_low)>20:
+        use_gmm_selector = False  # TODO: enable for high-D if desired.
+        if use_gmm_selector:  # e.g. len(dr_range_low) > 20
           dynamics_params_sampler, mapping = samplerppo_network.gmm_network.sample_selector.select_samples(\
                 training_state.gmm_training_state.model_state, param_key)
-          data = get_experience(training_state, state, dynamics_params_sampler,\
+          sampler_data = get_experience(training_state, state, dynamics_params_sampler,\
               key_generate_unroll, unroll_length, batch_size * num_minibatches // num_envs,)[1]
-          rewards = data.reward
+          rewards = sampler_data.reward
         else:
           dynamics_params_sampler=dynamics_params
     else:
@@ -623,8 +625,8 @@ def train(
     print("value approx", value_approx)
     value_approx =value_approx.mean(0) / 2 / episode_length
 
-    if "FLOW" not in sampler_choice or sampler_choice!="GMM" or len(dr_range_low)<=20:
-      rewards = data.reward     #(K, L, B)
+    if rewards is None:
+      rewards = data.reward  # (K, L, B)
     # Have leading dimensions (batch_size * num_minibatches, unroll_length)
     data = jax.tree_util.tree_map(lambda x: jnp.swapaxes(x, 1, 2), data)
     data = jax.tree_util.tree_map(
@@ -997,6 +999,29 @@ def train(
     )
     logging.info(metrics)
     progress_fn(0, metrics)
+    if sampler_choice=="GMM":
+      sample_key, local_key = jax.random.split(local_key)
+      eval_samples = samplerppo_network.gmm_network.model.sample(_unpmap(\
+        training_state.gmm_training_state.model_state.gmm_state), sample_key, 2**14)[0]
+      log_prob_fn = jax.vmap(functools.partial(samplerppo_network.gmm_network.model.log_density,\
+                  gmm_state=_unpmap(training_state.gmm_training_state.model_state.gmm_state)))
+      model_fig, _ = gmmvi_utils.visualise_pairwise_2d_marginal(
+        log_prob_fn=log_prob_fn,
+        dr_range_low=dr_range_low,
+        dr_range_high=dr_range_high,
+        # samples=samples,
+        eval_samples=eval_samples,
+        show=False,
+      )
+
+      model_fig.tight_layout()
+      model_fig.canvas.draw()
+      gmm_frames.append(np.asarray(model_fig.canvas.buffer_rgba())[...,:3])
+      if use_wandb:
+        wandb.log(
+                {"Sampler Heatmap" :wandb.Image(model_fig)},
+                step=int(current_step),
+            )
   elif process_id == 0 and num_evals > 1 and run_evals and len(dr_range_low)==2:
     x, y = jnp.meshgrid(jnp.linspace(dr_range_low[0], dr_range_high[0], 64),\
                               jnp.linspace(dr_range_low[1], dr_range_high[1], 64))
@@ -1116,19 +1141,29 @@ def train(
       #           {"Training Heatmap" :wandb.Image(training_fig)},
       #           step=int(current_step),
       #       )
+
       eval_samples = samplerppo_network.gmm_network.model.sample(_unpmap(\
         training_state.gmm_training_state.model_state.gmm_state), sample_key2, 2**14)[0]
       
       log_prob_fn = jax.vmap(functools.partial(samplerppo_network.gmm_network.model.log_density,\
                   gmm_state=_unpmap(training_state.gmm_training_state.model_state.gmm_state)))
-      model_fig, model_fig_raw = gmmvi_utils.visualise(
-        log_prob_fn,
-        dr_range_low,
-        dr_range_high,
-        # samples,
-        eval_samples=eval_samples,
-        bijector_log_prob=jax.vmap(samplerppo_network.gmm_network.model.bijector_log_prob)
+      # model_fig, model_fig_raw = gmmvi_utils.visualise(
+      #   log_prob_fn,
+      #   dr_range_low,
+      #   dr_range_high,
+      #   # samples,
+      #   eval_samples=eval_samples,
+      #   bijector_log_prob=jax.vmap(samplerppo_network.gmm_network.model.bijector_log_prob)
+      # )
+      model_fig, _ = gmmvi_utils.visualise_pairwise_2d_marginal(
+          log_prob_fn=log_prob_fn,
+          dr_range_low=dr_range_low,
+          dr_range_high=dr_range_high,
+          # samples=samples,
+          eval_samples=eval_samples,
+          show=False,
       )
+
       model_fig.tight_layout()
       model_fig.canvas.draw()
       gmm_frames.append(np.asarray(model_fig.canvas.buffer_rgba())[...,:3])
@@ -1137,6 +1172,7 @@ def train(
                 {"Sampler Heatmap" :wandb.Image(model_fig)},
                 step=int(current_step),
             )
+    
     evaluation_key = jax.random.split(evaluation_key, local_devices_to_use)
     rewards = evaluation_on_current_occupancy(
         training_state, env_state, evaluation_key
@@ -1161,6 +1197,7 @@ def train(
       }, step=0)
     logging.info(metrics)
     progress_fn(0, metrics)
+  
   # Run initial policy_params_fn.
   params = _unpmap((
       training_state.normalizer_params,
@@ -1437,14 +1474,23 @@ def train(
           
           log_prob_fn = jax.vmap(functools.partial(samplerppo_network.gmm_network.model.log_density,\
                       gmm_state=_unpmap(training_state.gmm_training_state.model_state.gmm_state)))
-          model_fig, model_fig_raw = gmmvi_utils.visualise(
-            log_prob_fn,
-            dr_range_low,
-            dr_range_high,
-            # samples,
+          # model_fig, model_fig_raw = gmmvi_utils.visualise(
+          #   log_prob_fn,
+          #   dr_range_low,
+          #   dr_range_high,
+          #   # samples,
+          #   eval_samples=eval_samples,
+          #   bijector_log_prob=jax.vmap(samplerppo_network.gmm_network.model.bijector_log_prob)
+          # )
+          model_fig, _ = gmmvi_utils.visualise_pairwise_2d_marginal(
+            log_prob_fn=log_prob_fn,
+            dr_range_low=dr_range_low,
+            dr_range_high=dr_range_high,
+            # samples=samples,
             eval_samples=eval_samples,
-            bijector_log_prob=jax.vmap(samplerppo_network.gmm_network.model.bijector_log_prob)
+            show=False,
           )
+
           model_fig.tight_layout()
           model_fig.canvas.draw()
           gmm_frames.append(np.asarray(model_fig.canvas.buffer_rgba())[...,:3])
@@ -1453,6 +1499,7 @@ def train(
                     {"Sampler Heatmap" :wandb.Image(model_fig)},
                     step=int(current_step),
                 )
+      
         np.save(os.path.join(save_dir, f"rewards_{current_step}.npy"), reward_1d)
         
         evaluation_key, local_key = jax.random.split(local_key)
@@ -1479,6 +1526,29 @@ def train(
           wandb.log({
             'target log prob on current occupancy with returns' : wandb.Image(target_fig)
           }, step=int(current_step))
+      elif run_evals and len(dr_range_low)>2 and sampler_choice=="GMM":
+        sample_key, local_key = jax.random.split(local_key)
+        eval_samples = samplerppo_network.gmm_network.model.sample(_unpmap(\
+          training_state.gmm_training_state.model_state.gmm_state), sample_key, 2**14)[0]
+        log_prob_fn = jax.vmap(functools.partial(samplerppo_network.gmm_network.model.log_density,\
+                gmm_state=_unpmap(training_state.gmm_training_state.model_state.gmm_state)))
+        model_fig, _ = gmmvi_utils.visualise_pairwise_2d_marginal(
+          log_prob_fn=log_prob_fn,
+          dr_range_low=dr_range_low,
+          dr_range_high=dr_range_high,
+          # samples=samples,
+          eval_samples=eval_samples,
+          show=False,
+        )
+
+        model_fig.tight_layout()
+        model_fig.canvas.draw()
+        gmm_frames.append(np.asarray(model_fig.canvas.buffer_rgba())[...,:3])
+        if use_wandb:
+          wandb.log(
+                  {"Sampler Heatmap" :wandb.Image(model_fig)},
+                  step=int(current_step),
+              )
       logging.info(metrics)
       progress_fn(current_step, metrics)
       # 2. Select the state based on sampler_choice
