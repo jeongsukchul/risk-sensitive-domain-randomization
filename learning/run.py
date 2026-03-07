@@ -20,6 +20,8 @@ from agents.sampler_ppo  import train as sampler_ppo
 from agents.sampler_ppo import networks as samplerppo_networks
 from agents.m2td3 import train as m2td3
 from agents.m2td3 import networks as m2td3_networks
+from agents.td3 import networks as td3_networks
+from agents.td3 import train as td3
 from etils import epath
 from flax.training import orbax_utils
 import jax
@@ -243,7 +245,115 @@ def train_ppo(cfg:dict, randomization_fn, env, eval_env=None):
         environment=env,
     )
     return make_inference_fn, params, metrics
+def train_td3(cfg:dict, randomization_fn, env, eval_env=None):
+    if cfg.task in dm_control_suite._envs:
+        td3_params = brax_td3_config(cfg.task)
+    elif cfg.task in locomotion._envs:
+        td3_params = locomotion_td3_config(cfg.task)
+    elif cfg.task in manipulation._envs:
+        td3_params = manipulation_td3_config(cfg.task)
+    td3_training_params = dict(td3_params)
+    if cfg.randomization:
+        wandb_name = f"{cfg.task}.{cfg.policy}.{cfg.seed}.asym={cfg.asymmetric_critic}"
+        # if cfg.custom_wrapper and cfg.adv_wrapper:
+        #     wandb_name+=f".adv_wrapper={cfg.adv_wrapper}"#dr_train_ratio={cfg.dr_train_ratio}"
+    else:
+        wandb_name = f"{cfg.task}.{cfg.policy}.{cfg.seed}.asym={cfg.asymmetric_critic}.final_rand={cfg.final_randomization}"
+    if cfg.custom_wrapper:
+        randomizer = registry.get_domain_randomizer_eval(cfg.task)
+    else:
+        randomizer = randomization_fn
+    if cfg.policy=='td3_nodr':
+        sampler_choice = 'NODR'
+        group = sampler_choice
+    elif cfg.policy=='td3':
+        sampler_choice = 'UDR'
+        group = sampler_choice
+        group += f"_impl={cfg.impl}"
+    elif cfg.policy=='epopttd3':
+        sampler_choice = 'EPOpt'
+        wandb_name+= f" [epsilon={cfg.epsilon}]"
+        group = sampler_choice
+        group+=f" [epsilon={cfg.epsilon}]"
+    elif cfg.policy=='flowtd3':
+        sampler_choice = 'FLOW_NS'
+        wandb_name+= f" [gamma={cfg.gamma}_beta={cfg.beta}_iters={cfg.n_sampler_iters}]"
+        group = sampler_choice
+        group+=f" [gamma={cfg.gamma}_beta={cfg.beta}_iters={cfg.n_sampler_iters}]"
+    elif cfg.policy=='gmmtd3':
+        sampler_choice = 'GMM'
+        group = sampler_choice
+        if cfg.use_scheduling:
+            wandb_name+= f" {cfg.scheduler_mode} scheduling[{cfg.start_beta}, {cfg.end_beta}]"
+            group+=f" {cfg.scheduler_mode} scheduling[{cfg.start_beta}, {cfg.end_beta}]"
+        else:
+            wandb_name+= f" [beta={cfg.beta}]_sampler_update_freq={cfg.sampler_update_freq}"
+            group+=f" [beta={cfg.beta}]_sampler_update_freq={cfg.sampler_update_freq}"
+    elif cfg.policy=='adrtd3':
+        sampler_choice = 'AutoDR'
+        wandb_name+= f" [threshold={cfg.success_threshold}]"
+        group = sampler_choice
+        group += f" [threshold={cfg.success_threshold}]"
+    elif cfg.policy=='doraemontd3':
+        sampler_choice = 'DORAEMON'
+        wandb_name += f" [threshold={cfg.success_threshold}_condition={cfg.success_rate_condition}]"
+        group = sampler_choice
+        group += f" [threshold={cfg.success_threshold}_condition={cfg.success_rate_condition}]"
+    else:
+        raise ValueError("No td3 variant!")
+    if nonstationary:
+        wandb_name+='_nonstationary'
+        group +=f"_nonstationary"
+    wandb_name += cfg.comment
+    cfg.group = group
+    if cfg.use_wandb:
+        wandb.init(
+            project=cfg.wandb_project, 
+            entity=cfg.wandb_entity, 
+            name=wandb_name,
+            dir=make_dir(cfg.work_dir),
+            config=OmegaConf.to_container(cfg, resolve=True),
+        )
+        wandb.config.update({"env_name": cfg.task})
 
+    network_factory = td3_networks.make_td3_networks
+    if "network_factory" in td3_params:
+        del td3_training_params["network_factory"]
+        if not cfg.asymmetric_critic:
+            td3_params.network_factory.value_obs_key = "state"
+        network_factory = functools.partial(
+            td3_networks.make_td3_networks,
+            **td3_params.network_factory
+        )
+    
+    progress = functools.partial(progress_fn, use_wandb=cfg.use_wandb)
+    if cfg.custom_wrapper:
+        randomizer = registry.get_domain_randomizer_eval(cfg.task)
+    else:
+        randomizer = randomization_fn
+    train_fn = functools.partial(
+        td3.train, **dict(td3_training_params),
+        network_factory=network_factory,
+        progress_fn=progress,
+        randomization_fn = randomizer,
+        eval_randomization_fn=randomization_fn,
+        dr_train_ratio = cfg.dr_train_ratio,
+        seed=cfg.seed,
+        sampler_choice=sampler_choice,
+        gamma = cfg.gamma,
+        beta = cfg.beta,
+        sampler_update_freq =cfg.sampler_update_freq,
+        n_sampler_iters = cfg.n_sampler_iters,
+        success_threshold = cfg.success_threshold,
+        success_rate_condition = cfg.success_rate_condition,
+        work_dir = cfg.work_dir,
+        use_wandb=cfg.use_wandb,
+        nonstationary = cfg.nonstationary,
+    )
+    make_inference_fn, params, metrics = train_fn(        
+        environment=env,
+    )
+    return make_inference_fn, params, metrics
 def train_m2td3(cfg:dict, randomization_fn, env, eval_env=None):
     if cfg.task in dm_control_suite._envs:
         m2td3_params = brax_td3_config(cfg.task)
@@ -344,6 +454,9 @@ def train(cfg: dict):
 
     if "ppo" in cfg.policy:
         make_inference_fn, params, metrics = train_ppo(cfg, randomization_fn, env)
+    elif "td3" in cfg.policy:
+        make_inference_fn, params, metrics = train_td3(cfg, randomization_fn, env)
+
     else:
         print("no policy!")
 

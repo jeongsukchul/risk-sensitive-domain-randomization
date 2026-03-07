@@ -27,6 +27,7 @@ wandb_silent: false
 use_wandb: true
 save_csv: true
 comment: ''
+nonstationary : false
 
 #domain randomization
 randomization: true
