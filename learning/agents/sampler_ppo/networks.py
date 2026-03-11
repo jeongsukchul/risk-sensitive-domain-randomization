@@ -123,7 +123,7 @@ def make_samplerppo_networks(
     expansion_factor=1.1,
   )
   init_autodr_state = init_fn()
-  if sampler_choice=="FLOW_NS":
+  if sampler_choice == "FLOW_NS":
     init_flow_model = make_autoregressive_nsf_bijx(
       ndim=dynamics_param_size,
       bins=16,
@@ -132,7 +132,9 @@ def make_samplerppo_networks(
       seed=0,
       domain_range=bound_info,
   )
-
+    flow_network, init_flow_state = nnx.split(init_flow_model)
+  elif sampler_choice == "GBS":
+    flow_network, init_flow_state = None, None
   else:
     init_flow_model = make_realnvp_bijx(
       ndim=dynamics_param_size,
@@ -141,11 +143,11 @@ def make_samplerppo_networks(
       seed=0,
       domain_range=bound_info,
   )
+    flow_network, init_flow_state = nnx.split(init_flow_model)
   min_bound = 0.8
   max_bound = 110.0
   init_beta_param = 30.0
   init_doraemon_state = make_initial_state(dynamics_param_size, init_beta_param, min_bound, max_bound)
-  flow_network, init_flow_state = nnx.split(init_flow_model)
   doraemon_update_fn = make_doraemon_update_fn(
         low=dr_low, high=dr_high,
         success_threshold=success_threshold,

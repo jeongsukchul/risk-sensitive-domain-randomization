@@ -86,7 +86,9 @@ def default_config():
           ),
       ),
       impl="jax",
-      nconmax=32 * 8192,
+      # NOTE: `nconmax` is allocated per-environment in MJX data. When training
+      # with large batches (e.g. thousands of envs), overly large caps will OOM.
+      nconmax=32 * 2048,
       njmax=256,
   )
 
@@ -198,12 +200,13 @@ class PandaRobotiqPushCube(panda_robotiq.PandaRobotiqBase):
         "angle_curriculum": jp.array([45, 45, 90, 135, 180], dtype=float),
         "pos_curriculum": jp.array([0.05, 0.05, 0.1, 0.2, 0.2], dtype=float),
     }
-    obs = self._get_single_obs(data, info)
-    info["obs_history"] = jp.zeros(self._config.obs_history_len * obs.shape[0])
+    obs0 = self._get_single_obs(data, info)
+    info["obs_history"] = jp.zeros(self._config.obs_history_len * obs0.shape[0])
 
     reward, done = jp.zeros(2)
-    state = mjx_env.State(data, obs, reward, done, metrics, info)
-    return state
+    state = mjx_env.State(data, obs0, reward, done, metrics, info)
+    obs = self._get_obs(state)
+    return state.replace(obs=obs)
 
   def step(self, state: mjx_env.State, action: jax.Array) -> mjx_env.State:
     action_history = jp.roll(state.info["action_history"], 7).at[:7].set(action)

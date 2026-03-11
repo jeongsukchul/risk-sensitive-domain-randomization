@@ -267,6 +267,7 @@ def flow_loss(
       'flow_kl_loss' : kl_loss,
   }, current_sample, current_logp) 
 
+
 # def flow_loss(
 #     flow_model,
 #     dynamics_params: jnp.ndarray, # Samples x from the flow

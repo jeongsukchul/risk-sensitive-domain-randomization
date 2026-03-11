@@ -166,6 +166,11 @@ def train_ppo(cfg:dict, randomization_fn, env, eval_env=None):
         wandb_name+= f" [gamma={cfg.gamma}_beta={cfg.beta}_iters={cfg.n_sampler_iters}]"
         group = sampler_choice
         group+=f" [gamma={cfg.gamma}_beta={cfg.beta}_iters={cfg.n_sampler_iters}]"
+    elif cfg.policy=='gbsppo':
+        sampler_choice = 'GBS'
+        wandb_name+= f" [beta={cfg.beta}_iters={cfg.n_sampler_iters}]"
+        group = sampler_choice
+        group+=f" [beta={cfg.beta}_iters={cfg.n_sampler_iters}]"
     elif cfg.policy=='gmmppo':
         sampler_choice = 'GMM'
         group = sampler_choice
@@ -216,6 +221,7 @@ def train_ppo(cfg:dict, randomization_fn, env, eval_env=None):
         
     progress = functools.partial(progress_fn, use_wandb=cfg.use_wandb)
 
+    train_gamma = cfg.gamma if "FLOW" in sampler_choice else 0.0
     train_fn = functools.partial(
         train_fn, **dict(ppo_training_params),
         network_factory=network_factory,
@@ -225,7 +231,7 @@ def train_ppo(cfg:dict, randomization_fn, env, eval_env=None):
         use_wandb=cfg.use_wandb,
         seed=cfg.seed,
         sampler_choice=sampler_choice,
-        gamma = cfg.gamma,
+        gamma = train_gamma,
         beta = cfg.beta,
         sampler_update_freq =cfg.sampler_update_freq,
         n_sampler_iters = cfg.n_sampler_iters,
@@ -239,6 +245,23 @@ def train_ppo(cfg:dict, randomization_fn, env, eval_env=None):
         start_beta = cfg.start_beta,
         end_beta = cfg.end_beta,
         scheduler_mode=     cfg.scheduler_mode,
+        gbs_process_type=getattr(cfg, "gbs_process_type", "vp"),
+        gbs_num_steps=getattr(cfg, "gbs_num_steps", 100),
+        gbs_lr=getattr(cfg, "gbs_lr", 1e-3),
+        gbs_clip_grad=getattr(cfg, "gbs_clip_grad", 1.0),
+        gbs_init_std=getattr(cfg, "gbs_init_std", 1.0),
+        gbs_max_rnd=getattr(cfg, "gbs_max_rnd", 1e8),
+        gbs_sde_ctrl_noise=getattr(cfg, "gbs_sde_ctrl_noise", None),
+        gbs_sde_ctrl_dropout=getattr(cfg, "gbs_sde_ctrl_dropout", None),
+        gbs_use_tanh_bijection=getattr(cfg, "gbs_use_tanh_bijection", True),
+        gbs_model_num_layers=getattr(cfg, "gbs_model_num_layers", 2),
+        gbs_model_num_hid=getattr(cfg, "gbs_model_num_hid", 64),
+        gbs_sigma_const=getattr(cfg, "gbs_sigma_const", 1.0),
+        gbs_vp_diff_coeff_sq_min=getattr(cfg, "gbs_vp_diff_coeff_sq_min", 0.1),
+        gbs_vp_diff_coeff_sq_max=getattr(cfg, "gbs_vp_diff_coeff_sq_max", 10.0),
+        gbs_vp_scale_diff_coeff=getattr(cfg, "gbs_vp_scale_diff_coeff", 1.0),
+        gbs_terminal_t=getattr(cfg, "gbs_terminal_t", 1.0),
+        gbs_include_base_drift=getattr(cfg, "gbs_include_base_drift", True),
     )
     
     make_inference_fn, params, metrics = train_fn(
@@ -410,6 +433,8 @@ def train(cfg: dict):
         cfg.work_dir = cfg.work_dir / f"epsilon={cfg.epsilon}"
     elif cfg.policy == "flowppo":
         cfg.work_dir = cfg.work_dir / f"beta={cfg.beta}_gamma={cfg.gamma}"
+    elif cfg.policy == "gbsppo":
+        cfg.work_dir = cfg.work_dir / f"beta={cfg.beta}"
     elif cfg.policy == "gmmppo":
         cfg.work_dir = cfg.work_dir / f"beta={cfg.beta}"
     elif cfg.policy == "adrppo":

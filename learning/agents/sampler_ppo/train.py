@@ -31,7 +31,6 @@ from brax.training import pmap
 from brax.training import types
 from brax.training.acme import running_statistics
 from brax.training.acme import specs
-from matplotlib.ticker import MaxNLocator
 from learning.agents.sampler_ppo.scheduling import GMMScheduler, SchedulerState
 import scipy
 from agents.sampler_ppo import losses as samplerppo_losses
@@ -51,6 +50,7 @@ from learning.module.wrapper.dr_wrapper import wrap_for_dr_training
 import learning.module.gmmvi.utils as gmmvi_utils
 import numpy as np
 import optax
+import distrax
 import wandb
 import matplotlib.pyplot as plt
 from learning.module.wrapper.wrapper import Wrapper, wrap_for_brax_training
@@ -58,6 +58,9 @@ from learning.module.wrapper.evaluator import AdvEvaluator, Evaluator, generate_
 from flax import nnx
 import imageio
 import os
+from flax.training import train_state as flax_train_state
+from learning.module.gbs.gbs_trainer import PISGRADNet, plot_sample_density_2d
+from learning.module.gbs.gbs_loss import VP, Langevin, rnd_time_reversal_lv_no_target, lv_loss_from_rnd
 InferenceParams = Tuple[running_statistics.NestedMeanStd, Params]
 Metrics = types.Metrics
 
@@ -208,6 +211,19 @@ def plot_reward_heatmap(samples, rewards, low, high, bins=80, title="Reward heat
     ax.legend(loc="center left", bbox_to_anchor=(1.02, 0.5), frameon=True)
 
     return fig, ax
+
+
+def tanh_box_bijector(z: jax.Array, low: jax.Array, high: jax.Array) -> jax.Array:
+  half = 0.5 * (high - low)
+  mid = 0.5 * (high + low)
+  return mid + half * jnp.tanh(z)
+
+
+def tanh_box_logabsdet(z: jax.Array, low: jax.Array, high: jax.Array) -> jax.Array:
+  z = jnp.atleast_2d(z)
+  half = 0.5 * (high - low)
+  jac_diag = half * (1.0 - jnp.tanh(z) ** 2)
+  return jnp.sum(jnp.log(jnp.clip(jac_diag, 1e-12)), axis=-1)
 def _remove_pixels(
     obs: Union[jnp.ndarray, Mapping[str, jax.Array]],
 ) -> Union[jnp.ndarray, Mapping[str, jax.Array]]:
@@ -266,7 +282,7 @@ def train(
     sampler_update_freq=10,
     gamma = 0.5,
     beta = 1.0,
-    sampler_choice : str = "NODR", #(NODR, UDR, AutoDR, DORAEMON, FLOW_NS, FLOW_REALNVP, GMM)
+    sampler_choice : str = "NODR", #(NODR, UDR, AutoDR, DORAEMON, FLOW_NS, FLOW_REALNVP, GMM, GBS)
     n_sampler_iters : int = 1.,
     min_bound :float  = .8,
     max_bound :float = 110.,
@@ -281,12 +297,31 @@ def train(
     end_beta : float = -40.,
     scheduler_mode : str = "linear",
     trust_region : float = 0.005,
+    # GBS hyperparameters (aligned with module/gbs/gbs_test.py defaults)
+    gbs_process_type: str = "vp",  # "vp" or "langevin"
+    gbs_num_steps: int = 100,
+    gbs_lr: float = 1e-3,
+    gbs_clip_grad: float = 1.0,
+    gbs_init_std: float = 1.0,
+    gbs_max_rnd: float = 1e8,
+    gbs_sde_ctrl_noise: Optional[float] = None,
+    gbs_sde_ctrl_dropout: Optional[float] = None,
+    gbs_use_tanh_bijection: bool = True,
+    gbs_model_num_layers: int = 2,
+    gbs_model_num_hid: int = 64,
+    gbs_sigma_const: float = 1.0,
+    gbs_vp_diff_coeff_sq_min: float = 0.1,
+    gbs_vp_diff_coeff_sq_max: float = 10.0,
+    gbs_vp_scale_diff_coeff: float = 1.0,
+    gbs_terminal_t: float = 1.0,
+    gbs_include_base_drift: bool = True,
 ):
   """
   Returns:
     Tuple of (make_policy function, network params, metrics)
   """
   num_eval_envs=4096
+  
   assert batch_size * num_minibatches % num_envs == 0
   _validate_madrona_args(
       madrona_backend, num_envs, num_eval_envs, action_repeat, eval_env
@@ -308,6 +343,28 @@ def train(
       local_devices_to_use,
   )
   device_count = local_devices_to_use * process_count
+
+  def make_2d_dynamics_grid(num_points: int):
+    # Exact rectangular grid: dim_x * dim_y == num_points.
+    # Prefer dim_x < dim_y whenever possible.
+    dim_x = int(np.floor(np.sqrt(num_points)))
+    while dim_x > 1 and (
+        (num_points % dim_x != 0) or (dim_x == (num_points // dim_x))
+    ):
+      dim_x -= 1
+    if num_points % dim_x != 0:
+      dim_x = 1
+    dim_y = num_points // dim_x
+    if dim_x > dim_y:
+      dim_x, dim_y = dim_y, dim_x
+
+    x, y = jnp.meshgrid(
+        jnp.linspace(dr_range_low[0], dr_range_high[0], dim_x),
+        jnp.linspace(dr_range_low[1], dr_range_high[1], dim_y),
+    )
+    grid = jnp.c_[x.ravel(), y.ravel()]
+    return x, y, grid
+
   print("sgd steps per env step",  batch_size * num_minibatches // num_envs)
   # The number of environment steps executed for every training step.
   env_step_per_training_step = (
@@ -414,17 +471,20 @@ def train(
     )
   
   make_policy = samplerppo_networks.make_inference_fn(samplerppo_network)
-  flow_model = nnx.merge(samplerppo_network.flow_network, init_flow_state)
   optimizer = optax.adam(learning_rate=learning_rate)
-  flow_optimizer = nnx.Optimizer(
-      flow_model,
-      optax.chain(
-        optax.clip_by_global_norm(1.0),
-        optax.adamw(1e-3, weight_decay=1e-4), # Adds weight decay for regularization
-      ),
-      wrt=nnx.Param,
-  )
-  flow_opt_graphdef,  init_flow_opt_state =  nnx.split(flow_optimizer)
+  flow_opt_graphdef = None
+  init_flow_opt_state = None
+  if sampler_choice != "GBS":
+    flow_model = nnx.merge(samplerppo_network.flow_network, init_flow_state)
+    flow_optimizer = nnx.Optimizer(
+        flow_model,
+        optax.chain(
+          optax.clip_by_global_norm(1.0),
+          optax.adamw(1e-3, weight_decay=1e-4),
+        ),
+        wrt=nnx.Param,
+    )
+    flow_opt_graphdef, init_flow_opt_state = nnx.split(flow_optimizer)
   if max_grad_norm is not None:
     # TODO: Move gradient clipping to `training/gradients.py`.
     optimizer = optax.chain(
@@ -449,6 +509,73 @@ def train(
     gamma=gamma,
     entropy_update= False,
   )
+  if gbs_process_type == "vp":
+    gbs_process = VP(
+        diff_coeff_sq_min=gbs_vp_diff_coeff_sq_min,
+        diff_coeff_sq_max=gbs_vp_diff_coeff_sq_max,
+        scale_diff_coeff=gbs_vp_scale_diff_coeff,
+        terminal_t=gbs_terminal_t,
+        generative=False,
+        sign=-1.0,
+        include_base_drift=gbs_include_base_drift,
+    )
+  elif gbs_process_type == "langevin":
+    gbs_process = Langevin(diff_coeff=gbs_sigma_const, terminal_t=gbs_terminal_t)
+  else:
+    raise ValueError(f"Unknown gbs_process_type: {gbs_process_type}")
+  gbs_sde_ctrl_noise = -1.0 if gbs_sde_ctrl_noise is None else float(gbs_sde_ctrl_noise)
+  gbs_sde_ctrl_dropout = -1.0 if gbs_sde_ctrl_dropout is None else float(gbs_sde_ctrl_dropout)
+  gbs_to_box = lambda z: tanh_box_bijector(z, low=dr_range_low, high=dr_range_high)
+  gbs_logabsdet = lambda z: tanh_box_logabsdet(z, low=dr_range_low, high=dr_range_high)
+  if gbs_use_tanh_bijection:
+    gbs_center = jnp.zeros_like(dr_range_low)
+    gbs_prior = distrax.MultivariateNormalDiag(
+        loc=jnp.zeros_like(dr_range_low),
+        scale_diag=jnp.ones_like(dr_range_low) * gbs_init_std,
+    )
+    gbs_prior_sampler = lambda k: jnp.squeeze(gbs_prior.sample(seed=k, sample_shape=(1,)))
+  else:
+    gbs_center = 0.5 * (dr_range_low + dr_range_high)
+    gbs_prior = distrax.MultivariateNormalDiag(
+        loc=gbs_center,
+        scale_diag=jnp.ones_like(dr_range_low) * gbs_init_std,
+    )
+    gbs_prior_sampler = lambda k: jnp.clip(
+        jnp.squeeze(gbs_prior.sample(seed=k, sample_shape=(1,))),
+        dr_range_low,
+        dr_range_high,
+    )
+  gbs_batch_size = num_envs // jax.process_count() // local_devices_to_use
+
+  if sampler_choice == "GBS":
+    gbs_key_fwd, gbs_key_bwd = jax.random.split(gmm_key)
+    gbs_model_fwd = PISGRADNet(
+        dim=len(dr_range_low),
+        num_layers=gbs_model_num_layers,
+        num_hid=gbs_model_num_hid,
+    )
+    gbs_model_bwd = PISGRADNet(
+        dim=len(dr_range_low),
+        num_layers=gbs_model_num_layers,
+        num_hid=gbs_model_num_hid,
+    )
+    init_x = jnp.ones([gbs_batch_size, len(dr_range_low)])
+    init_t = jnp.ones([gbs_batch_size, 1])
+    init_lgv = jnp.ones([gbs_batch_size, len(dr_range_low)])
+    gbs_fwd_params = gbs_model_fwd.init(gbs_key_fwd, init_x, init_t, init_lgv)
+    gbs_bwd_params = gbs_model_bwd.init(gbs_key_bwd, init_x, init_t, init_lgv)
+    gbs_optimizer = optax.chain(
+        optax.zero_nans(),
+        optax.clip(gbs_clip_grad),
+        optax.adam(learning_rate=gbs_lr),
+    )
+    gbs_fwd_state = flax_train_state.TrainState.create(
+        apply_fn=gbs_model_fwd.apply, params=gbs_fwd_params, tx=gbs_optimizer
+    )
+    gbs_bwd_state = flax_train_state.TrainState.create(
+        apply_fn=gbs_model_bwd.apply, params=gbs_bwd_params, tx=gbs_optimizer
+    )
+    init_flow_state = (gbs_fwd_state, gbs_bwd_state)
   gmm_update_fn = samplerppo_losses.make_gmm_update(samplerppo_network.gmm_network)
   gradient_update_fn = gradients.gradient_update_fn(
       loss_fn, optimizer, pmap_axis_name=_PMAP_AXIS_NAME, has_aux=True
@@ -471,6 +598,47 @@ def train(
     _, new_opt_state = nnx.split(optimizer)
     _, state = nnx.split(model)
     return (loss, new_state, new_opt_state), others
+
+  gbs_sampler_jit = jax.jit(
+      rnd_time_reversal_lv_no_target,
+      static_argnums=(3, 4, 5, 6, 7),
+  )
+
+  @jax.jit
+  def gbs_train_step_jit(
+      key,
+      fwd_state,
+      bwd_state,
+      target_lnpdf,
+  ):
+    def loss_from_params(fwd_params, bwd_params):
+      x0, xT, rnd_running = rnd_time_reversal_lv_no_target(
+          key,
+          (fwd_state, bwd_state),
+          fwd_params,
+          gbs_batch_size,
+          gbs_prior_sampler,
+          gbs_num_steps,
+          gbs_process,
+          True,
+          gbs_sde_ctrl_noise,
+          gbs_sde_ctrl_dropout,
+          gbs_center,
+      )
+      target_lp_vals = target_lnpdf
+      if gbs_use_tanh_bijection:
+        target_lp_vals = target_lp_vals + gbs_logabsdet(xT)
+      rnd_total = gbs_prior.log_prob(x0) + rnd_running - target_lp_vals
+      loss, aux, _ = lv_loss_from_rnd(rnd_total, xT=xT, max_rnd=gbs_max_rnd)
+      return loss, aux
+
+    (grads, aux) = jax.grad(loss_from_params, (0, 1), has_aux=True)(
+        fwd_state.params, bwd_state.params
+    )
+    fwd_grads, bwd_grads = grads
+    new_fwd_state = fwd_state.apply_gradients(grads=fwd_grads)
+    new_bwd_state = bwd_state.apply_gradients(grads=bwd_grads)
+    return new_fwd_state, new_bwd_state, aux
   metrics_aggregator = metric_logger.EpisodeMetricsLogger(
       steps_between_logging=training_metrics_steps
       or env_step_per_training_step,
@@ -577,6 +745,7 @@ def train(
     training_state, state, cumulated_values, key = carry
     key_sgd, key_generate_unroll, param_key, key_update, new_key = jax.random.split(key, 5)
     rewards = None
+    gbs_sampler_key = param_key
     if sampler_choice=="NODR":
       dynamics_params = jnp.ones((num_envs// jax.process_count(), len(dr_range_low))) * nominal_dynamics_params[None, :]
     elif sampler_choice=="UDR" or sampler_choice=="EPOpt":
@@ -597,6 +766,43 @@ def train(
       rewards = sampler_data.reward
       
       dynamics_params = jax.random.uniform(param_key2, shape=(num_envs //jax.process_count(), len(dr_range_low)), minval=dr_range_low, maxval=dr_range_high)
+    elif sampler_choice == "GBS":
+      param_key, param_key2 = jax.random.split(param_key)
+      gbs_sampler_key = param_key
+      fwd_state, bwd_state = training_state.flow_state
+      _, dynamics_params_sampler_latent, _ = gbs_sampler_jit(
+          param_key,
+          (fwd_state, bwd_state),
+          fwd_state.params,
+          gbs_batch_size,
+          gbs_prior_sampler,
+          gbs_num_steps,
+          gbs_process,
+          True,
+          gbs_sde_ctrl_noise,
+          gbs_sde_ctrl_dropout,
+          gbs_center,
+      )
+      dynamics_params_sampler = (
+          gbs_to_box(dynamics_params_sampler_latent)
+          if gbs_use_tanh_bijection
+          else dynamics_params_sampler_latent
+      )
+      sampler_data = get_experience(
+          training_state,
+          state,
+          dynamics_params_sampler,
+          key_generate_unroll,
+          unroll_length,
+          batch_size * num_minibatches // num_envs,
+      )[1]
+      rewards = sampler_data.reward
+      dynamics_params = jax.random.uniform(
+          param_key2,
+          shape=(num_envs // jax.process_count(), len(dr_range_low)),
+          minval=dr_range_low,
+          maxval=dr_range_high,
+      )
 
     elif sampler_choice == "GMM":
         dynamics_params, mapping = samplerppo_network.gmm_network.model.sample(\
@@ -673,7 +879,11 @@ def train(
     values = rewards.mean(axis=(0,1)) if sampler_choice!="EPOpt" else 0#+ bootstrap_value 
     # cumulated_values += values
     # else:
-    cumulated_values +=value_approx
+    cumulated_values += jax.lax.cond(
+        sampler_choice == "GBS",
+        lambda: values,
+        lambda: value_approx,
+    )
     # For Debuggin GMM
     # target = Funnel(dim=2, sample_bounds=[-30, 30])
     # target_logprob = jax.vmap(target.log_prob)
@@ -751,6 +961,27 @@ def train(
         return (fs_n, fos_n, current_sample, current_logq), None
       (flow_state_new, flow_opt_state_new, _, _), _  = jax.lax.scan(body, (flow_state, flow_opt_state, prev_sample, prev_logq), (), length=n_sampler_iters)
       return (flow_state_new, flow_opt_state_new, 1.)
+    def update_gbs(gbs_state, sample_key):
+      target_lnpdf = _beta * cumulated_values/sampler_update_freq
+      fwd_state, bwd_state = gbs_state
+
+      def body(carry, _):
+        fs, bs = carry
+        fs_n, bs_n, _ = gbs_train_step_jit(
+            sample_key,
+            fs,
+            bs,
+            target_lnpdf,
+        )
+        return (fs_n, bs_n), None
+
+      (fwd_state_new, bwd_state_new), _ = jax.lax.scan(
+          body,
+          (fwd_state, bwd_state),
+          (),
+          length=1,
+      )
+      return ((fwd_state_new, bwd_state_new), 1.)
     def update_adr(autodr_state, returns):
       return (autodr_update_fn(autodr_state, dynamics_params, returns, key_update), 1.)
     def update_doraemon(doraemon_state, returns):
@@ -781,6 +1012,12 @@ def train(
         flow_state, flow_opt_state, update_signal = jax.lax.cond(training_state.update_steps % sampler_update_freq==0, \
                 lambda: update_flow(training_state.flow_state, training_state.flow_opt_state), \
                  lambda: (training_state.flow_state, training_state.flow_opt_state, 0.) )
+    elif sampler_choice=="GBS":
+        flow_state, update_signal = jax.lax.cond(
+            training_state.update_steps % sampler_update_freq == 0,
+            lambda: update_gbs(training_state.flow_state, gbs_sampler_key),
+            lambda: (training_state.flow_state, 0.),
+        )
     elif sampler_choice=="GMM":
       gmm_training_state, update_signal = jax.lax.cond(training_state.update_steps % sampler_update_freq==0, \
                   lambda: update_gmm(gmm_training_state), \
@@ -864,9 +1101,7 @@ def train(
   ) -> Tuple[TrainingState, envs.State, PRNGKey]:
     # shape = np.sqrt(num_envs).astype(int)
     value_apply = samplerppo_network.value_network.apply
-    x, y = jnp.meshgrid(jnp.linspace(dr_range_low[0], dr_range_high[0], 32),\
-                          jnp.linspace(dr_range_low[1], dr_range_high[1], 32))
-    dynamics_params_grid = jnp.c_[x.ravel(), y.ravel()]
+    _, _, dynamics_params_grid = make_2d_dynamics_grid(num_envs)
     # print("state in occupancy measure", env_state.obs)
     def f(carry, unused):
       key, dynamics_params_grid = carry
@@ -977,6 +1212,7 @@ def train(
   autodr_frames = []
   doraemon_frames = []
   flow_frames = []
+  gbs_frames = []
   gmm_frames = []
   gmm_training_frames = []
   occupancy_frames = []
@@ -1023,9 +1259,7 @@ def train(
                 step=int(current_step),
             )
   elif process_id == 0 and num_evals > 1 and run_evals and len(dr_range_low)==2:
-    x, y = jnp.meshgrid(jnp.linspace(dr_range_low[0], dr_range_high[0], 64),\
-                              jnp.linspace(dr_range_low[1], dr_range_high[1], 64))
-    dynamics_params_grid = jnp.c_[x.ravel(), y.ravel()]
+    x, y, dynamics_params_grid = make_2d_dynamics_grid(num_eval_envs)
     metrics, reward_1d,_ = evaluator.run_evaluation(
         _unpmap((
             training_state.normalizer_params,
@@ -1121,6 +1355,36 @@ def train(
       fig.tight_layout()
       fig.canvas.draw()
       flow_frames.append(np.asarray(fig.canvas.buffer_rgba())[...,:3])
+    elif sampler_choice=="GBS":
+      fwd_state, bwd_state = _unpmap(training_state.flow_state)
+      _, samples_latent, _ = gbs_sampler_jit(
+        sample_key,
+        (fwd_state, bwd_state),
+        fwd_state.params,
+        gbs_batch_size,
+        gbs_prior_sampler,
+        gbs_num_steps,
+        gbs_process,
+        True,
+        -1.0,
+        -1.0,
+        gbs_center,
+      )
+      samples = gbs_to_box(samples_latent) if gbs_use_tanh_bijection else samples_latent
+      fig, ax = plot_sample_density_2d(
+        samples=samples,
+        low=dr_range_low,
+        high=dr_range_high,
+        title=f"GBS sample density [step={int(current_step)}]",
+      )
+      fig.tight_layout()
+      fig.canvas.draw()
+      gbs_frames.append(np.asarray(fig.canvas.buffer_rgba())[...,:3])
+      if use_wandb:
+        wandb.log(
+            {"GBS Heatmap": wandb.Image(fig)},
+            step=int(current_step),
+        )
     elif sampler_choice=="GMM":
       sample_key1, sample_key2, unroll_key,  local_key = jax.random.split(local_key, 4)
       samples, _ = samplerppo_network.gmm_network.sample_selector.select_samples(\
@@ -1179,8 +1443,7 @@ def train(
     )
     jax.tree_util.tree_map(lambda x: x.block_until_ready(), rewards)
     rewards = rewards.mean((0,1)).squeeze()
-    x, y = jnp.meshgrid(jnp.linspace(dr_range_low[0], dr_range_high[0], 32),\
-                          jnp.linspace(dr_range_low[1], dr_range_high[1], 32))
+    x, y, _ = make_2d_dynamics_grid(num_envs)
     target_lnpdfs = beta* rewards
     target_lnpdfs = jnp.reshape(target_lnpdfs, x.shape)
     target_fig = plt.figure()
@@ -1223,6 +1486,8 @@ def train(
       # Save the Flow state (GraphState from nnx.split)
       # If you need to resume training, you might also want flow_opt_state
       state_to_save = None #_unpmap(training_state.flow_state)
+  elif sampler_choice == "GBS":
+      state_to_save = _unpmap(training_state.flow_state)
       
   elif sampler_choice == "GMM":
       # Save the GMM Training state
@@ -1274,14 +1539,38 @@ def train(
       
       if run_evals:
         metric_key, local_key = jax.random.split(local_key)
-        if sampler_choice=="DORAEMON" or "FLOW" in sampler_choice or sampler_choice=="GMM" or sampler_choice=="AutoDR":
+        if (
+            sampler_choice=="DORAEMON"
+            or ("FLOW" in sampler_choice)
+            or (sampler_choice=="GBS")
+            or sampler_choice=="GMM"
+            or sampler_choice=="AutoDR"
+        ):
           num_samples_bench = num_eval_envs
           if sampler_choice=="DORAEMON":
             a, b = _unpack_beta(_unpmap(training_state.doraemon_state.x_opt), len(dr_range_low), min_bound, max_bound)
             samples = sample_beta_on_box(metric_key, a, b, low, high, num_samples_bench)
             logq = _log_prob_beta_on_box(a, b, low, high, samples)
           elif "FLOW" in sampler_choice:
+            flow_model = nnx.merge(samplerppo_network.flow_network, _unpmap(training_state.flow_state))
             samples, logq = flow_model.sample( (num_samples_bench,), metric_key)
+          elif sampler_choice=="GBS":
+            fwd_state, bwd_state = _unpmap(training_state.flow_state)
+            _, samples_latent, _ = gbs_sampler_jit(
+                metric_key,
+                (fwd_state, bwd_state),
+                fwd_state.params,
+                num_samples_bench,
+                gbs_prior_sampler,
+                gbs_num_steps,
+                gbs_process,
+                True,
+                -1.0,
+                -1.0,
+                gbs_center,
+            )
+            samples = gbs_to_box(samples_latent) if gbs_use_tanh_bijection else samples_latent
+            logq = None
           elif sampler_choice=="GMM":
             samples, logq = samplerppo_network.gmm_network.model.sample(_unpmap(\
               training_state.gmm_training_state.model_state.gmm_state), metric_key, num_samples_bench)
@@ -1304,7 +1593,7 @@ def train(
           )
           _beta = 1 if sampler_choice=="DORAEMON" else beta
           target_lnpdf = _beta* reward_sampler/epi_length
-          if sampler_choice!="AutoDR":
+          if sampler_choice not in ("AutoDR", "GBS"):
             np.save(os.path.join(save_dir, f"logq_in_sampler_{current_step}.npy"), logq)
             log_ratio = target_lnpdf - logq
             valid_mask = jnp.isfinite(log_ratio)
@@ -1351,9 +1640,7 @@ def train(
           metrics['eval/episode_reward_CVaR20'] = np.mean(sorted_rewards[:k20])
           metrics['eval/episode_reward_CVaR10'] = np.mean(sorted_rewards[:k10])
       if run_evals and len(dr_range_low)==2:
-        x, y = jnp.meshgrid(jnp.linspace(dr_range_low[0], dr_range_high[0], 64),\
-                              jnp.linspace(dr_range_low[1], dr_range_high[1], 64))
-        dynamics_params_grid = jnp.c_[x.ravel(), y.ravel()]
+        x, y, dynamics_params_grid = make_2d_dynamics_grid(num_eval_envs)
         metrics, reward_1d, _ = evaluator.run_evaluation(
             _unpmap((
                 training_state.normalizer_params,
@@ -1449,6 +1736,36 @@ def train(
           fig.tight_layout()
           fig.canvas.draw()
           flow_frames.append(np.asarray(fig.canvas.buffer_rgba())[...,:3])
+        elif sampler_choice=="GBS":
+          fwd_state, bwd_state = _unpmap(training_state.flow_state)
+          _, samples_latent, _ = gbs_sampler_jit(
+            sample_key,
+            (fwd_state, bwd_state),
+            fwd_state.params,
+            gbs_batch_size,
+            gbs_prior_sampler,
+            gbs_num_steps,
+            gbs_process,
+            True,
+            -1.0,
+            -1.0,
+            gbs_center,
+          )
+          samples = gbs_to_box(samples_latent) if gbs_use_tanh_bijection else samples_latent
+          fig, ax = plot_sample_density_2d(
+            samples=samples,
+            low=dr_range_low,
+            high=dr_range_high,
+            title=f"GBS sample density [step={int(current_step)}]",
+          )
+          if use_wandb:
+            wandb.log(
+                {"GBS Heatmap": wandb.Image(fig)},
+                step=int(current_step),
+            )
+          fig.tight_layout()
+          fig.canvas.draw()
+          gbs_frames.append(np.asarray(fig.canvas.buffer_rgba())[...,:3])
         elif sampler_choice=="GMM":
           sample_key1, sample_key2, unroll_key,  local_key = jax.random.split(local_key, 4)
           samples, _ = samplerppo_network.gmm_network.sample_selector.select_samples(\
@@ -1510,8 +1827,7 @@ def train(
         jax.tree_util.tree_map(lambda x: x.block_until_ready(), rewards)
         rewards = rewards.mean((0,1)).squeeze()
 
-        x, y = jnp.meshgrid(jnp.linspace(dr_range_low[0], dr_range_high[0], 32),\
-                              jnp.linspace(dr_range_low[1], dr_range_high[1], 32))
+        x, y, _ = make_2d_dynamics_grid(num_envs)
         target_lnpdfs = beta * rewards
         target_lnpdfs = jnp.reshape(target_lnpdfs, x.shape)
         target_fig = plt.figure()
@@ -1562,10 +1878,11 @@ def train(
           # Save the Doraemon state struct
           state_to_save = _unpmap(training_state.doraemon_state)
           
-      elif "FLOW" in sampler_choice:
-          # Save the Flow state (GraphState from nnx.split)
-          # If you need to resume training, you might also want flow_opt_state
-          state_to_save = None #_unpmap(training_state.flow_state)
+      elif ("FLOW" in sampler_choice) or (sampler_choice=="GBS"):
+          if sampler_choice == "GBS":
+            state_to_save = _unpmap(training_state.flow_state)
+          else:
+            state_to_save = None
           
       elif sampler_choice == "GMM":
           # Save the GMM Training state
@@ -1604,6 +1921,10 @@ def train(
       imageio.mimsave(os.path.join(save_dir, f"Evaluation Heatmap [beta={beta}_gamma={gamma}].gif"), evaluation_frames, fps=4)
       imageio.mimsave(os.path.join(save_dir, f"target log prob with current occupancy [beta={beta}_gamma={gamma}].gif"), occupancy_frames, fps=4)
       imageio.mimsave(os.path.join(save_dir, f"Flow Heatmap [beta={beta}_gamma={gamma}].gif"), flow_frames, fps=4)
+    elif sampler_choice=="GBS":
+      imageio.mimsave(os.path.join(save_dir, f"Evaluation Heatmap [beta={beta}].gif"), evaluation_frames, fps=4)
+      imageio.mimsave(os.path.join(save_dir, f"target log prob with current occupancy [beta={beta}].gif"), occupancy_frames, fps=4)
+      imageio.mimsave(os.path.join(save_dir, f"GBS Heatmap [beta={beta}].gif"), gbs_frames, fps=4)
     elif sampler_choice =="GMM":
       imageio.mimsave(os.path.join(save_dir, f"Evaluation Heatmap [beta={beta}].gif"), evaluation_frames, fps=4)
       imageio.mimsave(os.path.join(save_dir, f"target log prob with current occupancy [beta={beta}].gif"), occupancy_frames, fps=4)
@@ -1630,8 +1951,11 @@ def train(
           state_to_save = _unpmap(training_state.autodr_state)
       elif sampler_choice == "DORAEMON":
           state_to_save = _unpmap(training_state.doraemon_state)
-      elif "FLOW" in sampler_choice:
-          state_to_save = None #_unpmap(training_state.flow_state)
+      elif ("FLOW" in sampler_choice) or (sampler_choice=="GBS"):
+          if sampler_choice == "GBS":
+              state_to_save = _unpmap(training_state.flow_state)
+          else:
+              state_to_save = None
       elif sampler_choice == "GMM":
           state_to_save = _unpmap(training_state.gmm_training_state)
 
