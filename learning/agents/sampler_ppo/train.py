@@ -877,13 +877,13 @@ def train(
     )
     # if sampler_choice != "GMM":
     values = rewards.mean(axis=(0,1)) if sampler_choice!="EPOpt" else 0#+ bootstrap_value 
-    # cumulated_values += values
+    cumulated_values += values
     # else:
-    cumulated_values += jax.lax.cond(
-        sampler_choice == "GBS",
-        lambda: values,
-        lambda: value_approx,
-    )
+    # cumulated_values += jax.lax.cond(
+    #     sampler_choice == "GBS",
+    #     lambda: values,
+    #     lambda: value_approx,
+    # )
     # For Debuggin GMM
     # target = Funnel(dim=2, sample_bounds=[-30, 30])
     # target_logprob = jax.vmap(target.log_prob)
