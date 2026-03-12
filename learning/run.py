@@ -548,9 +548,9 @@ def train(cfg: dict):
         # ... Rendering Logic ...
         frames = eval_env.render(rollout)
         fps = 1.0 / env.sim_dt
-        video_path = cfg.work_dir/ f"video_{cfg.policy}_{cfg.task}.mp4"
+        video_path = cfg.work_dir / f"video_{cfg.policy}_{cfg.task}.mp4"
+        os.makedirs(video_path.parent, exist_ok=True)
         imageio.mimsave(video_path, frames, fps=fps)
-        os.makedirs(video_path, exist_ok=True)
         # Corrected Logging
         wandb.log({
             'final_eval_reward': reward_array.mean(),
