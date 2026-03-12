@@ -69,7 +69,7 @@ def default_config() -> config_dict.ConfigDict:
       ),
       impl='jax',
       nconmax=30 * 8192,
-      njmax=128,
+      njmax=160,
   )
 
 
@@ -516,8 +516,8 @@ class CubeReorient(leap_hand_base.LeapHandEnv):
     high.append(jp.full((16,), 0.05))
 
     # 5. Static friction scale (16 params): U(0.5, 2.0)
-    low.append(jp.full((16,), 0.5))
-    high.append(jp.full((16,), 2.0))
+    low.append(jp.full((16,), 0.9))
+    high.append(jp.full((16,), 1.1))
 
     # 6. Armature scale (16 params): U(1.0, 1.05)
     low.append(jp.full((16,), 1.0))
