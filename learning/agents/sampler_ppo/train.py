@@ -759,13 +759,9 @@ def train(
     elif "FLOW" in sampler_choice:
       param_key, param_key2= jax.random.split(param_key)
       flow_model = nnx.merge(samplerppo_network.flow_network, training_state.flow_state)
-      dynamics_params_sampler, logp = flow_model.sample((num_envs // jax.process_count() // local_devices_to_use,),\
-                                                    rng=param_key)
-      sampler_data = get_experience(training_state, state, dynamics_params_sampler,\
-            key_generate_unroll, unroll_length, batch_size * num_minibatches // num_envs,)[1]
-      rewards = sampler_data.reward
-      
-      dynamics_params = jax.random.uniform(param_key2, shape=(num_envs //jax.process_count(), len(dr_range_low)), minval=dr_range_low, maxval=dr_range_high)
+      dynamics_params, logp = flow_model.sample((num_envs // jax.process_count() // local_devices_to_use,),\
+                                                    rng=param_key)    
+        
     elif sampler_choice == "GBS":
       param_key, param_key2 = jax.random.split(param_key)
       gbs_sampler_key = param_key
@@ -783,26 +779,26 @@ def train(
           gbs_sde_ctrl_dropout,
           gbs_center,
       )
-      dynamics_params_sampler = (
+      dynamics_params = (
           gbs_to_box(dynamics_params_sampler_latent)
           if gbs_use_tanh_bijection
           else dynamics_params_sampler_latent
       )
-      sampler_data = get_experience(
-          training_state,
-          state,
-          dynamics_params_sampler,
-          key_generate_unroll,
-          unroll_length,
-          batch_size * num_minibatches // num_envs,
-      )[1]
-      rewards = sampler_data.reward
-      dynamics_params = jax.random.uniform(
-          param_key2,
-          shape=(num_envs // jax.process_count(), len(dr_range_low)),
-          minval=dr_range_low,
-          maxval=dr_range_high,
-      )
+      # sampler_data = get_experience(
+      #     training_state,
+      #     state,
+      #     dynamics_params_sampler,
+      #     key_generate_unroll,
+      #     unroll_length,
+      #     batch_size * num_minibatches // num_envs,
+      # )[1]
+      # rewards = sampler_data.reward
+      # dynamics_params = jax.random.uniform(
+      #     param_key2,
+      #     shape=(num_envs // jax.process_count(), len(dr_range_low)),
+      #     minval=dr_range_low,
+      #     maxval=dr_range_high,
+      # )
 
     elif sampler_choice == "GMM":
         dynamics_params, mapping = samplerppo_network.gmm_network.model.sample(\
@@ -878,12 +874,6 @@ def train(
     # if sampler_choice != "GMM":
     values = rewards.mean(axis=(0,1)) if sampler_choice!="EPOpt" else 0#+ bootstrap_value 
     cumulated_values += values
-    # else:
-    # cumulated_values += jax.lax.cond(
-    #     sampler_choice == "GBS",
-    #     lambda: values,
-    #     lambda: value_approx,
-    # )
     # For Debuggin GMM
     # target = Funnel(dim=2, sample_bounds=[-30, 30])
     # target_logprob = jax.vmap(target.log_prob)
@@ -951,7 +941,7 @@ def train(
         fs, fos, prev_sample_carry, prev_logp_carry = carry
         (loss, fs_n, fos_n), (metric, current_sample, current_logq) = flow_update_fn(
             samplerppo_network.flow_network, fs, fos,
-            dynamics_params_sampler,
+            dynamics_params,
             prev_sample_carry,
             
             prev_logp_carry,
