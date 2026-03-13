@@ -246,6 +246,27 @@ def plot_sample_density_2d(
     return fig, axes
 
 
+def gbs_sample_log_prob(
+    x0: jax.Array,
+    rnd_running: jax.Array,
+    prior_log_prob,
+    logabsdet: jax.Array | None = None,
+) -> jax.Array:
+    """Pathwise GBS log-prob estimator for sampled terminal states.
+
+    In latent space this is:
+      log q(z_T) ~= log p_0(x_0) + rnd_running
+
+    If a bijection `x = f(z)` is applied afterwards, pass `logabsdet = log|det dx/dz|`
+    to obtain the density in x-space:
+      log q(x) = log q(z) - log|det dx/dz|
+    """
+    log_prob = prior_log_prob(x0) + rnd_running
+    if logabsdet is not None:
+        log_prob = log_prob - logabsdet
+    return log_prob
+
+
 # -------------------------
 # LV loss from precomputed target log-prob VALUES
 # -------------------------

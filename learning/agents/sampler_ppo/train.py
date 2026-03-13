@@ -59,7 +59,11 @@ from flax import nnx
 import imageio
 import os
 from flax.training import train_state as flax_train_state
-from learning.module.gbs.gbs_trainer import PISGRADNet, plot_sample_density_2d
+from learning.module.gbs.gbs_trainer import (
+    gbs_sample_log_prob,
+    PISGRADNet,
+    plot_sample_density_2d,
+)
 from learning.module.gbs.gbs_loss import VP, Langevin, rnd_time_reversal_lv_no_target, lv_loss_from_rnd
 InferenceParams = Tuple[running_statistics.NestedMeanStd, Params]
 Metrics = types.Metrics
@@ -766,7 +770,7 @@ def train(
       param_key, param_key2 = jax.random.split(param_key)
       gbs_sampler_key = param_key
       fwd_state, bwd_state = training_state.flow_state
-      _, dynamics_params_sampler_latent, _ = gbs_sampler_jit(
+      x0_latent, dynamics_params_sampler_latent, rnd_running = gbs_sampler_jit(
           param_key,
           (fwd_state, bwd_state),
           fwd_state.params,
@@ -783,6 +787,16 @@ def train(
           gbs_to_box(dynamics_params_sampler_latent)
           if gbs_use_tanh_bijection
           else dynamics_params_sampler_latent
+      )
+      dynamics_params_log_prob = gbs_sample_log_prob(
+          x0=x0_latent,
+          rnd_running=rnd_running,
+          prior_log_prob=gbs_prior.log_prob,
+          logabsdet=(
+              gbs_logabsdet(dynamics_params_sampler_latent)
+              if gbs_use_tanh_bijection
+              else None
+          ),
       )
       # sampler_data = get_experience(
       #     training_state,
