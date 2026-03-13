@@ -872,7 +872,7 @@ def train(
         length=num_updates_per_batch,
     )
     # if sampler_choice != "GMM":
-    values = rewards.mean(axis=(0,1)) if sampler_choice!="EPOpt" else 0#+ bootstrap_value 
+    values = jnp.maximum(rewards.mean(axis=(0,1)), 0) if sampler_choice!="EPOpt" else 0#+ bootstrap_value 
     cumulated_values += values
     # For Debuggin GMM
     # target = Funnel(dim=2, sample_bounds=[-30, 30])
@@ -1206,6 +1206,79 @@ def train(
   gmm_frames = []
   gmm_training_frames = []
   occupancy_frames = []
+  percentile_levels = np.arange(0, 101, 10)
+  final_eval_dynamics_percentiles = None
+  final_eval_reward_percentiles = None
+
+  def _compute_percentile_dynamics_params(
+      dynamics_params_eval: np.ndarray,
+      rewards_eval: np.ndarray,
+  ) -> Tuple[np.ndarray, np.ndarray]:
+    dyn = np.asarray(dynamics_params_eval)
+    rew = np.asarray(rewards_eval).reshape(-1)
+    if dyn.ndim == 1:
+      dyn = dyn[:, None]
+    n = min(dyn.shape[0], rew.shape[0])
+    dyn = dyn[:n]
+    rew = rew[:n]
+    order = np.argsort(rew)
+    sorted_dyn = dyn[order]
+    sorted_rew = rew[order]
+    idx = np.rint((percentile_levels / 100.0) * max(n - 1, 0)).astype(int)
+    idx = np.clip(idx, 0, max(n - 1, 0))
+    return sorted_dyn[idx], sorted_rew[idx]
+
+  def _plot_pairwise_sample_density(
+      samples: np.ndarray,
+      low: np.ndarray,
+      high: np.ndarray,
+      title: str,
+      bins: int = 50,
+  ):
+    samples = np.asarray(samples)
+    low = np.asarray(low)
+    high = np.asarray(high)
+    dim = samples.shape[1]
+    fig, axes = plt.subplots(dim, dim, figsize=(3.5 * dim, 3.5 * dim), squeeze=False)
+    fig.subplots_adjust(wspace=0.15, hspace=0.15)
+    mappable = None
+
+    for row in range(dim):
+      for col in range(dim):
+        ax = axes[row, col]
+        if row < col:
+          ax.axis("off")
+          continue
+        if row == col:
+          ax.hist(samples[:, col], bins=30, density=True, alpha=0.85)
+          ax.set_xlim(float(low[col]), float(high[col]))
+          ax.yaxis.set_ticks([])
+        else:
+          hist, xedges, yedges = np.histogram2d(
+              samples[:, col],
+              samples[:, row],
+              bins=bins,
+              range=[[float(low[col]), float(high[col])], [float(low[row]), float(high[row])]],
+          )
+          mappable = ax.pcolormesh(xedges, yedges, hist.T, shading="auto", cmap="viridis")
+          ax.set_xlim(float(low[col]), float(high[col]))
+          ax.set_ylim(float(low[row]), float(high[row]))
+
+        if row == dim - 1:
+          ax.set_xlabel(f"dim {col}")
+        else:
+          ax.set_xticklabels([])
+
+        if col == 0:
+          ax.set_ylabel(f"dim {row}")
+        else:
+          ax.set_yticklabels([])
+
+    if mappable is not None:
+      cbar = fig.colorbar(mappable, ax=axes, shrink=0.9, pad=0.02)
+      cbar.set_label("sample density")
+    fig.suptitle(title)
+    return fig, axes
   # Run initial eval
   print("-------------------------len parameter--------------------------------------------", len(dr_range_low))
   metrics = {}
@@ -1248,6 +1321,38 @@ def train(
                 {"Sampler Heatmap" :wandb.Image(model_fig)},
                 step=int(current_step),
             )
+    elif sampler_choice=="GBS":
+      sample_key, local_key = jax.random.split(local_key)
+      fwd_state, bwd_state = _unpmap(training_state.flow_state)
+      _, samples_latent, _ = gbs_sampler_jit(
+        sample_key,
+        (fwd_state, bwd_state),
+        fwd_state.params,
+        2**14,
+        gbs_prior_sampler,
+        gbs_num_steps,
+        gbs_process,
+        True,
+        -1.0,
+        -1.0,
+        gbs_center,
+      )
+      eval_samples = gbs_to_box(samples_latent) if gbs_use_tanh_bijection else samples_latent
+      fig, _ = _plot_pairwise_sample_density(
+        samples=np.asarray(eval_samples),
+        low=np.asarray(dr_range_low),
+        high=np.asarray(dr_range_high),
+        title=f"GBS pairwise sample density [step={int(current_step)}]",
+      )
+      fig.tight_layout()
+      fig.canvas.draw()
+      gbs_frames.append(np.asarray(fig.canvas.buffer_rgba())[...,:3])
+      if use_wandb:
+        wandb.log(
+            {"GBS Heatmap": wandb.Image((lambda f: (f.set_size_inches(12, 8, forward=True), f.set_dpi(100), f)[-1])(fig))},
+
+            step=int(current_step),
+        )
   elif process_id == 0 and num_evals > 1 and run_evals and len(dr_range_low)==2:
     x, y, dynamics_params_grid = make_2d_dynamics_grid(num_eval_envs)
     metrics, reward_1d,_ = evaluator.run_evaluation(
@@ -1372,7 +1477,7 @@ def train(
       gbs_frames.append(np.asarray(fig.canvas.buffer_rgba())[...,:3])
       if use_wandb:
         wandb.log(
-            {"GBS Heatmap": wandb.Image(fig)},
+            {"GBS Heatmap": wandb.Image((lambda f: (f.set_size_inches(12, 8, forward=True), f.set_dpi(100), f)[-1])(fig))},
             step=int(current_step),
         )
     elif sampler_choice=="GMM":
@@ -1598,6 +1703,7 @@ def train(
             metrics['eval/ln_z'] = (jnp.log(weights.sum()) + jnp.max(safe_log_ratio)) - jnp.log(num_samples_bench)
         if len(dr_range_low)>2:
           rewards = []
+          dynamics_params_eval = []
           for i in range(4): # 16384 envs.
             eval_key, local_key = jax.random.split(local_key)
             dynamics_params_grid = jax.random.uniform(eval_key, shape=(num_eval_envs, len(dr_range_low)), minval=dr_range_low, maxval=dr_range_high)
@@ -1613,7 +1719,9 @@ def train(
                 success_threshold=success_threshold,
             )
             rewards.append(_reward_1d)
+            dynamics_params_eval.append(np.asarray(dynamics_params_grid))
           rewards = jnp.stack(rewards, axis=-1).reshape(-1)
+          dynamics_params_eval = np.concatenate(dynamics_params_eval, axis=0)
           reward_1d= rewards
           N = rewards.shape[0]
           k20 = int(N* .2)
@@ -1629,6 +1737,9 @@ def train(
           metrics['eval/episode_reward_iqm'] = scipy.stats.trim_mean(rewards, proportiontocut=0.25, axis=None)
           metrics['eval/episode_reward_CVaR20'] = np.mean(sorted_rewards[:k20])
           metrics['eval/episode_reward_CVaR10'] = np.mean(sorted_rewards[:k10])
+          final_eval_dynamics_percentiles, final_eval_reward_percentiles = _compute_percentile_dynamics_params(
+              dynamics_params_eval, np.asarray(rewards)
+          )
       if run_evals and len(dr_range_low)==2:
         x, y, dynamics_params_grid = make_2d_dynamics_grid(num_eval_envs)
         metrics, reward_1d, _ = evaluator.run_evaluation(
@@ -1641,6 +1752,10 @@ def train(
             training_metrics=metrics,
             num_eval_seeds=10,
             success_threshold=success_threshold,
+        )
+        final_eval_dynamics_percentiles, final_eval_reward_percentiles = _compute_percentile_dynamics_params(
+            np.asarray(dynamics_params_grid),
+            np.asarray(reward_1d),
         )
         print("reward_1d", reward_1d.shape)
         eval_fig = plt.figure()
@@ -1750,7 +1865,7 @@ def train(
           )
           if use_wandb:
             wandb.log(
-                {"GBS Heatmap": wandb.Image(fig)},
+              {"GBS Heatmap": wandb.Image((lambda f: (f.set_size_inches(12, 8, forward=True), f.set_dpi(100), f)[-1])(fig))},
                 step=int(current_step),
             )
           fig.tight_layout()
@@ -1855,6 +1970,37 @@ def train(
                   {"Sampler Heatmap" :wandb.Image(model_fig)},
                   step=int(current_step),
               )
+      elif run_evals and len(dr_range_low)>2 and sampler_choice=="GBS":
+        sample_key, local_key = jax.random.split(local_key)
+        fwd_state, bwd_state = _unpmap(training_state.flow_state)
+        _, samples_latent, _ = gbs_sampler_jit(
+          sample_key,
+          (fwd_state, bwd_state),
+          fwd_state.params,
+          2**14,
+          gbs_prior_sampler,
+          gbs_num_steps,
+          gbs_process,
+          True,
+          -1.0,
+          -1.0,
+          gbs_center,
+        )
+        eval_samples = gbs_to_box(samples_latent) if gbs_use_tanh_bijection else samples_latent
+        fig, _ = _plot_pairwise_sample_density(
+          samples=np.asarray(eval_samples),
+          low=np.asarray(dr_range_low),
+          high=np.asarray(dr_range_high),
+          title=f"GBS pairwise sample density [step={int(current_step)}]",
+        )
+        fig.tight_layout()
+        fig.canvas.draw()
+        gbs_frames.append(np.asarray(fig.canvas.buffer_rgba())[...,:3])
+        if use_wandb:
+          wandb.log(
+              {"GBS Heatmap": wandb.Image((lambda f: (f.set_size_inches(12, 8, forward=True), f.set_dpi(100), f)[-1])(fig))},
+              step=int(current_step),
+          )
       logging.info(metrics)
       progress_fn(current_step, metrics)
       # 2. Select the state based on sampler_choice
@@ -1928,6 +2074,10 @@ def train(
       training_state.params.policy,
       training_state.params.value,
   ))
+  if final_eval_dynamics_percentiles is not None:
+    metrics['final_eval/percentile_levels'] = percentile_levels.tolist()
+    metrics['final_eval/dynamics_params_percentiles'] = final_eval_dynamics_percentiles.tolist()
+    metrics['final_eval/reward_percentiles'] = final_eval_reward_percentiles.tolist()
   logging.info('total steps: %s', total_steps)
   # ... [End of your training loop] ...
 

@@ -2,6 +2,7 @@ import os
 import sys
 import imageio
 import mediapy as media
+import copy
 from omegaconf import OmegaConf
 # sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 os.environ['MUJOCO_GL'] = 'egl'
@@ -39,11 +40,14 @@ from helper import make_dir
 import pickle
 import shutil
 from learning.module.wrapper.wrapper import Wrapper
+from learning.module.wrapper.adv_wrapper import wrap_for_adv_training
 from custom_envs import mjx_env
 from utils import save_configs_to_wandb_and_local
 from learning.module.wrapper.wrapper import Wrapper
 import scipy
 import jax.numpy as jnp
+import math
+from PIL import Image, ImageDraw
 # # Ignore the info logs from brax
 # logging.set_verbosity(logging.WARNING)
 
@@ -94,25 +98,6 @@ CAMERAS = {
 }
 camera_name = CAMERAS[env_name]
 
-class BraxDomainRandomizationWrapper(Wrapper):
-  """Brax wrapper for domain randomization."""
-  def __init__(
-      self,
-      env: mjx_env.MjxEnv,
-      randomization_fn: Callable[[mjx.Model], Tuple[mjx.Model, mjx.Model]],
-  ):
-    super().__init__(env)
-    self._mjx_model, self._in_axes = randomization_fn(self.env.mjx_model)
-    self.env.unwrapped._mjx_model = self._mjx_model
-
-  def reset(self, rng: jax.Array) -> mjx_env.State:
-    state = self.env.reset(rng)
-    return state
-
-  def step(self, state: mjx_env.State, action: jax.Array) -> mjx_env.State:
-    res = self.env.step(state, action)
-    return res
-
 def policy_params_fn(current_step, make_policy, params, ckpt_path: epath.Path):
   orbax_checkpointer = ocp.PyTreeCheckpointer()
   save_args = orbax_utils.save_args_from_target(params)
@@ -128,6 +113,72 @@ def progress_fn(num_steps, metrics, use_wandb=True):
     for k,v in metrics.items():
         print(f" {k} :  {v}")
     print("-------------------------------------------------------------------")
+
+def _apply_fixed_dynamics_params(eval_env, randomizer_eval, dynamics_params):
+    if randomizer_eval is None:
+        return eval_env
+    new_model, _ = randomizer_eval(
+        model=eval_env.mjx_model,
+        dr_range=eval_env.dr_range,
+        params=jnp.asarray(dynamics_params),
+        rng=None,
+    )
+    eval_env._mjx_model = new_model
+    if hasattr(eval_env, "unwrapped"):
+        eval_env.unwrapped._mjx_model = new_model
+    return eval_env
+
+def _extract_single_trajectory(trajectory, batch_index, batch_size):
+    def _select_leaf(x):
+        if not hasattr(x, "shape"):
+            return x
+        if len(x.shape) == 0:
+            return x
+        if x.shape[0] == batch_size:
+            return x[batch_index]
+        return x
+    return [
+        jax.tree_util.tree_map(_select_leaf, state)
+        for state in trajectory
+    ]
+
+def _tile_frame_sequences(frame_sequences, grid_cols=4, bg_value=0, tile_labels=None):
+    if not frame_sequences:
+        return []
+    max_t = max(len(seq) for seq in frame_sequences)
+    n = len(frame_sequences)
+    grid_rows = math.ceil(n / grid_cols)
+    h = max(seq[0].shape[0] for seq in frame_sequences if len(seq) > 0)
+    w = max(seq[0].shape[1] for seq in frame_sequences if len(seq) > 0)
+    c = frame_sequences[0][0].shape[2]
+
+    tiled = []
+    for t in range(max_t):
+        canvas = np.full((grid_rows * h, grid_cols * w, c), bg_value, dtype=np.uint8)
+        for i, seq in enumerate(frame_sequences):
+            frame = seq[min(t, len(seq) - 1)]
+            fh, fw = frame.shape[:2]
+            r, col = divmod(i, grid_cols)
+            y0 = r * h + (h - fh) // 2
+            x0 = col * w + (w - fw) // 2
+            canvas[y0:y0+fh, x0:x0+fw] = frame
+            if tile_labels is not None and i < len(tile_labels):
+                pil_img = Image.fromarray(canvas)
+                draw = ImageDraw.Draw(pil_img)
+                label = str(tile_labels[i])
+                text_x = col * w + 8
+                text_y = r * h + 8
+                # Draw a simple black box and white text for readability.
+                text_box_w = 10 + 8 * max(len(label), 1)
+                text_box_h = 24
+                draw.rectangle(
+                    [text_x - 4, text_y - 2, text_x - 4 + text_box_w, text_y - 2 + text_box_h],
+                    fill=(0, 0, 0),
+                )
+                draw.text((text_x, text_y), label, fill=(255, 255, 255))
+                canvas = np.array(pil_img, copy=True)
+        tiled.append(canvas)
+    return tiled
 
 
 def train_ppo(cfg:dict, randomization_fn, env, eval_env=None):
@@ -324,7 +375,7 @@ def train_td3(cfg:dict, randomization_fn, env, eval_env=None):
         group += f" [threshold={cfg.success_threshold}_condition={cfg.success_rate_condition}]"
     else:
         raise ValueError("No td3 variant!")
-    if nonstationary:
+    if cfg.nonstationary:
         wandb_name+='_nonstationary'
         group +=f"_nonstationary"
     wandb_name += cfg.comment
@@ -496,69 +547,162 @@ def train(cfg: dict):
 
     # Save config.yaml and randomization config to wandb and local directory
     save_configs_to_wandb_and_local(cfg, cfg.work_dir)
-    # env_cfg['impl'] = 'jax'
-
-    # if cfg.final_randomization:
-    #     eval_rng, rng = jax.random.split(rng)
-    #     randomizer_eval = registry.get_domain_randomizer_eval(cfg.task)
-    #     randomizer_eval = functools.partial(randomizer_eval, rng=eval_rng, dr_range=env.dr_range)
-    #     eval_env = BraxDomainRandomizationWrapper(
-    #         registry.load(cfg.task, config=env_cfg),
-    #         randomization_fn=randomizer_eval,
-    #     )
-    # else:
     eval_env = registry.load(cfg.task, config=env_cfg)
         
     if cfg.save_video and cfg.use_wandb:
-        n_episodes = 10
-        # Move JIT outside if this block repeats
-        jit_inference_fn = jax.jit(make_inference_fn(params, deterministic=True))
-        jit_reset = jax.jit(eval_env.reset)
-        jit_step = jax.jit(eval_env.step)
-        
-        reward_list = []
-        rollout = []
-        rng, eval_rng = jax.random.split(rng)
-        rngs = jax.random.split(eval_rng, n_episodes)
-
-        for i in range(n_episodes):
-            state = jit_reset(rngs[i])
-            
-            # Pull to CPU immediately to save GPU memory
-            if i == 0:
-                rollout = [jax.device_get(state)] 
-                
-            current_episode_reward = 0
-            for _ in range(env_cfg.episode_length):
-                act_rng, rng = jax.random.split(rng)
-                action, info = jit_inference_fn(state.obs, act_rng)
-                state = jit_step(state, action)
-                
-                if i == 0:
-                    rollout.append(jax.device_get(state))
-                
-                current_episode_reward += state.reward
-            
-            # Ensure we store a standard float/numpy value
-            reward_list.append(float(current_episode_reward))
-
-        # Convert list to numpy for stats
-        reward_array = np.array(reward_list)
-
-        # ... Rendering Logic ...
-        frames = eval_env.render(rollout)
+        policy_fn = make_inference_fn(params, deterministic=True)
+        jit_policy_fn = jax.jit(policy_fn)
         fps = 1.0 / env.sim_dt
-        video_path = cfg.work_dir / f"video_{cfg.policy}_{cfg.task}.mp4"
-        os.makedirs(video_path.parent, exist_ok=True)
-        imageio.mimsave(video_path, frames, fps=fps)
-        # Corrected Logging
-        wandb.log({
-            'final_eval_reward': reward_array.mean(),
-            'final_eval_reward_video': reward_array[0],
-            'final_eval_reward_iqm': scipy.stats.trim_mean(reward_array, 0.25),
-            'final_eval_reward_std': reward_array.std(),
-            'eval_video': wandb.Video(video_path, fps=fps, format='mp4')
-        })
+
+        percentile_levels = metrics.get('final_eval/percentile_levels', None) if isinstance(metrics, dict) else None
+        percentile_params = metrics.get('final_eval/dynamics_params_percentiles', None) if isinstance(metrics, dict) else None
+        use_percentile_rollouts = (
+            "ppo" in cfg.policy
+            and percentile_levels is not None
+            and percentile_params is not None
+            and cfg.randomization
+        )
+
+        if use_percentile_rollouts:
+            randomizer_eval = registry.get_domain_randomizer_eval(cfg.task)
+            percentile_levels = [int(p) for p in percentile_levels]
+            percentile_params = np.asarray(percentile_params, dtype=np.float32)
+            percentile_params_jax = jnp.asarray(percentile_params)
+            rollout_frames = []
+
+            if randomizer_eval is not None:
+                batched_eval_env = wrap_for_adv_training(
+                    copy.deepcopy(eval_env),
+                    param_size=percentile_params.shape[1],
+                    episode_length=env_cfg.episode_length,
+                    action_repeat=getattr(env_cfg, "action_repeat", 1),
+                    randomization_fn=functools.partial(
+                        randomizer_eval,
+                        dr_range=eval_env.dr_range,
+                    ),
+                    dr_range_low=jnp.asarray(eval_env.dr_range[0]),
+                    dr_range_high=jnp.asarray(eval_env.dr_range[1]),
+                )
+                jit_batched_reset = jax.jit(batched_eval_env.reset)
+                jit_batched_step = jax.jit(
+                    lambda state, action, dynamics_params_batch: batched_eval_env.step(
+                        state,
+                        action,
+                        dynamics_params_batch,
+                    )
+                )
+
+                reset_rng, rng = jax.random.split(rng)
+                reset_keys = jax.random.split(reset_rng, len(percentile_levels))
+                state = jit_batched_reset(reset_keys)
+                batched_trajectory = [jax.device_get(state)]
+                reward_batch = np.zeros(len(percentile_levels), dtype=np.float32)
+
+                for _ in range(env_cfg.episode_length):
+                    act_rng, rng = jax.random.split(rng)
+                    action, _ = jit_policy_fn(state.obs, act_rng)
+                    state = jit_batched_step(state, action, percentile_params_jax)
+                    state_cpu = jax.device_get(state)
+                    batched_trajectory.append(state_cpu)
+                    reward_batch += np.asarray(state_cpu.reward, dtype=np.float32)
+
+                reward_list = reward_batch.tolist()
+
+                for batch_index in range(len(percentile_levels)):
+                    rollout = _extract_single_trajectory(
+                        batched_trajectory,
+                        batch_index,
+                        len(percentile_levels),
+                    )
+                    frames_i = eval_env.render(rollout, camera=camera_name)
+                    rollout_frames.append(frames_i)
+            else:
+                reward_list = []
+                for dyn_params in percentile_params:
+                    percentile_env = registry.load(cfg.task, config=env_cfg)
+                    percentile_env = _apply_fixed_dynamics_params(
+                        percentile_env,
+                        randomizer_eval,
+                        dyn_params,
+                    )
+                    jit_reset = jax.jit(percentile_env.reset)
+                    jit_step = jax.jit(percentile_env.step)
+                    reset_rng, rng = jax.random.split(rng)
+                    state = jit_reset(reset_rng)
+                    rollout = [jax.device_get(state)]
+                    episode_reward = 0.0
+
+                    for _ in range(env_cfg.episode_length):
+                        act_rng, rng = jax.random.split(rng)
+                        action, _ = jit_policy_fn(state.obs, act_rng)
+                        state = jit_step(state, action)
+                        rollout.append(jax.device_get(state))
+                        episode_reward += float(state.reward)
+
+                    frames_i = percentile_env.render(rollout, camera=camera_name)
+                    rollout_frames.append(frames_i)
+                    reward_list.append(episode_reward)
+
+            tile_labels = [
+                f"p{p} | R={r:.2f}"
+                for p, r in zip(percentile_levels, reward_list)
+            ]
+            tiled_frames = _tile_frame_sequences(
+                rollout_frames,
+                grid_cols=4,
+                tile_labels=tile_labels,
+            )
+            reward_array = np.array(reward_list)
+            video_path = cfg.work_dir / f"video_{cfg.policy}_{cfg.task}_p0_to_p100.mp4"
+            os.makedirs(video_path.parent, exist_ok=True)
+            imageio.mimsave(video_path, tiled_frames, fps=fps)
+
+            percentile_reward_log = {
+                f'final_eval_reward_p{p}': float(r)
+                for p, r in zip(percentile_levels, reward_list)
+            }
+            wandb.log({
+                'final_eval_reward': reward_array.mean(),
+                'final_eval_reward_iqm': scipy.stats.trim_mean(reward_array, 0.25),
+                'final_eval_reward_std': reward_array.std(),
+                'eval_video_percentiles': wandb.Video(video_path, fps=fps, format='mp4'),
+                **percentile_reward_log,
+            })
+        else:
+            n_episodes = 10
+            jit_reset = jax.jit(eval_env.reset)
+            jit_step = jax.jit(eval_env.step)
+            reward_list = []
+            rollout = []
+            rng, eval_rng = jax.random.split(rng)
+            rngs = jax.random.split(eval_rng, n_episodes)
+
+            for i in range(n_episodes):
+                state = jit_reset(rngs[i])
+                if i == 0:
+                    rollout = [jax.device_get(state)]
+                current_episode_reward = 0
+                for _ in range(env_cfg.episode_length):
+                    act_rng, rng = jax.random.split(rng)
+                    action, _ = jit_policy_fn(state.obs, act_rng)
+                    state = jit_step(state, action)
+                    if i == 0:
+                        rollout.append(jax.device_get(state))
+                    current_episode_reward += state.reward
+                reward_list.append(float(current_episode_reward))
+
+            reward_array = np.array(reward_list)
+            frames = eval_env.render(rollout, camera=camera_name)
+            video_path = cfg.work_dir / f"video_{cfg.policy}_{cfg.task}.mp4"
+            os.makedirs(video_path.parent, exist_ok=True)
+            imageio.mimsave(video_path, frames, fps=fps)
+            wandb.log({
+                'final_eval_reward': reward_array.mean(),
+                'final_eval_reward_video': reward_array[0],
+                'final_eval_reward_iqm': scipy.stats.trim_mean(reward_array, 0.25),
+                'final_eval_reward_std': reward_array.std(),
+                'eval_video': wandb.Video(video_path, fps=fps, format='mp4')
+            })
 if __name__ == "__main__":
     xla_flags = os.environ.get("XLA_FLAGS", "")
     xla_flags += " --xla_gpu_triton_gemm_any=True"
