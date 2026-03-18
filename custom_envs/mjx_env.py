@@ -39,7 +39,6 @@ MENAGERIE_PATH = EXTERNAL_DEPS_PATH / "mujoco_menagerie"
 # Commit SHA of the menagerie repo.
 MENAGERIE_COMMIT_SHA = "14ceccf557cc47240202f2354d684eca58ff8de4"
 
-
 def _clone_with_progress(
     repo_url: str, target_path: str, commit_sha: str
 ) -> None:
@@ -135,13 +134,15 @@ def make_data(
     mocap_pos: Optional[jax.Array] = None,
     mocap_quat: Optional[jax.Array] = None,
     impl: Optional[str] = None,
-    nconmax: Optional[int] = None,
+    naconmax: Optional[int] = None,
+    naccdmax: Optional[int] = None,
     njmax: Optional[int] = None,
     device: Optional[jax.Device] = None,
 ) -> mjx.Data:
   """Initialize MJX Data."""
   data = mjx.make_data(
-      model, impl=impl, nconmax=nconmax, njmax=njmax, device=device
+      model, impl=impl, naconmax=naconmax, naccdmax=naccdmax, njmax=njmax,
+      device=device,
   )
   if qpos is not None:
     data = data.replace(qpos=qpos)
@@ -169,8 +170,7 @@ def step(
     data = mjx.step(model, data)
     return data, None
 
-  return single_step(data, None)[0]
-#   return jax.lax.scan(single_step, data, (), n_substeps)[0]
+  return jax.lax.scan(single_step, data, (), n_substeps)[0]
 
 
 @struct.dataclass

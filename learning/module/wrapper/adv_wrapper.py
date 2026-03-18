@@ -1,4 +1,5 @@
 import contextlib
+import inspect
 from typing import Any, Callable, Dict, NamedTuple, Optional, Sequence, Tuple, Union
 import jax
 import jax.numpy as jnp
@@ -71,6 +72,9 @@ class AdVmapWrapper(Wrapper):
     self.param_size = param_size
     self.dr_range_low = dr_range_low
     self.dr_range_high = dr_range_high
+    self._supports_reset_params = "params" in inspect.signature(
+        self.env.unwrapped.reset
+    ).parameters
 
   @contextlib.contextmanager
   def v_env_fn(self, mjx_model: mjx.Model):
@@ -82,15 +86,26 @@ class AdVmapWrapper(Wrapper):
     finally:
       env.unwrapped._mjx_model = old_mjx_model
       
-  def reset(self, rng: jax.Array) -> mjx_env.State:
+  def reset(self, rng: jax.Array, params: jax.Array = None) -> mjx_env.State:
     # state = jax.vmap(reset, in_axes=[self._in_axes, 0])(self._mjx_model_v, rng)
-    def dr_reset(rng):
-      param_rng, rng = jax.random.split(rng)
-      params = jax.random.uniform(param_rng, (self.param_size,), minval=self.dr_range_low, maxval=self.dr_range_high)
+    def dr_reset(rng, params):
+      if params is None:
+        param_rng, rng = jax.random.split(rng)
+        params = jax.random.uniform(
+            param_rng,
+            (self.param_size,),
+            minval=self.dr_range_low,
+            maxval=self.dr_range_high,
+        )
       mjx_model, inaxes = self.rand_fn(params=params)
       with self.v_env_fn(mjx_model) as v_env:
+        if self._supports_reset_params:
+          return v_env.reset(rng, params=params), params
         return v_env.reset(rng), params
-    state, params = jax.vmap(dr_reset, )(rng)
+    if params is None:
+      state, params = jax.vmap(dr_reset, in_axes=(0, None))(rng, None)
+    else:
+      state, params = jax.vmap(dr_reset, in_axes=(0, 0))(rng, params)
     state.info['dr_params'] = params
 
     if self.get_grad:
@@ -119,8 +134,8 @@ class EpisodeWrapper(Wrapper):
     self.episode_length = episode_length
     self.action_repeat = action_repeat
 
-  def reset(self, rng: jax.Array) -> State:
-    state = self.env.reset(rng)
+  def reset(self, rng: jax.Array, params=None) -> State:
+    state = self.env.reset(rng, params)
     state.info['steps'] = jnp.zeros(rng.shape[:-1])
     state.info['truncation'] = jnp.zeros(rng.shape[:-1])
     # Keep separate record of episode done as state.info['done'] can be erased
@@ -172,10 +187,10 @@ class BraxAutoResetWrapper(Wrapper):
     self._full_reset = full_reset
     self._info_key = 'AutoResetWrapper'
 
-  def reset(self, rng: jax.Array) -> mjx_env.State:
+  def reset(self, rng: jax.Array, params: jax.Array = None) -> mjx_env.State:
     rng_key = jax.vmap(jax.random.split)(rng)
     rng, key = rng_key[..., 0], rng_key[..., 1]
-    state = self.env.reset(key)
+    state = self.env.reset(key, params)
     state.info[f'{self._info_key}_first_data'] = state.data
     state.info[f'{self._info_key}_first_obs'] = state.obs
     state.info[f'{self._info_key}_rng'] = rng
@@ -186,10 +201,25 @@ class BraxAutoResetWrapper(Wrapper):
   def step(self, state: mjx_env.State, action: jax.Array, params : jax.Array) -> mjx_env.State:
     # grab the reset state.
     reset_state = None
+    current_params = state.info.get('dr_params', params)
+    reset_param_size = getattr(self.env.unwrapped, 'reset_param_size', 0)
+    reset_candidate_params = params
+    if (
+        params is not None
+        and current_params is not None
+        and reset_param_size > 0
+    ):
+      reset_candidate_params = jnp.concatenate(
+          [
+              current_params[..., :-reset_param_size],
+              params[..., -reset_param_size:],
+          ],
+          axis=-1,
+      )
     rng_key = jax.vmap(jax.random.split)(state.info[f'{self._info_key}_rng'])
     reset_rng, reset_key = rng_key[..., 0], rng_key[..., 1]
     if self._full_reset:
-      reset_state = self.reset(reset_key)
+      reset_state = self.reset(reset_key, params=reset_candidate_params)
       reset_data = reset_state.data
       reset_obs = reset_state.obs
     else:
@@ -203,7 +233,7 @@ class BraxAutoResetWrapper(Wrapper):
       state.info.update(steps=steps)
 
     state = state.replace(done=jnp.zeros_like(state.done))
-    state = self.env.step(state, action, params)
+    state = self.env.step(state, action, current_params)
     def where_done(x, y):
       done = state.done
       if done.shape and done.shape[0] != x.shape[0]:
@@ -226,6 +256,8 @@ class BraxAutoResetWrapper(Wrapper):
       preserve_info_key = f'{self._info_key}_preserve_info'
       if preserve_info_key in next_info:
         next_info[preserve_info_key] = state.info[preserve_info_key]
+    elif 'dr_params' in next_info and reset_candidate_params is not None:
+      next_info['dr_params'] = where_done(reset_candidate_params, current_params)
 
     next_info[done_count_key] += state.done.astype(int)
     next_info[f'{self._info_key}_rng'] = reset_rng

@@ -14,10 +14,12 @@
 # ==============================================================================
 """Rotate-z with leap hand."""
 
+import functools
 from typing import Any, Dict, Optional, Union
 
 import jax
 import jax.numpy as jp
+from jax.scipy import special as jsp_special
 from ml_collections import config_dict
 from mujoco import mjx
 import numpy as np
@@ -53,10 +55,31 @@ def default_config() -> config_dict.ConfigDict:
               action_rate=0.0,
           ),
       ),
+      reset_randomization_in_domain_randomization=True,
       impl='jax',
       nconmax=30 * 8192,
       njmax=128,
   )
+
+
+_MODEL_PARAM_SIZE = 1 + 1 + 3 + 16 + 16 + 17 + 16 + 16
+_RESET_PARAM_SIZE = consts.NQ + 3 + 3
+_UNIT_INTERVAL_EPS = 1e-6
+
+
+def _unit_uniform_to_normal(u: jax.Array) -> jax.Array:
+  u = jp.clip(u, _UNIT_INTERVAL_EPS, 1.0 - _UNIT_INTERVAL_EPS)
+  return jp.sqrt(2.0) * jsp_special.erfinv(2.0 * u - 1.0)
+
+
+def _uniform_quat_from_unit_interval(u: jax.Array) -> jax.Array:
+  u = jp.clip(u, _UNIT_INTERVAL_EPS, 1.0 - _UNIT_INTERVAL_EPS)
+  return jp.array([
+      jp.sqrt(1 - u[0]) * jp.sin(2 * jp.pi * u[1]),
+      jp.sqrt(1 - u[0]) * jp.cos(2 * jp.pi * u[1]),
+      jp.sqrt(u[0]) * jp.sin(2 * jp.pi * u[2]),
+      jp.sqrt(u[0]) * jp.cos(2 * jp.pi * u[2]),
+  ])
 
 
 class CubeRotateZAxis(leap_hand_base.LeapHandEnv):
@@ -86,22 +109,45 @@ class CubeRotateZAxis(leap_hand_base.LeapHandEnv):
     self._default_pose = self._init_q[self._hand_qids]
     self._lowers, self._uppers = self.mj_model.actuator_ctrlrange.T
 
-  def reset(self, rng: jax.Array) -> mjx_env.State:
-    # Randomize hand qpos and qvel.
-    rng, pos_rng, vel_rng = jax.random.split(rng, 3)
-    q_hand = jp.clip(
-        self._default_pose + 0.1 * jax.random.normal(pos_rng, (consts.NQ,)),
-        self._lowers,
-        self._uppers,
+  def reset(
+      self, rng: jax.Array, params: Optional[jax.Array] = None
+  ) -> mjx_env.State:
+    use_reset_randomization_params = (
+        params is not None
+        and self._config.reset_randomization_in_domain_randomization
     )
-    v_hand = 0.0 * jax.random.normal(vel_rng, (consts.NV,))
 
-    # Randomize cube qpos and qvel.
-    rng, p_rng, quat_rng = jax.random.split(rng, 3)
-    start_pos = jp.array([0.1, 0.0, 0.05]) + jax.random.uniform(
-        p_rng, (3,), minval=-0.01, maxval=0.01
-    )
-    start_quat = leap_hand_base.uniform_quat(quat_rng)
+    if not use_reset_randomization_params:
+      rng, pos_rng, vel_rng = jax.random.split(rng, 3)
+      q_hand = jp.clip(
+          self._default_pose + 0.1 * jax.random.normal(pos_rng, (consts.NQ,)),
+          self._lowers,
+          self._uppers,
+      )
+      v_hand = 0.0 * jax.random.normal(vel_rng, (consts.NV,))
+
+      rng, p_rng, quat_rng = jax.random.split(rng, 3)
+      start_pos = jp.array([0.1, 0.0, 0.05]) + jax.random.uniform(
+          p_rng, (3,), minval=-0.01, maxval=0.01
+      )
+      start_quat = leap_hand_base.uniform_quat(quat_rng)
+    else:
+      reset_params = params[_MODEL_PARAM_SIZE : _MODEL_PARAM_SIZE + _RESET_PARAM_SIZE]
+      idx = 0
+      q_hand = jp.clip(
+          self._default_pose
+          + 0.1
+          * _unit_uniform_to_normal(reset_params[idx : idx + consts.NQ]),
+          self._lowers,
+          self._uppers,
+      )
+      idx += consts.NQ
+      v_hand = jp.zeros(consts.NV)
+
+      start_pos = jp.array([0.1, 0.0, 0.05]) + reset_params[idx : idx + 3]
+      idx += 3
+      start_quat = _uniform_quat_from_unit_interval(reset_params[idx : idx + 3])
+
     q_cube = jp.array([*start_pos, *start_quat])
     v_cube = jp.zeros(6)
 
@@ -137,7 +183,6 @@ class CubeRotateZAxis(leap_hand_base.LeapHandEnv):
 
   def step(self, state: mjx_env.State, action: jax.Array) -> mjx_env.State:
     motor_targets = self._default_pose + action * self._config.action_scale
-    # NOTE: no clipping.
     data = mjx_env.step(
         self.mjx_model, state.data, motor_targets, self.n_substeps
     )
@@ -163,8 +208,7 @@ class CubeRotateZAxis(leap_hand_base.LeapHandEnv):
     return state
 
   def _get_termination(self, data: mjx.Data) -> jax.Array:
-    fall_termination = self.get_cube_position(data)[2] < -0.05
-    return fall_termination
+    return self.get_cube_position(data)[2] < -0.05
 
   def _get_obs(
       self, data: mjx.Data, info: dict[str, Any], obs_history: jax.Array
@@ -179,9 +223,9 @@ class CubeRotateZAxis(leap_hand_base.LeapHandEnv):
     )
 
     state = jp.concatenate([
-        noisy_joint_angles,  # 16
-        info["last_act"],  # 16
-    ])  # 48
+        noisy_joint_angles,
+        info["last_act"],
+    ])
     obs_history = jp.roll(obs_history, state.size)
     obs_history = obs_history.at[: state.size].set(state)
 
@@ -219,7 +263,7 @@ class CubeRotateZAxis(leap_hand_base.LeapHandEnv):
       metrics: dict[str, Any],
       done: jax.Array,
   ) -> dict[str, jax.Array]:
-    del metrics  # Unused.
+    del metrics
     cube_pos = self.get_cube_position(data)
     palm_pos = self.get_palm_position(data)
     cube_pos_error = palm_pos - cube_pos
@@ -253,23 +297,89 @@ class CubeRotateZAxis(leap_hand_base.LeapHandEnv):
   def _reward_angvel(
       self, cube_angvel: jax.Array, cube_pos_error: jax.Array
   ) -> jax.Array:
-    # Unconditionally maximize angvel in the z-direction.
-    del cube_pos_error  # Unused.
+    del cube_pos_error
     return cube_angvel @ jp.array([0.0, 0.0, 1.0])
 
   def _cost_action_rate(
       self, act: jax.Array, last_act: jax.Array, last_last_act: jax.Array
   ) -> jax.Array:
-    del last_last_act  # Unused.
+    del last_last_act
     return jp.sum(jp.square(act - last_act))
 
   def _cost_pose(self, joint_angles: jax.Array) -> jax.Array:
     return jp.sum(jp.square(joint_angles - self._default_pose))
 
+  @property
+  def nominal_params(self):
+    model_params = jp.concatenate([
+        jp.ones(1),
+        jp.zeros(1),
+        jp.zeros(3),
+        jp.zeros(16),
+        jp.ones(16 + 16 + 17 + 16 + 16),
+    ])
+    if not self._config.reset_randomization_in_domain_randomization:
+      return model_params
 
-def domain_randomize(model: mjx.Model, rng: jax.Array):
+    reset_params = jp.concatenate([
+        jp.full((consts.NQ,), 0.5),
+        jp.zeros(3),
+        jp.full((3,), 0.5),
+    ])
+    return jp.concatenate([model_params, reset_params])
+
+  @property
+  def reset_param_size(self):
+    if not self._config.reset_randomization_in_domain_randomization:
+      return 0
+    return _RESET_PARAM_SIZE
+
+  @property
+  def dr_range(self):
+    low = [jp.array([0.5])]
+    high = [jp.array([1.0])]
+
+    low.append(jp.array([0.8]))
+    high.append(jp.array([1.2]))
+
+    low.append(jp.full((3,), -0.005))
+    high.append(jp.full((3,), 0.005))
+
+    low.append(jp.full((16,), -0.05))
+    high.append(jp.full((16,), 0.05))
+
+    low.append(jp.full((16,), 0.5))
+    high.append(jp.full((16,), 2.0))
+
+    low.append(jp.full((16,), 1.0))
+    high.append(jp.full((16,), 1.05))
+
+    low.append(jp.full((17,), 0.9))
+    high.append(jp.full((17,), 1.1))
+
+    low.append(jp.full((16,), 0.8))
+    high.append(jp.full((16,), 1.2))
+
+    low.append(jp.full((16,), 0.8))
+    high.append(jp.full((16,), 1.2))
+
+    if not self._config.reset_randomization_in_domain_randomization:
+      return jp.concatenate(low), jp.concatenate(high)
+
+    low.append(jp.full((consts.NQ,), _UNIT_INTERVAL_EPS))
+    high.append(jp.full((consts.NQ,), 1.0 - _UNIT_INTERVAL_EPS))
+
+    low.append(jp.full((3,), -0.01))
+    high.append(jp.full((3,), 0.01))
+
+    low.append(jp.full((3,), _UNIT_INTERVAL_EPS))
+    high.append(jp.full((3,), 1.0 - _UNIT_INTERVAL_EPS))
+
+    return jp.concatenate(low), jp.concatenate(high)
+
+
+def _apply_domain_randomization(model: mjx.Model, params: jax.Array):
   mj_model = CubeRotateZAxis().mj_model
-  cube_geom_id = mj_model.geom("cube").id
   cube_body_id = mj_model.body("cube").id
   hand_qids = mjx_env.get_qpos_ids(mj_model, consts.JOINT_NAMES)
   hand_body_names = [
@@ -293,89 +403,53 @@ def domain_randomize(model: mjx.Model, rng: jax.Array):
   ]
   hand_body_ids = np.array([mj_model.body(n).id for n in hand_body_names])
   fingertip_geoms = ["th_tip", "if_tip", "mf_tip", "rf_tip"]
-  fingertip_geom_ids = [mj_model.geom(g).id for g in fingertip_geoms]
+  fingertip_geom_ids = np.array([mj_model.geom(g).id for g in fingertip_geoms])
 
-  @jax.vmap
-  def rand(rng):
-    rng, key = jax.random.split(rng)
-    # Fingertip friction: =U(0.5, 1.0).
-    fingertip_friction = jax.random.uniform(key, (1,), minval=0.5, maxval=1.0)
-    geom_friction = model.geom_friction.at[fingertip_geom_ids, 0].set(
-        fingertip_friction
-    )
+  idx = 0
+  geom_friction = model.geom_friction.at[fingertip_geom_ids, 0].set(params[idx])
+  idx += 1
 
-    # Scale cube mass: *U(0.8, 1.2).
-    rng, key1, key2 = jax.random.split(rng, 3)
-    dmass = jax.random.uniform(key1, minval=0.8, maxval=1.2)
-    cube_mass = model.body_mass[cube_body_id]
-    body_inertia = model.body_inertia.at[cube_body_id].set(
-        model.body_inertia[cube_body_id] * dmass
-    )
-    dpos = jax.random.uniform(key2, (3,), minval=-5e-3, maxval=5e-3)
-    body_ipos = model.body_ipos.at[cube_body_id].set(
-        model.body_ipos[cube_body_id] + dpos
-    )
+  body_mass = model.body_mass
+  body_inertia = model.body_inertia.at[cube_body_id].set(
+      model.body_inertia[cube_body_id] * params[idx]
+  )
+  idx += 1
 
-    # Jitter qpos0: +U(-0.05, 0.05).
-    rng, key = jax.random.split(rng)
-    qpos0 = model.qpos0
-    qpos0 = qpos0.at[hand_qids].set(
-        qpos0[hand_qids]
-        + jax.random.uniform(key, shape=(16,), minval=-0.05, maxval=0.05)
-    )
+  body_ipos = model.body_ipos.at[cube_body_id].set(
+      model.body_ipos[cube_body_id] + params[idx : idx + 3]
+  )
+  idx += 3
 
-    # Scale static friction: *U(0.9, 1.1).
-    rng, key = jax.random.split(rng)
-    frictionloss = model.dof_frictionloss[hand_qids] * jax.random.uniform(
-        key, shape=(16,), minval=0.5, maxval=2.0
-    )
-    dof_frictionloss = model.dof_frictionloss.at[hand_qids].set(frictionloss)
+  qpos0 = model.qpos0.at[hand_qids].set(
+      model.qpos0[hand_qids] + params[idx : idx + 16]
+  )
+  idx += 16
 
-    # Scale armature: *U(1.0, 1.05).
-    rng, key = jax.random.split(rng)
-    armature = model.dof_armature[hand_qids] * jax.random.uniform(
-        key, shape=(16,), minval=1.0, maxval=1.05
-    )
-    dof_armature = model.dof_armature.at[hand_qids].set(armature)
+  dof_frictionloss = model.dof_frictionloss.at[hand_qids].set(
+      model.dof_frictionloss[hand_qids] * params[idx : idx + 16]
+  )
+  idx += 16
 
-    # Scale all link masses: *U(0.9, 1.1).
-    rng, key = jax.random.split(rng)
-    dmass = jax.random.uniform(
-        key, shape=(len(hand_body_ids),), minval=0.9, maxval=1.1
-    )
-    body_mass = model.body_mass.at[hand_body_ids].set(
-        model.body_mass[hand_body_ids] * dmass
-    )
+  dof_armature = model.dof_armature.at[hand_qids].set(
+      model.dof_armature[hand_qids] * params[idx : idx + 16]
+  )
+  idx += 16
 
-    # Joint stiffness: *U(0.8, 1.2).
-    rng, key = jax.random.split(rng)
-    kp = model.actuator_gainprm[:, 0] * jax.random.uniform(
-        key, (model.nu,), minval=0.8, maxval=1.2
-    )
-    actuator_gainprm = model.actuator_gainprm.at[:, 0].set(kp)
-    actuator_biasprm = model.actuator_biasprm.at[:, 1].set(-kp)
+  body_mass = body_mass.at[hand_body_ids].set(
+      model.body_mass[hand_body_ids] * params[idx : idx + 17]
+  )
+  idx += 17
 
-    # Joint damping: *U(0.8, 1.2).
-    rng, key = jax.random.split(rng)
-    kd = model.dof_damping[hand_qids] * jax.random.uniform(
-        key, (16,), minval=0.8, maxval=1.2
-    )
-    dof_damping = model.dof_damping.at[hand_qids].set(kd)
+  new_kp = model.actuator_gainprm[:, 0] * params[idx : idx + 16]
+  actuator_gainprm = model.actuator_gainprm.at[:, 0].set(new_kp)
+  actuator_biasprm = model.actuator_biasprm.at[:, 1].set(-new_kp)
+  idx += 16
 
-    return (
-        geom_friction,
-        body_mass,
-        body_inertia,
-        body_ipos,
-        qpos0,
-        dof_frictionloss,
-        dof_armature,
-        dof_damping,
-        actuator_gainprm,
-        actuator_biasprm,
-    )
+  dof_damping = model.dof_damping.at[hand_qids].set(
+      model.dof_damping[hand_qids] * params[idx : idx + 16]
+  )
 
-  (
+  return (
       geom_friction,
       body_mass,
       body_inertia,
@@ -386,8 +460,22 @@ def domain_randomize(model: mjx.Model, rng: jax.Array):
       dof_damping,
       actuator_gainprm,
       actuator_biasprm,
-  ) = rand(rng)
+  )
 
+
+def _finalize_domain_randomization(
+    model: mjx.Model,
+    geom_friction,
+    body_mass,
+    body_inertia,
+    body_ipos,
+    qpos0,
+    dof_frictionloss,
+    dof_armature,
+    dof_damping,
+    actuator_gainprm,
+    actuator_biasprm,
+):
   in_axes = jax.tree_util.tree_map(lambda x: None, model)
   in_axes = in_axes.tree_replace({
       "geom_friction": 0,
@@ -416,3 +504,35 @@ def domain_randomize(model: mjx.Model, rng: jax.Array):
   })
 
   return model, in_axes
+
+
+def domain_randomize(model: mjx.Model, dr_range, params=None, rng: jax.Array = None):
+  if rng is not None:
+    dr_low, dr_high = dr_range
+    dr_low = dr_low[:_MODEL_PARAM_SIZE]
+    dr_high = dr_high[:_MODEL_PARAM_SIZE]
+    dist = functools.partial(
+        jax.random.uniform, shape=(len(dr_low),), minval=dr_low, maxval=dr_high
+    )
+
+    @jax.vmap
+    def rand_dynamics(rng):
+      return _apply_domain_randomization(model, dist(rng))
+
+    randomized = rand_dynamics(rng)
+  elif params is not None:
+    params = params[..., :_MODEL_PARAM_SIZE]
+    if params.ndim == 1:
+      randomized = _apply_domain_randomization(model, params)
+    else:
+      randomized = jax.vmap(lambda p: _apply_domain_randomization(model, p))(params)
+  else:
+    raise ValueError("rng and params wrong!")
+
+  return _finalize_domain_randomization(model, *randomized)
+
+
+def domain_randomize_eval(
+    model: mjx.Model, dr_range, params=None, rng: jax.Array = None
+):
+  return domain_randomize(model, dr_range, params=params, rng=rng)

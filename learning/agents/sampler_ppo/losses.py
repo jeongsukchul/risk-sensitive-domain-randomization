@@ -17,7 +17,7 @@
 See: https://arxiv.org/pdf/1707.06347.pdf
 """
 
-from typing import Any, Tuple
+from typing import Any, Callable, Tuple
 
 from brax.training import types
 from agents.sampler_ppo import networks as samplerppo_networks
@@ -25,8 +25,10 @@ from brax.training.types import Params
 import flax
 import jax
 import jax.numpy as jnp
+import distrax
 from learning.module import networks
 from learning.module.gmmvi.network import GMMTrainingState
+from learning.module.gbs.gbs_loss import VP, Langevin, rnd_time_reversal_lv_no_target, lv_loss_from_rnd
 
 
 @flax.struct.dataclass
@@ -34,6 +36,131 @@ class SAMPLERPPONetworkParams:
   """Contains training state for the learner."""
   policy: Params
   value: Params
+
+
+def tanh_box_bijector(z: jax.Array, low: jax.Array, high: jax.Array) -> jax.Array:
+  half = 0.5 * (high - low)
+  mid = 0.5 * (high + low)
+  return mid + half * jnp.tanh(z)
+
+
+def tanh_box_logabsdet(z: jax.Array, low: jax.Array, high: jax.Array) -> jax.Array:
+  z = jnp.atleast_2d(z)
+  half = 0.5 * (high - low)
+  jac_diag = half * (1.0 - jnp.tanh(z) ** 2)
+  return jnp.sum(jnp.log(jnp.clip(jac_diag, 1e-12)), axis=-1)
+
+
+def make_gbs_process(
+    gbs_process_type: str,
+    gbs_vp_diff_coeff_sq_min: float,
+    gbs_vp_diff_coeff_sq_max: float,
+    gbs_vp_scale_diff_coeff: float,
+    gbs_terminal_t: float,
+    gbs_include_base_drift: bool,
+    gbs_sigma_const: float,
+):
+  if gbs_process_type == "vp":
+    return VP(
+        diff_coeff_sq_min=gbs_vp_diff_coeff_sq_min,
+        diff_coeff_sq_max=gbs_vp_diff_coeff_sq_max,
+        scale_diff_coeff=gbs_vp_scale_diff_coeff,
+        terminal_t=gbs_terminal_t,
+        generative=False,
+        sign=-1.0,
+        include_base_drift=gbs_include_base_drift,
+    )
+  if gbs_process_type == "langevin":
+    return Langevin(diff_coeff=gbs_sigma_const, terminal_t=gbs_terminal_t)
+  raise ValueError(f"Unknown gbs_process_type: {gbs_process_type}")
+
+
+def make_gbs_prior_and_maps(
+    dr_range_low: jax.Array,
+    dr_range_high: jax.Array,
+    gbs_use_tanh_bijection: bool,
+    gbs_init_std: float,
+):
+  gbs_to_box = lambda z: tanh_box_bijector(z, low=dr_range_low, high=dr_range_high)
+  gbs_logabsdet = lambda z: tanh_box_logabsdet(z, low=dr_range_low, high=dr_range_high)
+  if gbs_use_tanh_bijection:
+    gbs_center = jnp.zeros_like(dr_range_low)
+    gbs_prior = distrax.MultivariateNormalDiag(
+        loc=jnp.zeros_like(dr_range_low),
+        scale_diag=jnp.ones_like(dr_range_low) * gbs_init_std,
+    )
+    gbs_prior_sampler = lambda k: jnp.squeeze(gbs_prior.sample(seed=k, sample_shape=(1,)))
+  else:
+    gbs_center = 0.5 * (dr_range_low + dr_range_high)
+    gbs_prior = distrax.MultivariateNormalDiag(
+        loc=gbs_center,
+        scale_diag=jnp.ones_like(dr_range_low) * gbs_init_std,
+    )
+    gbs_prior_sampler = lambda k: jnp.clip(
+        jnp.squeeze(gbs_prior.sample(seed=k, sample_shape=(1,))),
+        dr_range_low,
+        dr_range_high,
+    )
+  return gbs_to_box, gbs_logabsdet, gbs_center, gbs_prior, gbs_prior_sampler
+
+
+def make_gbs_sampler_jit():
+  return jax.jit(
+      rnd_time_reversal_lv_no_target,
+      static_argnums=(3, 4, 5, 6, 7),
+  )
+
+
+def make_gbs_train_step_jit(
+    gbs_batch_size: int,
+    gbs_prior_sampler: Callable[[jax.Array], jax.Array],
+    gbs_num_steps: int,
+    gbs_process: Any,
+    gbs_sde_ctrl_noise: float,
+    gbs_sde_ctrl_dropout: float,
+    gbs_center: jax.Array,
+    gbs_use_tanh_bijection: bool,
+    gbs_logabsdet: Callable[[jax.Array], jax.Array],
+    gbs_prior: Any,
+    gbs_max_rnd: float,
+):
+  @jax.jit
+  def gbs_train_step_jit(
+      key,
+      fwd_state,
+      bwd_state,
+      target_lnpdf,
+  ):
+    def loss_from_params(fwd_params, bwd_params):
+      x0, xT, rnd_running = rnd_time_reversal_lv_no_target(
+          key,
+          (fwd_state, bwd_state),
+          fwd_params,
+          gbs_batch_size,
+          gbs_prior_sampler,
+          gbs_num_steps,
+          gbs_process,
+          True,
+          gbs_sde_ctrl_noise,
+          gbs_sde_ctrl_dropout,
+          gbs_center,
+      )
+      target_lp_vals = target_lnpdf
+      if gbs_use_tanh_bijection:
+        target_lp_vals = target_lp_vals + gbs_logabsdet(xT)
+      rnd_total = gbs_prior.log_prob(x0) + rnd_running - target_lp_vals
+      loss, aux, _ = lv_loss_from_rnd(rnd_total, xT=xT, max_rnd=gbs_max_rnd)
+      return loss, aux
+
+    (grads, aux) = jax.grad(loss_from_params, (0, 1), has_aux=True)(
+        fwd_state.params, bwd_state.params
+    )
+    fwd_grads, bwd_grads = grads
+    new_fwd_state = fwd_state.apply_gradients(grads=fwd_grads)
+    new_bwd_state = bwd_state.apply_gradients(grads=bwd_grads)
+    return new_fwd_state, new_bwd_state, aux
+
+  return gbs_train_step_jit
 
 def compute_gae(
     truncation: jnp.ndarray,

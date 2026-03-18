@@ -21,26 +21,31 @@ import jax
 from ml_collections import config_dict
 from mujoco import mjx
 
-from custom_envs import mjx_env
-from custom_envs.locomotion.barkour import joystick as barkour_joystick
-from custom_envs.locomotion.berkeley_humanoid import joystick as berkeley_humanoid_joystick
-from custom_envs.locomotion.berkeley_humanoid import randomize as berkeley_humanoid_randomize
-from custom_envs.locomotion.g1 import joystick as g1_joystick
-from custom_envs.locomotion.g1 import randomize as g1_randomize
-from custom_envs.locomotion.go1 import getup as go1_getup
-from custom_envs.locomotion.go1 import handstand as go1_handstand
-from custom_envs.locomotion.go1 import joystick as go1_joystick
-from custom_envs.locomotion.go1 import randomize as go1_randomize
-from custom_envs.locomotion.h1 import inplace_gait_tracking as h1_inplace_gait_tracking
-from custom_envs.locomotion.h1 import joystick_gait_tracking as h1_joystick_gait_tracking
-from custom_envs.locomotion.op3 import joystick as op3_joystick
-from custom_envs.locomotion.spot import getup as spot_getup
-from custom_envs.locomotion.spot import joystick as spot_joystick
-from custom_envs.locomotion.spot import joystick_gait_tracking as spot_joystick_gait_tracking
-from custom_envs.locomotion.t1 import joystick as t1_joystick
-from custom_envs.locomotion.t1 import randomize as t1_randomize
+from mujoco_playground._src import mjx_env
+from mujoco_playground._src.locomotion.apollo import joystick as apollo_joystick
+from mujoco_playground._src.locomotion.barkour import joystick as barkour_joystick
+from mujoco_playground._src.locomotion.berkeley_humanoid import joystick as berkeley_humanoid_joystick
+from mujoco_playground._src.locomotion.berkeley_humanoid import randomize as berkeley_humanoid_randomize
+from mujoco_playground._src.locomotion.g1 import joystick as g1_joystick
+from mujoco_playground._src.locomotion.g1 import randomize as g1_randomize
+from mujoco_playground._src.locomotion.go1 import getup as go1_getup
+from mujoco_playground._src.locomotion.go1 import handstand as go1_handstand
+from mujoco_playground._src.locomotion.go1 import joystick as go1_joystick
+from mujoco_playground._src.locomotion.go1 import randomize as go1_randomize
+from mujoco_playground._src.locomotion.h1 import inplace_gait_tracking as h1_inplace_gait_tracking
+from mujoco_playground._src.locomotion.h1 import joystick_gait_tracking as h1_joystick_gait_tracking
+from mujoco_playground._src.locomotion.op3 import joystick as op3_joystick
+from mujoco_playground._src.locomotion.spot import getup as spot_getup
+from mujoco_playground._src.locomotion.spot import joystick as spot_joystick
+from mujoco_playground._src.locomotion.spot import joystick_gait_tracking as spot_joystick_gait_tracking
+from mujoco_playground._src.locomotion.t1 import joystick as t1_joystick
+from mujoco_playground._src.locomotion.t1 import randomize as t1_randomize
+
 
 _envs = {
+    "ApolloJoystickFlatTerrain": functools.partial(
+        apollo_joystick.Joystick, task="flat_terrain"
+    ),
     "BarkourJoystick": barkour_joystick.Joystick,
     "BerkeleyHumanoidJoystickFlatTerrain": functools.partial(
         berkeley_humanoid_joystick.Joystick, task="flat_terrain"
@@ -82,6 +87,7 @@ _envs = {
 }
 
 _cfgs = {
+    "ApolloJoystickFlatTerrain": apollo_joystick.default_config,
     "BarkourJoystick": barkour_joystick.default_config,
     "BerkeleyHumanoidJoystickFlatTerrain": (
         berkeley_humanoid_joystick.default_config
@@ -124,23 +130,6 @@ _randomizer = {
     "T1JoystickRoughTerrain": t1_randomize.domain_randomize,
 }
 
-_randomizer_eval = {
-    # "BerkeleyHumanoidJoystickFlatTerrain": (
-    #     berkeley_humanoid_randomize.domain_randomize_eval
-    # ),
-    # "BerkeleyHumanoidJoystickRoughTerrain": (
-    #     berkeley_humanoid_randomize.domain_randomize_eval
-    # ),
-    "G1JoystickFlatTerrain": g1_randomize.domain_randomize_eval,
-    "G1JoystickRoughTerrain": g1_randomize.domain_randomize_eval,
-    "Go1JoystickFlatTerrain": go1_randomize.domain_randomize_eval,
-    "Go1JoystickRoughTerrain": go1_randomize.domain_randomize_eval,
-    "Go1Getup": go1_randomize.domain_randomize_eval,
-    "Go1Handstand": go1_randomize.domain_randomize_eval,
-    "Go1Footstand": go1_randomize.domain_randomize_eval,
-    "T1JoystickFlatTerrain": t1_randomize.domain_randomize_eval,
-    "T1JoystickRoughTerrain": t1_randomize.domain_randomize_eval,
-}
 
 def __getattr__(name):
   if name == "ALL_ENVS":
@@ -190,8 +179,11 @@ def load(
   Returns:
       An instance of the environment.
   """
+  mjx_env.ensure_menagerie_exists()  # Ensure menagerie exists when environment is loaded.
   if env_name not in _envs:
-    raise ValueError(f"Env '{env_name}' not found. Available envs: {_cfgs.keys()}")
+    raise ValueError(
+        f"Env '{env_name}' not found. Available envs: {_cfgs.keys()}"
+    )
   config = config or get_default_config(env_name)
   return _envs[env_name](config=config, config_overrides=config_overrides)
 
@@ -207,15 +199,3 @@ def get_domain_randomizer(
     )
     return None
   return _randomizer[env_name]
-
-def get_domain_randomizer_eval(
-    env_name: str,
-) -> Optional[Callable[[mjx.Model, jax.Array], Tuple[mjx.Model, mjx.Model]]]:
-  """Get the default domain randomizer for an environment."""
-  if env_name not in _randomizer:
-    print(
-        f"Env '{env_name}' does not have a domain randomizer in the locomotion"
-        " registry."
-    )
-    return None
-  return _randomizer_eval[env_name]

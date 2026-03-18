@@ -22,7 +22,7 @@ from ml_collections import config_dict
 import mujoco
 from mujoco import mjx
 
-from custom_envs import mjx_env
+from mujoco_playground._src import mjx_env
 from mujoco_playground._src.locomotion.op3 import op3_constants as consts
 
 
@@ -47,10 +47,12 @@ class Op3Env(mjx_env.MjxEnv):
       config_overrides: Optional[Dict[str, Union[str, int, list[Any]]]] = None,
   ) -> None:
     super().__init__(config, config_overrides)
+    self._model_assets = get_assets()
     self._mj_model = mujoco.MjModel.from_xml_string(
-        epath.Path(xml_path).read_text(), assets=get_assets()
+        epath.Path(xml_path).read_text(), assets=self._model_assets
     )
     self._mj_model.opt.timestep = config.sim_dt
+    self._mj_model.opt.ccd_iterations = 10
 
     # Modify PD gains.
     self._mj_model.dof_damping[6:] = config.Kd
@@ -62,7 +64,7 @@ class Op3Env(mjx_env.MjxEnv):
     self._mj_model.vis.global_.offwidth = 3840
     self._mj_model.vis.global_.offheight = 2160
 
-    self._mjx_model =  mjx.put_model(self._mj_model, impl=self._config.impl)
+    self._mjx_model = mjx.put_model(self._mj_model, impl=self._config.impl)
     self._xml_path = xml_path
 
   # Sensor readings.

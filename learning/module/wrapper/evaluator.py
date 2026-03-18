@@ -405,17 +405,25 @@ class AdvEvaluator:
   ) -> Metrics:
     """Run one epoch of evaluation."""
     self._key, unroll_key = jax.random.split(self._key)
-    unroll_keys = jax.random.split(unroll_key, num_eval_seeds)
     t = time.time()
-    def f(carry, key):
-      eval_state = self._generate_eval_unroll(policy_params, dynamics_params, key)
+    if num_eval_seeds == 1:
+      eval_state = self._generate_eval_unroll(
+          policy_params, dynamics_params, unroll_key
+      )
       eval_metrics = eval_state.info['eval_metrics']
-      return carry, eval_metrics
-    _, eval_metrics = jax.lax.scan(f, None, unroll_keys)
-    # eval_state = self._generate_eval_unroll(policy_params, dynamics_params, unroll_key)
-    # eval_metrics = eval_state.info['eval_metrics']
+    else:
+      unroll_keys = jax.random.split(unroll_key, num_eval_seeds)
+
+      def f(carry, key):
+        eval_state = self._generate_eval_unroll(
+            policy_params, dynamics_params, key
+        )
+        eval_metrics = eval_state.info['eval_metrics']
+        return carry, eval_metrics
+
+      _, eval_metrics = jax.lax.scan(f, None, unroll_keys)
+      eval_metrics = jax.tree_util.tree_map(lambda x: x.mean(axis=0), eval_metrics)
     eval_metrics.active_episodes.block_until_ready()
-    eval_metrics = jax.tree_util.tree_map(lambda x : x.mean(axis=0), eval_metrics)
     # eval_metrics = jax.tree_util.tree_map(lambda x : scipy.stats.trim_mean(x, proportiontocut=0.25, axis=0), eval_metrics)
     epoch_eval_time = time.time() - t
     metrics = {}

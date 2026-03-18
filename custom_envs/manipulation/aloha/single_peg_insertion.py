@@ -14,18 +14,23 @@
 # ==============================================================================
 """Peg insertion task for ALOHA."""
 
+import functools
 from typing import Any, Dict, Optional, Union
 
 import jax
 from jax import numpy as jp
 from ml_collections import config_dict
 from mujoco import mjx
-import functools
+import numpy as np
 
-from custom_envs import mjx_env
+from mujoco_playground._src import mjx_env
 from mujoco_playground._src import reward as reward_util
-from custom_envs.manipulation.aloha import aloha_constants as consts
-from custom_envs.manipulation.aloha import base as aloha_base
+from mujoco_playground._src.manipulation.aloha import aloha_constants as consts
+from mujoco_playground._src.manipulation.aloha import base as aloha_base
+
+
+_MODEL_PARAM_SIZE = 1 + 1 + 1 + 1 + 3 + 3
+_RESET_PARAM_SIZE = 2 + 2
 
 
 def default_config() -> config_dict.ConfigDict:
@@ -49,8 +54,9 @@ def default_config() -> config_dict.ConfigDict:
               peg_insertion_reward=8,
           )
       ),
+      reset_randomization_in_domain_randomization=True,
       impl="jax",
-      nconmax=24 * 1024,
+      naconmax=24 * 1024,
       njmax=256,
   )
 
@@ -89,11 +95,23 @@ class SinglePegInsertion(aloha_base.AlohaEnv):
     self._socket_entrance_goal_pos = jp.array([-0.05, 0, 0.15])
     self._peg_end2_goal_pos = jp.array([0.05, 0, 0.15])
 
-  def reset(self, rng: jax.Array) -> mjx_env.State:
-    rng, rng_peg, rng_socket = jax.random.split(rng, 3)
+  def reset(
+      self, rng: jax.Array, params: Optional[jax.Array] = None
+  ) -> mjx_env.State:
+    use_reset_randomization_params = (
+        params is not None
+        and self._config.reset_randomization_in_domain_randomization
+    )
 
-    peg_xy = jax.random.uniform(rng_peg, (2,), minval=-0.1, maxval=0.1)
-    socket_xy = jax.random.uniform(rng_socket, (2,), minval=-0.1, maxval=0.1)
+    if not use_reset_randomization_params:
+      rng, rng_peg, rng_socket = jax.random.split(rng, 3)
+      peg_xy = jax.random.uniform(rng_peg, (2,), minval=-0.1, maxval=0.1)
+      socket_xy = jax.random.uniform(rng_socket, (2,), minval=-0.1, maxval=0.1)
+    else:
+      reset_params = params[_MODEL_PARAM_SIZE : _MODEL_PARAM_SIZE + _RESET_PARAM_SIZE]
+      peg_xy = reset_params[:2]
+      socket_xy = reset_params[2:4]
+
     init_q = self._init_q.at[self._peg_qadr : self._peg_qadr + 2].add(peg_xy)
     init_q = init_q.at[self._socket_qadr : self._socket_qadr + 2].add(socket_xy)
 
@@ -103,7 +121,7 @@ class SinglePegInsertion(aloha_base.AlohaEnv):
         qvel=jp.zeros(self._mjx_model.nv, dtype=float),
         ctrl=self._init_ctrl,
         impl=self._mjx_model.impl.value,
-        nconmax=self._config.nconmax,
+        naconmax=self._config.naconmax,
         njmax=self._config.njmax,
     )
 
@@ -117,6 +135,52 @@ class SinglePegInsertion(aloha_base.AlohaEnv):
     }
 
     return mjx_env.State(data, obs, reward, done, metrics, info)
+
+  @property
+  def nominal_params(self):
+    model_params = jp.concatenate([
+        jp.ones(1),
+        jp.ones(1),
+        jp.ones(1),
+        jp.ones(1),
+        jp.zeros(3),
+        jp.zeros(3),
+    ])
+    if not self._config.reset_randomization_in_domain_randomization:
+      return model_params
+    return jp.concatenate([model_params, jp.zeros(_RESET_PARAM_SIZE)])
+
+  @property
+  def reset_param_size(self):
+    if not self._config.reset_randomization_in_domain_randomization:
+      return 0
+    return _RESET_PARAM_SIZE
+
+  @property
+  def dr_range(self):
+    low = [
+        jp.array([0.5]),
+        jp.array([0.5]),
+        jp.array([0.8]),
+        jp.array([0.8]),
+        jp.full((3,), -0.005),
+        jp.full((3,), -0.005),
+    ]
+    high = [
+        jp.array([1.5]),
+        jp.array([1.5]),
+        jp.array([1.2]),
+        jp.array([1.2]),
+        jp.full((3,), 0.005),
+        jp.full((3,), 0.005),
+    ]
+
+    if not self._config.reset_randomization_in_domain_randomization:
+      return jp.concatenate(low), jp.concatenate(high)
+
+    low.extend([jp.full((2,), -0.1), jp.full((2,), -0.1)])
+    high.extend([jp.full((2,), 0.1), jp.full((2,), 0.1)])
+    return jp.concatenate(low), jp.concatenate(high)
 
   def step(self, state: mjx_env.State, action: jax.Array) -> mjx_env.State:
     delta = action * self._config.action_scale
@@ -151,9 +215,6 @@ class SinglePegInsertion(aloha_base.AlohaEnv):
     )
 
     done = out_of_bounds | jp.isnan(data.qpos).any() | jp.isnan(data.qvel).any()
-    reward_finite = jp.isfinite(reward)
-    done = done | (~reward_finite)
-    reward = jp.where(reward_finite, reward, 0.0)
     done = done.astype(float)
     state.metrics.update(
         **rewards,
@@ -163,7 +224,7 @@ class SinglePegInsertion(aloha_base.AlohaEnv):
     obs = self._get_obs(data)
     return mjx_env.State(data, obs, reward, done, state.metrics, state.info)
 
-  def _get_obs(self, data: mjx.Data) -> dict[str, jax.Array]:
+  def _get_obs(self, data: mjx.Data) -> jax.Array:
     left_gripper_pos = data.site_xpos[self._left_gripper_site]
     socket_pos = data.xpos[self._socket_body]
     right_gripper_pos = data.site_xpos[self._right_gripper_site]
@@ -173,7 +234,7 @@ class SinglePegInsertion(aloha_base.AlohaEnv):
     socket_z = data.xmat[self._socket_body].ravel()[6:]
     peg_z = data.xmat[self._peg_body].ravel()[6:]
 
-    state = jp.concatenate([
+    obs = jp.concatenate([
         data.qpos,
         data.qvel,
         left_gripper_pos,
@@ -186,43 +247,7 @@ class SinglePegInsertion(aloha_base.AlohaEnv):
         peg_z,
     ])
 
-    privileged_state = jp.concatenate([
-        state,
-        data.qfrc_bias,
-        data.actuator_force,
-        jp.mean(self.mjx_model.geom_friction[:, 0:1], axis=0),
-        self.mjx_model.body_mass[:],
-        self.mjx_model.actuator_gainprm[:, 0],
-        self.mjx_model.dof_damping[:16],
-        self.mjx_model.dof_armature[:16],
-    ])
-
-    return {
-        "state": state,
-        "privileged_state": privileged_state,
-    }
-
-  @property
-  def nominal_params(self) -> jax.Array:
-    return jp.ones(5)
-
-  @property
-  def dr_range(self) -> tuple[jax.Array, jax.Array]:
-    low = jp.array([
-        .9,  # geom friction (mu)
-        .9,  # object mass scale (socket & peg)
-        0.9,  # robot mass scale
-        0.9,  # joint damping scale
-        0.9,  # actuator gain scale
-    ])
-    high = jp.array([
-        1.1,
-        1.1,
-        1.1,
-        1.1,
-        1.1,
-    ])
-    return low, high
+    return obs
 
   def _get_reward(
       self, data: mjx.Data, use_peg_insertion_reward: bool
@@ -300,98 +325,105 @@ class SinglePegInsertion(aloha_base.AlohaEnv):
     }
 
 
-def domain_randomize(
+def _apply_domain_randomization(model: mjx.Model, params: jax.Array):
+  env = SinglePegInsertion()
+  peg_geom = env._mj_model.geom("red_peg").id
+  socket_geoms = np.array([
+      env._mj_model.geom("socket-B").id,
+      env._mj_model.geom("socket-T").id,
+      env._mj_model.geom("socket-L").id,
+      env._mj_model.geom("socket-R").id,
+      env._mj_model.geom("wall").id,
+  ])
+  peg_body = env._peg_body
+  socket_body = env._socket_body
+
+  idx = 0
+  geom_friction = model.geom_friction.at[peg_geom, 0].set(params[idx])
+  idx += 1
+  geom_friction = geom_friction.at[socket_geoms, 0].set(params[idx])
+  idx += 1
+
+  body_mass = model.body_mass.at[peg_body].set(model.body_mass[peg_body] * params[idx])
+  body_inertia = model.body_inertia.at[peg_body].set(
+      model.body_inertia[peg_body] * params[idx]
+  )
+  idx += 1
+
+  body_mass = body_mass.at[socket_body].set(model.body_mass[socket_body] * params[idx])
+  body_inertia = body_inertia.at[socket_body].set(
+      model.body_inertia[socket_body] * params[idx]
+  )
+  idx += 1
+
+  body_ipos = model.body_ipos.at[peg_body].set(
+      model.body_ipos[peg_body] + params[idx : idx + 3]
+  )
+  idx += 3
+  body_ipos = body_ipos.at[socket_body].set(
+      model.body_ipos[socket_body] + params[idx : idx + 3]
+  )
+  idx += 3
+
+  return (
+      geom_friction,
+      body_mass,
+      body_inertia,
+      body_ipos,
+  )
+
+
+def _finalize_domain_randomization(
     model: mjx.Model,
-    dr_range: tuple[jax.Array, jax.Array],
-    params: jax.Array = None,
-    rng: jax.Array = None,
+    geom_friction,
+    body_mass,
+    body_inertia,
+    body_ipos,
 ):
-  """Applies domain randomization to AlohaSinglePegInsertion MJX model.
-
-  Supports both single params (shape [D]) and batched params (shape [B, D]).
-  """
-  dr_low, dr_high = dr_range
-  socket_body = model.body_mass.shape[0] - 2
-  peg_body = model.body_mass.shape[0] - 1
-  obj_dofs = 12  # two free joints
-
-  def _shift(p):
-    idx = 0
-    friction_mu = p[idx]
-    idx += 1
-    obj_mass_scale = p[idx]
-    idx += 1
-    robot_mass_scale = p[idx]
-    idx += 1
-    damping_scale = p[idx]
-    idx += 1
-    gain_scale = p[idx]
-    idx += 1
-    assert idx == len(dr_low)
-
-    geom_friction = model.geom_friction.at[:, 0].set(friction_mu)
-    body_mass = model.body_mass
-    body_mass = body_mass.at[1:socket_body].set(body_mass[1:socket_body] * robot_mass_scale)
-    body_mass = body_mass.at[socket_body].set(body_mass[socket_body] * obj_mass_scale)
-    body_mass = body_mass.at[peg_body].set(body_mass[peg_body] * obj_mass_scale)
-
-    dof_damping = model.dof_damping.at[: model.nv - obj_dofs].set(
-        model.dof_damping[: model.nv - obj_dofs] * damping_scale
-    )
-    dof_armature = model.dof_armature
-
-    kp_val = model.actuator_gainprm[:, 0] * gain_scale
-    actuator_gainprm = model.actuator_gainprm.at[:, 0].set(kp_val)
-    actuator_biasprm = model.actuator_biasprm.at[:, 1].set(-kp_val)
-
-    return geom_friction, body_mass, dof_damping, dof_armature, actuator_gainprm, actuator_biasprm
-
-  if rng is not None:
-    if rng.ndim == 1:
-      p = jax.random.uniform(rng, (len(dr_low),), minval=dr_low, maxval=dr_high)
-      geom_friction, body_mass, dof_damping, dof_armature, actuator_gainprm, actuator_biasprm = _shift(p)
-    else:
-      dist = functools.partial(
-          jax.random.uniform, shape=(len(dr_low),), minval=dr_low, maxval=dr_high
-      )
-      geom_friction, body_mass, dof_damping, dof_armature, actuator_gainprm, actuator_biasprm = jax.vmap(
-          lambda key: _shift(dist(key))
-      )(rng)
-  else:
-    if params.ndim == 1:
-      geom_friction, body_mass, dof_damping, dof_armature, actuator_gainprm, actuator_biasprm = _shift(params)
-    else:
-      geom_friction, body_mass, dof_damping, dof_armature, actuator_gainprm, actuator_biasprm = jax.vmap(_shift)(params)
+  in_axes = jax.tree_util.tree_map(lambda x: None, model)
+  in_axes = in_axes.tree_replace({
+      "geom_friction": 0,
+      "body_mass": 0,
+      "body_inertia": 0,
+      "body_ipos": 0,
+  })
 
   model = model.tree_replace({
       "geom_friction": geom_friction,
       "body_mass": body_mass,
-      "dof_damping": dof_damping,
-      "dof_armature": dof_armature,
-      "actuator_gainprm": actuator_gainprm,
-      "actuator_biasprm": actuator_biasprm,
+      "body_inertia": body_inertia,
+      "body_ipos": body_ipos,
   })
-
-  in_axes = jax.tree_util.tree_map(lambda x: None, model)
-  if (params is not None and getattr(params, "ndim", 0) == 2) or (
-      rng is not None and getattr(rng, "ndim", 0) == 2
-  ):
-    in_axes = in_axes.tree_replace({
-        "geom_friction": 0,
-        "body_mass": 0,
-        "dof_damping": 0,
-        "dof_armature": 0,
-        "actuator_gainprm": 0,
-        "actuator_biasprm": 0,
-    })
-
   return model, in_axes
 
 
+def domain_randomize(model: mjx.Model, dr_range, params=None, rng: jax.Array = None):
+  if rng is not None:
+    dr_low, dr_high = dr_range
+    dr_low = dr_low[:_MODEL_PARAM_SIZE]
+    dr_high = dr_high[:_MODEL_PARAM_SIZE]
+    dist = functools.partial(
+        jax.random.uniform, shape=(len(dr_low),), minval=dr_low, maxval=dr_high
+    )
+
+    @jax.vmap
+    def rand_dynamics(rng):
+      return _apply_domain_randomization(model, dist(rng))
+
+    randomized = rand_dynamics(rng)
+  elif params is not None:
+    params = params[..., :_MODEL_PARAM_SIZE]
+    if params.ndim == 1:
+      randomized = _apply_domain_randomization(model, params)
+    else:
+      randomized = jax.vmap(lambda p: _apply_domain_randomization(model, p))(params)
+  else:
+    raise ValueError("rng and params wrong!")
+
+  return _finalize_domain_randomization(model, *randomized)
+
+
 def domain_randomize_eval(
-    model: mjx.Model,
-    dr_range: tuple[jax.Array, jax.Array],
-    params: jax.Array = None,
-    rng: jax.Array = None,
+    model: mjx.Model, dr_range, params=None, rng: jax.Array = None
 ):
-  return domain_randomize(model=model, dr_range=dr_range, params=params, rng=rng)
+  return domain_randomize(model, dr_range, params=params, rng=rng)

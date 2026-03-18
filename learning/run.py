@@ -31,8 +31,8 @@ import numpy as np
 from orbax import checkpoint as ocp
 import wandb
 from learning.configs.dm_control_training_config import brax_ppo_config, brax_td3_config
-from learning.configs.locomotion_training_config import locomotion_ppo_config, locomotion_td3_config
-from learning.configs.manipulation_training_config import manipulation_ppo_config, manipulation_td3_config
+from learning.configs.locomotion_training_config import locomotion_ppo_config#, locomotion_td3_config
+from learning.configs.manipulation_training_config import manipulation_ppo_config#, manipulation_td3_config
 import hydra
 from custom_envs import registry, dm_control_suite, locomotion, manipulation
 from helper import parse_cfg
@@ -57,7 +57,6 @@ from PIL import Image, ImageDraw
 # # Suppress UserWarnings from absl (used by JAX and TensorFlow)
 # warnings.filterwarnings("ignore", category=UserWarning, module="absl")
 
-env_name = "FishSwim"  # @param ["AcrobotSwingup", "AcrobotSwingupSparse", "BallInCup", "CartpoleBalance", "CartpoleBalanceSparse", "CartpoleSwingup", "CartpoleSwingupSparse", "CheetahRun", "FingerSpin", "FingerTurnEasy", "FingerTurnHard", "FishSwim", "HopperHop", "HopperStand", "HumanoidStand", "HumanoidWalk", "HumanoidRun", "PendulumSwingup", "PointMass", "ReacherEasy", "ReacherHard", "SwimmerSwimmer6", "WalkerRun", "WalkerStand", "WalkerWalk"]
 CAMERAS = {
     "AcrobotSwingup": "fixed",
     "AcrobotSwingupSparse": "fixed",
@@ -92,11 +91,10 @@ CAMERAS = {
     "T1JoystickRoughTerrain" :"track",
     "LeapCubeRotateZAxis" :"side",
     "LeapCubeReorient" :"side",
-    "PandaPickCube" :"fixed",
-    "PandaPickCubeOrientation" :"fixed",
-    "PandaOpenCabinet" :"fixed",
+    "PandaPickCube" :"side",
+    "PandaPickCubeOrientation" :"side",
+    "PandaOpenCabinet" :"side",
 }
-camera_name = CAMERAS[env_name]
 
 def policy_params_fn(current_step, make_policy, params, ckpt_path: epath.Path):
   orbax_checkpointer = ocp.PyTreeCheckpointer()
@@ -286,6 +284,7 @@ def train_ppo(cfg:dict, randomization_fn, env, eval_env=None):
         beta = cfg.beta,
         sampler_update_freq =cfg.sampler_update_freq,
         n_sampler_iters = cfg.n_sampler_iters,
+        sampler_visualization=getattr(cfg, "sampler_visualization", False),
         success_threshold = cfg.success_threshold,
         success_rate_condition = cfg.success_rate_condition,
         work_dir = cfg.work_dir,
@@ -322,10 +321,10 @@ def train_ppo(cfg:dict, randomization_fn, env, eval_env=None):
 def train_td3(cfg:dict, randomization_fn, env, eval_env=None):
     if cfg.task in dm_control_suite._envs:
         td3_params = brax_td3_config(cfg.task)
-    elif cfg.task in locomotion._envs:
-        td3_params = locomotion_td3_config(cfg.task)
-    elif cfg.task in manipulation._envs:
-        td3_params = manipulation_td3_config(cfg.task)
+    # elif cfg.task in locomotion._envs:
+    #     td3_params = locomotion_td3_config(cfg.task)
+    # elif cfg.task in manipulation._envs:
+    #     td3_params = manipulation_td3_config(cfg.task)
     td3_training_params = dict(td3_params)
     if cfg.randomization:
         wandb_name = f"{cfg.task}.{cfg.policy}.{cfg.seed}.asym={cfg.asymmetric_critic}"
@@ -477,7 +476,9 @@ def train_m2td3(cfg:dict, randomization_fn, env, eval_env=None):
 
 @hydra.main(config_name="config", config_path=".", version_base=None)
 def train(cfg: dict):
-    
+    from absl import logging
+    logging.set_verbosity(logging.WARNING)
+
     cfg = parse_cfg(cfg)
     print("cfg :", cfg)
     if cfg.policy == "epoptppo":
@@ -614,7 +615,7 @@ def train(cfg: dict):
                         batch_index,
                         len(percentile_levels),
                     )
-                    frames_i = eval_env.render(rollout, camera=camera_name)
+                    frames_i = eval_env.render(rollout, camera=CAMERAS[cfg.task])
                     rollout_frames.append(frames_i)
             else:
                 reward_list = []
@@ -639,7 +640,7 @@ def train(cfg: dict):
                         rollout.append(jax.device_get(state))
                         episode_reward += float(state.reward)
 
-                    frames_i = percentile_env.render(rollout, camera=camera_name)
+                    frames_i = eval_env.render(rollout, camera=CAMERAS[cfg.task])
                     rollout_frames.append(frames_i)
                     reward_list.append(episode_reward)
 
@@ -692,7 +693,7 @@ def train(cfg: dict):
                 reward_list.append(float(current_episode_reward))
 
             reward_array = np.array(reward_list)
-            frames = eval_env.render(rollout, camera=camera_name)
+            frames = eval_env.render(rollout, camera=CAMERAS[cfg.task])
             video_path = cfg.work_dir / f"video_{cfg.policy}_{cfg.task}.mp4"
             os.makedirs(video_path.parent, exist_ok=True)
             imageio.mimsave(video_path, frames, fps=fps)

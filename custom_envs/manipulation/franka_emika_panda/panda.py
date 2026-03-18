@@ -23,7 +23,7 @@ import mujoco
 from mujoco import mjx
 import numpy as np
 
-from custom_envs import mjx_env
+from mujoco_playground._src import mjx_env
 
 _ARM_JOINTS = [
     "joint1",
@@ -56,7 +56,7 @@ def default_config() -> config_dict.ConfigDict:
       action_repeat=1,
       action_scale=0.04,
       impl='jax',
-      nconmax=12 * 8192,
+      naconmax=12 * 8192,
       njmax=44,
   )
 

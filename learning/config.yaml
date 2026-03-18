@@ -1,8 +1,8 @@
 # defaults:
 #     - override hydra/launcher: submitit_local
 # training
-num_envs : 1024
-batch_size : 1024
+num_envs : ???
+batch_size : ???
 # environment
 benchmark: dm_control
 task: CheetahRun
@@ -46,12 +46,13 @@ scheduler_mode : 'linear'  # 'linear' or 'exp'
 
 #sampler cfg
 sampler_update_freq : 1           #set 10 to take long horizon information despite of policy_updates.
-n_sampler_iters : 30                #need to consider in flow 
+n_sampler_iters : 1                #need to consider in flow 
 success_threshold : .6
 success_rate_condition : 0.7
 gamma : 0.
 beta : 1.
-use_scheduling : False
+use_scheduling : false
+sampler_visualization: false
 # misc
 save_video: true
 save_agent: true

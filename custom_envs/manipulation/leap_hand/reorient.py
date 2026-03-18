@@ -18,6 +18,7 @@ from typing import Any, Dict, Optional, Union
 
 import jax
 import jax.numpy as jp
+from jax.scipy import special as jsp_special
 from ml_collections import config_dict
 from mujoco import mjx
 from mujoco.mjx._src import math
@@ -27,7 +28,6 @@ from custom_envs import mjx_env
 from mujoco_playground._src import reward
 from mujoco_playground._src.manipulation.leap_hand import base as leap_hand_base
 from mujoco_playground._src.manipulation.leap_hand import leap_hand_constants as consts
-
 
 def default_config() -> config_dict.ConfigDict:
   return config_dict.create(
@@ -50,13 +50,13 @@ def default_config() -> config_dict.ConfigDict:
       ),
       reward_config=config_dict.create(
           scales=config_dict.create(
-              orientation=5.0 * 2.5,
-              position=0.5* 2.5,
-              termination=-100.0* 2.5,
-              hand_pose=-0.5* 2.5,
-              action_rate=-0.001* 2.5,
-              joint_vel=0.0* 2.5,
-              energy=-1e-3* 2.5,
+              orientation=5.0,
+              position=0.5,
+              termination=-100.0,
+              hand_pose=-0.5,
+              action_rate=-0.001,
+              joint_vel=0.0,
+              energy=-1e-3,
           ),
           success_reward=100.0,
       ),
@@ -67,10 +67,39 @@ def default_config() -> config_dict.ConfigDict:
           pert_duration_steps=[1, 100],
           pert_wait_steps=[60, 150],
       ),
+      reset_randomization_in_domain_randomization=True,
       impl='jax',
-      nconmax=30 * 8192,
+      naconmax=30 * 8192,
       njmax=160,
   )
+
+
+_MODEL_PARAM_SIZE = 1 + 1 + 3 + 16 + 16 + 16 + 17 + 16 + 16
+_RESET_PARAM_SIZE = 3 + consts.NQ + 3 + 3 + 1 + 1 + 1 + 1
+_UNIT_INTERVAL_EPS = 1e-6
+
+
+def _unit_uniform_to_normal(u: jax.Array) -> jax.Array:
+  u = jp.clip(u, _UNIT_INTERVAL_EPS, 1.0 - _UNIT_INTERVAL_EPS)
+  return jp.sqrt(2.0) * jsp_special.erfinv(2.0 * u - 1.0)
+
+
+def _unit_uniform_to_randint(
+    u: jax.Array, minval: int, maxval: int
+) -> jax.Array:
+  span = maxval - minval
+  scaled = jp.floor(jp.clip(u, 0.0, 1.0 - _UNIT_INTERVAL_EPS) * span)
+  return (scaled.astype(jp.int32) + minval).reshape((1,))
+
+
+def _uniform_quat_from_unit_interval(u: jax.Array) -> jax.Array:
+  u = jp.clip(u, _UNIT_INTERVAL_EPS, 1.0 - _UNIT_INTERVAL_EPS)
+  return jp.array([
+      jp.sqrt(1 - u[0]) * jp.sin(2 * jp.pi * u[1]),
+      jp.sqrt(1 - u[0]) * jp.cos(2 * jp.pi * u[1]),
+      jp.sqrt(u[0]) * jp.sin(2 * jp.pi * u[2]),
+      jp.sqrt(u[0]) * jp.cos(2 * jp.pi * u[2]),
+  ])
 
 
 class CubeReorient(leap_hand_base.LeapHandEnv):
@@ -104,26 +133,96 @@ class CubeReorient(leap_hand_base.LeapHandEnv):
     self._cube_mass = self._mj_model.body_subtreemass[self._cube_body_id]
     self._default_pose = self._init_q[self._hand_qids]
 
-  def reset(self, rng: jax.Array) -> mjx_env.State:
-    # Randomize the goal orientation.
-    rng, goal_rng = jax.random.split(rng)
-    goal_quat = leap_hand_base.uniform_quat(goal_rng)
-
-    # Randomize the hand pose.
-    rng, pos_rng, vel_rng = jax.random.split(rng, 3)
-    q_hand = jp.clip(
-        self._default_pose + 0.1 * jax.random.normal(pos_rng, (consts.NQ,)),
-        self._lowers,
-        self._uppers,
+  def reset(
+      self, rng: jax.Array, params: Optional[jax.Array] = None
+  ) -> mjx_env.State:
+    use_reset_randomization_params = (
+        params is not None
+        and self._config.reset_randomization_in_domain_randomization
     )
-    v_hand = 0.0 * jax.random.normal(vel_rng, (consts.NV,))
 
-    # Randomize the cube pose.
-    rng, p_rng, quat_rng = jax.random.split(rng, 3)
-    start_pos = jp.array([0.1, 0.0, 0.05]) + jax.random.uniform(
-        p_rng, (3,), minval=-0.01, maxval=0.01
-    )
-    start_quat = leap_hand_base.uniform_quat(quat_rng)
+    if not use_reset_randomization_params:
+      # Randomize the goal orientation.
+      rng, goal_rng = jax.random.split(rng)
+      goal_quat = leap_hand_base.uniform_quat(goal_rng)
+
+      # Randomize the hand pose.
+      rng, pos_rng, vel_rng = jax.random.split(rng, 3)
+      q_hand = jp.clip(
+          self._default_pose + 0.1 * jax.random.normal(pos_rng, (consts.NQ,)),
+          self._lowers,
+          self._uppers,
+      )
+      v_hand = 0.0 * jax.random.normal(vel_rng, (consts.NV,))
+
+      # Randomize the cube pose.
+      rng, p_rng, quat_rng = jax.random.split(rng, 3)
+      start_pos = jp.array([0.1, 0.0, 0.05]) + jax.random.uniform(
+          p_rng, (3,), minval=-0.01, maxval=0.01
+      )
+      start_quat = leap_hand_base.uniform_quat(quat_rng)
+
+      rng, pert1, pert2, pert3 = jax.random.split(rng, 4)
+      pert_wait_steps = jax.random.randint(
+          pert1,
+          (1,),
+          minval=self._config.pert_config.pert_wait_steps[0],
+          maxval=self._config.pert_config.pert_wait_steps[1],
+      )
+      pert_duration_steps = jax.random.randint(
+          pert2,
+          (1,),
+          minval=self._config.pert_config.pert_duration_steps[0],
+          maxval=self._config.pert_config.pert_duration_steps[1],
+      )
+      pert_lin = jax.random.uniform(
+          pert3,
+          minval=self._config.pert_config.linear_velocity_pert[0],
+          maxval=self._config.pert_config.linear_velocity_pert[1],
+      )
+      pert_ang = jax.random.uniform(
+          pert3,
+          minval=self._config.pert_config.angular_velocity_pert[0],
+          maxval=self._config.pert_config.angular_velocity_pert[1],
+      )
+    else:
+      reset_params = params[_MODEL_PARAM_SIZE : _MODEL_PARAM_SIZE + _RESET_PARAM_SIZE]
+      idx = 0
+
+      goal_quat = _uniform_quat_from_unit_interval(reset_params[idx : idx + 3])
+      idx += 3
+
+      q_hand = jp.clip(
+          self._default_pose
+          + 0.1
+          * _unit_uniform_to_normal(reset_params[idx : idx + consts.NQ]),
+          self._lowers,
+          self._uppers,
+      )
+      idx += consts.NQ
+      v_hand = jp.zeros(consts.NV)
+
+      start_pos = jp.array([0.1, 0.0, 0.05]) + reset_params[idx : idx + 3]
+      idx += 3
+      start_quat = _uniform_quat_from_unit_interval(reset_params[idx : idx + 3])
+      idx += 3
+
+      pert_wait_steps = _unit_uniform_to_randint(
+          reset_params[idx],
+          self._config.pert_config.pert_wait_steps[0],
+          self._config.pert_config.pert_wait_steps[1],
+      )
+      idx += 1
+      pert_duration_steps = _unit_uniform_to_randint(
+          reset_params[idx],
+          self._config.pert_config.pert_duration_steps[0],
+          self._config.pert_config.pert_duration_steps[1],
+      )
+      idx += 1
+      pert_lin = reset_params[idx]
+      idx += 1
+      pert_ang = reset_params[idx]
+
     q_cube = jp.array([*start_pos, *start_quat])
     v_cube = jp.zeros(6)
 
@@ -137,33 +236,10 @@ class CubeReorient(leap_hand_base.LeapHandEnv):
         mocap_pos=self._init_mpos,
         mocap_quat=goal_quat,
         impl=self._mjx_model.impl.value,
-        nconmax=self._config.nconmax,
+        naconmax=self._config.naconmax,
         njmax=self._config.njmax,
     )
 
-    rng, pert1, pert2, pert3 = jax.random.split(rng, 4)
-    pert_wait_steps = jax.random.randint(
-        pert1,
-        (1,),
-        minval=self._config.pert_config.pert_wait_steps[0],
-        maxval=self._config.pert_config.pert_wait_steps[1],
-    )
-    pert_duration_steps = jax.random.randint(
-        pert2,
-        (1,),
-        minval=self._config.pert_config.pert_duration_steps[0],
-        maxval=self._config.pert_config.pert_duration_steps[1],
-    )
-    pert_lin = jax.random.uniform(
-        pert3,
-        minval=self._config.pert_config.linear_velocity_pert[0],
-        maxval=self._config.pert_config.linear_velocity_pert[1],
-    )
-    pert_ang = jax.random.uniform(
-        pert3,
-        minval=self._config.pert_config.angular_velocity_pert[0],
-        maxval=self._config.pert_config.angular_velocity_pert[1],
-    )
     pert_velocity = jp.array([pert_lin] * 3 + [pert_ang] * 3)
 
     info = {
@@ -355,10 +431,7 @@ class CubeReorient(leap_hand_base.LeapHandEnv):
         cube_ori_error_history,  # 6 * history_len
         info["last_act"],  # 16
     ])
-    
-    fingertip_geoms = ["th_tip", "if_tip", "mf_tip", "rf_tip"]
-    fingertip_geom_ids = np.array([self.mj_model.geom(g).id for g in fingertip_geoms])
-    
+
     privileged_state = jp.concatenate([
         state,
         data.qpos[self._hand_qids],
@@ -370,11 +443,6 @@ class CubeReorient(leap_hand_base.LeapHandEnv):
         self.get_cube_angvel(data),
         info["pert_dir"],
         data.xfrc_applied[self._cube_body_id],
-        self.mjx_model.geom_friction[fingertip_geom_ids, 0],
-        self.mjx_model.body_inertia[self._cube_body_id],
-        self.mjx_model.body_ipos[self._cube_body_id],
-        self.mjx_model.actuator_gainprm[:,0],
-
     ])
 
     return {
@@ -487,15 +555,34 @@ class CubeReorient(leap_hand_base.LeapHandEnv):
     state.info["last_pert_step"] = last_pert_step
     data = state.data.replace(xfrc_applied=xfrc)
     return state.replace(data=data)
+
   @property
   def nominal_params(self):
-    cube_body_id = self.mj_model.body("cube").id
-    hand_qids = mjx_env.get_qpos_ids(self.mj_model, consts.JOINT_NAMES)
-    fingertip_geoms = ["th_tip", "if_tip", "mf_tip", "rf_tip"]
-    fingertip_geom_ids = np.array([self.mj_model.geom(g).id for g in fingertip_geoms])
-    return jp.concatenate([
-                           jp.ones(1), jp.zeros(1), jp.zeros(3), jp.zeros(16),
-                           jp.ones(16+16+17+16+16)])
+    model_params = jp.concatenate([
+        jp.ones(1), jp.zeros(1), jp.zeros(3), jp.zeros(16),
+        jp.ones(16 + 16 + 17 + 16 + 16),
+    ])
+    if not self._config.reset_randomization_in_domain_randomization:
+      return model_params
+
+    reset_params = jp.concatenate([
+        jp.full((3,), 0.5),
+        jp.full((consts.NQ,), 0.5),
+        jp.zeros(3),
+        jp.full((3,), 0.5),
+        jp.full((1,), 0.5),
+        jp.full((1,), 0.5),
+        jp.array([sum(self._config.pert_config.linear_velocity_pert) / 2.0]),
+        jp.array([sum(self._config.pert_config.angular_velocity_pert) / 2.0]),
+    ])
+    return jp.concatenate([model_params, reset_params])
+
+  @property
+  def reset_param_size(self):
+    if not self._config.reset_randomization_in_domain_randomization:
+      return 0
+    return _RESET_PARAM_SIZE
+
   @property
   def dr_range(self):
     # 1. Fingertip friction (1 param): U(0.5, 1.0)
@@ -536,6 +623,37 @@ class CubeReorient(leap_hand_base.LeapHandEnv):
     low.append(jp.full((16,), 0.8))
     high.append(jp.full((16,), 1.2))
 
+    if not self._config.reset_randomization_in_domain_randomization:
+      return jp.concatenate(low), jp.concatenate(high)
+
+    # Reset goal quaternion latent (3 params): U(eps, 1 - eps)
+    low.append(jp.full((3,), _UNIT_INTERVAL_EPS))
+    high.append(jp.full((3,), 1.0 - _UNIT_INTERVAL_EPS))
+
+    # Reset hand pose latent for N(0, 1) via inverse CDF (16 params).
+    low.append(jp.full((consts.NQ,), _UNIT_INTERVAL_EPS))
+    high.append(jp.full((consts.NQ,), 1.0 - _UNIT_INTERVAL_EPS))
+
+    # Reset cube position offset (3 params): U(-0.01, 0.01)
+    low.append(jp.full((3,), -0.01))
+    high.append(jp.full((3,), 0.01))
+
+    # Reset cube quaternion latent (3 params): U(eps, 1 - eps)
+    low.append(jp.full((3,), _UNIT_INTERVAL_EPS))
+    high.append(jp.full((3,), 1.0 - _UNIT_INTERVAL_EPS))
+
+    # Reset perturbation timing latents for randint mapping (2 params).
+    low.append(jp.full((1,), 0.0))
+    high.append(jp.full((1,), 1.0 - _UNIT_INTERVAL_EPS))
+    low.append(jp.full((1,), 0.0))
+    high.append(jp.full((1,), 1.0 - _UNIT_INTERVAL_EPS))
+
+    # Reset perturbation magnitudes (2 params): uniform in config ranges.
+    low.append(jp.array([self._config.pert_config.linear_velocity_pert[0]]))
+    high.append(jp.array([self._config.pert_config.linear_velocity_pert[1]]))
+    low.append(jp.array([self._config.pert_config.angular_velocity_pert[0]]))
+    high.append(jp.array([self._config.pert_config.angular_velocity_pert[1]]))
+
     return jp.concatenate(low), jp.concatenate(high)
 import functools
 def domain_randomize(model: mjx.Model, dr_range, params=None, rng: jax.Array = None):
@@ -561,6 +679,8 @@ def domain_randomize(model: mjx.Model, dr_range, params=None, rng: jax.Array = N
 
     if rng is not None:
         dr_low, dr_high = dr_range
+        dr_low = dr_low[:_MODEL_PARAM_SIZE]
+        dr_high = dr_high[:_MODEL_PARAM_SIZE]
         dist = functools.partial(jax.random.uniform, shape=(len(dr_low),), minval=dr_low, maxval=dr_high)
 
     @jax.vmap
@@ -710,6 +830,7 @@ def domain_randomize(model: mjx.Model, dr_range, params=None, rng: jax.Array = N
         )
 
     if rng is None and params is not None:
+        params = params[..., :_MODEL_PARAM_SIZE]
         (
             geom_friction, body_inertia, body_ipos, qpos0, 
             dof_frictionloss, dof_armature, body_mass, 
@@ -776,9 +897,11 @@ def domain_randomize_eval(model: mjx.Model, dr_range, params=None, rng: jax.Arra
 
     if rng is not None:
         dr_low, dr_high = dr_range
+        dr_low = dr_low[:_MODEL_PARAM_SIZE]
+        dr_high = dr_high[:_MODEL_PARAM_SIZE]
         dist = functools.partial(jax.random.uniform, shape=(len(dr_low),), minval=dr_low, maxval=dr_high)
-    print("params in reorient", params)
     def shift_dynamics(params):
+        params = params[:_MODEL_PARAM_SIZE]
         idx = 0
         
         # 1. Fingertip friction (1 param)

@@ -14,6 +14,7 @@
 # ==============================================================================
 """Panda robotiq push cube environment."""
 
+import functools
 from typing import Any, Dict, Optional, Tuple, Union
 
 import jax
@@ -23,16 +24,18 @@ from mujoco import mjx
 from mujoco.mjx._src import math
 from mujoco.mjx._src import types
 
-from custom_envs import mjx_env
+from mujoco_playground._src import mjx_env
 from mujoco_playground._src import reward as reward_util
-from custom_envs.manipulation.franka_emika_panda_robotiq import panda_robotiq
+from mujoco_playground._src.manipulation.franka_emika_panda_robotiq import panda_robotiq
 import numpy as np
-import functools
 
 WORKSPACE_MIN = (0.3, -0.5, 0.0)
 WORKSPACE_MAX = (0.75, 0.7, 0.5)
 OBJ_SAMPLE_MIN = (0.4, -0.2, -0.005)
 OBJ_SAMPLE_MAX = (0.65, 0.2, 0.04)
+_UNIT_INTERVAL_EPS = 1e-6
+_MODEL_PARAM_SIZE = 1 + 1 + 1 + 3
+_RESET_PARAM_SIZE = 2 + 1 + 3 + 1 + 7
 
 
 def default_config():
@@ -85,10 +88,9 @@ def default_config():
               action_rate=-0.1,
           ),
       ),
+      reset_randomization_in_domain_randomization=True,
       impl="jax",
-      # NOTE: `nconmax` is allocated per-environment in MJX data. When training
-      # with large batches (e.g. thousands of envs), overly large caps will OOM.
-      nconmax=32 * 2048,
+      naconmax=32 * 8192,
       njmax=256,
   )
 
@@ -101,6 +103,10 @@ def get_rand_dir(rng: jax.Array) -> jax.Array:
   y = jp.sin(phi) * jp.sin(theta)
   z = jp.cos(phi)
   return jp.array([x, y, z])
+
+
+def _z_rotation_quat(angle: jax.Array) -> jax.Array:
+  return math.axis_angle_to_quat(jp.array([0.0, 0.0, 1.0]), angle)
 
 
 class PandaRobotiqPushCube(panda_robotiq.PandaRobotiqBase):
@@ -136,22 +142,52 @@ class PandaRobotiqPushCube(panda_robotiq.PandaRobotiqBase):
     target_quat = math.axis_angle_to_quat(perturb_axis, perturb_theta)
     return target_quat
 
-  def reset(self, rng: jax.Array) -> mjx_env.State:
-    rng, rng_box1, rng_box2, rng_target, rng_robot_arm, rng_theta = (
-        jax.random.split(rng, 6)
+  def reset(
+      self, rng: jax.Array, params: Optional[jax.Array] = None
+  ) -> mjx_env.State:
+    use_reset_randomization_params = (
+        params is not None
+        and self._config.reset_randomization_in_domain_randomization
     )
 
-    # intialize box position
-    box_pos = self._get_rand_target_pos(rng_box1, jp.array(0.15))
-    box_pos = box_pos.at[2].set(self._init_obj_pos[2])
-    box_quat = self._get_rand_target_quat(rng_box2, jp.array(360))
+    if not use_reset_randomization_params:
+      rng, rng_box1, rng_box2, rng_target, rng_robot_arm, rng_theta = (
+          jax.random.split(rng, 6)
+      )
 
-    # initialize target position
-    target_pos = self._get_rand_target_pos(rng_target, jp.array(0.05))
+      box_pos = self._get_rand_target_pos(rng_box1, jp.array(0.15))
+      box_pos = box_pos.at[2].set(self._init_obj_pos[2])
+      box_quat = self._get_rand_target_quat(rng_box2, jp.array(360))
 
-    # initialize target orientation
-    target_quat = self._get_rand_target_quat(rng_theta, jp.array(45))
-    target_quat = math.quat_mul(box_quat, target_quat)
+      target_pos = self._get_rand_target_pos(rng_target, jp.array(0.05))
+
+      target_quat = self._get_rand_target_quat(rng_theta, jp.array(45))
+      target_quat = math.quat_mul(box_quat, target_quat)
+
+      arm_offsets = 0.3 * jax.random.uniform(
+          rng_robot_arm,
+          (7,),
+          minval=self._jnt_range[:, 0] * self._joint_range_init_percent_limit,
+          maxval=self._jnt_range[:, 1] * self._joint_range_init_percent_limit,
+      )
+    else:
+      reset_params = params[_MODEL_PARAM_SIZE : _MODEL_PARAM_SIZE + _RESET_PARAM_SIZE]
+      idx = 0
+      box_pos = jp.array([
+          reset_params[idx],
+          reset_params[idx + 1],
+          self._init_obj_pos[2],
+      ])
+      idx += 2
+      box_quat = _z_rotation_quat(reset_params[idx])
+      idx += 1
+
+      target_pos = reset_params[idx : idx + 3]
+      idx += 3
+      target_quat = math.quat_mul(box_quat, _z_rotation_quat(reset_params[idx]))
+      idx += 1
+
+      arm_offsets = reset_params[idx : idx + 7]
 
     # initialize mjx.Data
     init_q = (
@@ -161,14 +197,7 @@ class PandaRobotiqPushCube(panda_robotiq.PandaRobotiqBase):
     )
     # sample random joint position for robot arm
     init_q = init_q.at[self._robot_arm_qposadr].set(
-        init_q[self._robot_arm_qposadr]
-        + 0.3
-        * jax.random.uniform(
-            rng_robot_arm,
-            (7,),
-            minval=self._jnt_range[:, 0] * self._joint_range_init_percent_limit,
-            maxval=self._jnt_range[:, 1] * self._joint_range_init_percent_limit,
-        )
+        init_q[self._robot_arm_qposadr] + arm_offsets
     )
     data = mjx_env.make_data(
         self._mj_model,
@@ -178,7 +207,7 @@ class PandaRobotiqPushCube(panda_robotiq.PandaRobotiqBase):
         mocap_pos=jp.array([target_pos]),
         mocap_quat=jp.array([target_quat]),
         impl=self._mjx_model.impl.value,
-        nconmax=self._config.nconmax,
+        naconmax=self._config.naconmax,
         njmax=self._config.njmax,
     )
 
@@ -200,13 +229,12 @@ class PandaRobotiqPushCube(panda_robotiq.PandaRobotiqBase):
         "angle_curriculum": jp.array([45, 45, 90, 135, 180], dtype=float),
         "pos_curriculum": jp.array([0.05, 0.05, 0.1, 0.2, 0.2], dtype=float),
     }
-    obs0 = self._get_single_obs(data, info)
-    info["obs_history"] = jp.zeros(self._config.obs_history_len * obs0.shape[0])
+    obs = self._get_single_obs(data, info)
+    info["obs_history"] = jp.zeros(self._config.obs_history_len * obs.shape[0])
 
     reward, done = jp.zeros(2)
-    state = mjx_env.State(data, obs0, reward, done, metrics, info)
-    obs = self._get_obs(state)
-    return state.replace(obs=obs)
+    state = mjx_env.State(data, obs, reward, done, metrics, info)
+    return state
 
   def step(self, state: mjx_env.State, action: jax.Array) -> mjx_env.State:
     action_history = jp.roll(state.info["action_history"], 7).at[:7].set(action)
@@ -269,9 +297,6 @@ class PandaRobotiqPushCube(panda_robotiq.PandaRobotiqBase):
         | jp.isnan(state.data.qpos).any()
         | jp.isnan(state.data.qvel).any()
     )
-    reward_finite = jp.isfinite(reward)
-    done = done | (~reward_finite)
-    reward = jp.where(reward_finite, reward, 0.0)
     done = done.astype(float)
 
     # get observations
@@ -499,21 +524,7 @@ class PandaRobotiqPushCube(panda_robotiq.PandaRobotiqBase):
     )
     obs = obs_history.reshape((-1, obs_size))[obs_idx[0]]
 
-    privileged_state = jp.concatenate([
-        obs,
-        state.data.qfrc_bias,
-        state.data.actuator_force,
-        jp.mean(self.mjx_model.geom_friction[:, 0:1], axis=0),
-        self.mjx_model.body_mass[:],
-        self.mjx_model.actuator_gainprm[:, 0],
-        self.mjx_model.dof_damping[:9],
-        self.mjx_model.dof_armature[:9],
-    ])
-
-    return {
-        "state": obs,
-        "privileged_state": privileged_state,
-    }
+    return obs
 
   def _get_single_obs(self, data: mjx.Data, info: dict[str, Any]) -> jax.Array:
     target_pos = data.mocap_pos[self._mocap_target, :].ravel()
@@ -583,123 +594,175 @@ class PandaRobotiqPushCube(panda_robotiq.PandaRobotiqBase):
     ])
     return obs
 
+  def _target_pos_bounds(self):
+    low = jp.clip(
+        jp.array(self._init_obj_pos) + jp.array([-0.02, -0.05, -0.005]),
+        jp.array(OBJ_SAMPLE_MIN),
+        jp.array(OBJ_SAMPLE_MAX),
+    )
+    high = jp.clip(
+        jp.array(self._init_obj_pos) + jp.array([0.02, 0.05, 0.005]),
+        jp.array(OBJ_SAMPLE_MIN),
+        jp.array(OBJ_SAMPLE_MAX),
+    )
+    return low, high
+
+  @property
+  def nominal_params(self):
+    model_params = jp.concatenate([
+        jp.ones(1),
+        jp.ones(1),
+        jp.ones(1),
+        jp.zeros(3),
+    ])
+    if not self._config.reset_randomization_in_domain_randomization:
+      return model_params
+
+    target_low, target_high = self._target_pos_bounds()
+    reset_params = jp.concatenate([
+        jp.array(self._init_obj_pos[:2]),
+        jp.array([jp.pi]),
+        (target_low + target_high) / 2.0,
+        jp.array([jp.pi / 8.0]),
+        jp.zeros(7),
+    ])
+    return jp.concatenate([model_params, reset_params])
+
+  @property
+  def reset_param_size(self):
+    if not self._config.reset_randomization_in_domain_randomization:
+      return 0
+    return _RESET_PARAM_SIZE
+
+  @property
+  def dr_range(self):
+    arm_offset_low = (
+        0.3 * self._jnt_range[:, 0] * self._joint_range_init_percent_limit
+    )
+    arm_offset_high = (
+        0.3 * self._jnt_range[:, 1] * self._joint_range_init_percent_limit
+    )
+
+    low = [
+        jp.array([0.5]),
+        jp.array([0.3]),
+        jp.array([0.8]),
+        jp.full((3,), -0.005),
+    ]
+    high = [
+        jp.array([1.5]),
+        jp.array([1.5]),
+        jp.array([1.2]),
+        jp.full((3,), 0.005),
+    ]
+
+    if not self._config.reset_randomization_in_domain_randomization:
+      return jp.concatenate(low), jp.concatenate(high)
+
+    target_low, target_high = self._target_pos_bounds()
+    low.extend([
+        jp.array([OBJ_SAMPLE_MIN[0], OBJ_SAMPLE_MIN[1]]),
+        jp.array([0.0]),
+        target_low,
+        jp.array([0.0]),
+        jp.array(arm_offset_low),
+    ])
+    high.extend([
+        jp.array([OBJ_SAMPLE_MAX[0], OBJ_SAMPLE_MAX[1]]),
+        jp.array([2.0 * jp.pi - _UNIT_INTERVAL_EPS]),
+        target_high,
+        jp.array([jp.pi / 4.0]),
+        jp.array(arm_offset_high),
+    ])
+    return jp.concatenate(low), jp.concatenate(high)
+
   @property
   def action_size(self):
     return 7
 
-  @property
-  def nominal_params(self) -> jax.Array:
-    return jp.ones(5)
 
-  @property
-  def dr_range(self) -> tuple[jax.Array, jax.Array]:
-    low = jp.array([
-        0.3,  # geom friction (mu)
-        0.1,  # box mass scale
-        0.8,  # robot mass scale
-        0.8,  # joint damping scale
-        0.9,  # actuator gain scale
-    ])
-    high = jp.array([
-        3.0,
-        8.0,
-        1.2,
-        1.2,
-        1.1,
-    ])
-    return low, high
+def _apply_domain_randomization(model: mjx.Model, params: jax.Array):
+  env = PandaRobotiqPushCube()
+  obj_body = env._obj_body
+  obj_geom = env._obj_geom
+  finger_geom_ids = np.array([env._left_finger_geom, env._right_finger_geom])
+
+  idx = 0
+  geom_friction = model.geom_friction.at[finger_geom_ids, 0].set(params[idx])
+  idx += 1
+  geom_friction = geom_friction.at[obj_geom, 0].set(params[idx])
+  idx += 1
+
+  body_mass = model.body_mass.at[obj_body].set(model.body_mass[obj_body] * params[idx])
+  body_inertia = model.body_inertia.at[obj_body].set(
+      model.body_inertia[obj_body] * params[idx]
+  )
+  idx += 1
+
+  body_ipos = model.body_ipos.at[obj_body].set(
+      model.body_ipos[obj_body] + params[idx : idx + 3]
+  )
+  idx += 3
+
+  return (
+      geom_friction,
+      body_mass,
+      body_inertia,
+      body_ipos,
+  )
 
 
-def domain_randomize(
+def _finalize_domain_randomization(
     model: mjx.Model,
-    dr_range: tuple[jax.Array, jax.Array],
-    params: jax.Array = None,
-    rng: jax.Array = None,
+    geom_friction,
+    body_mass,
+    body_inertia,
+    body_ipos,
 ):
-  """Applies domain randomization to PandaRobotiqPushCube MJX model.
-
-  Supports both single params (shape [D]) and batched params (shape [B, D]).
-  """
-  dr_low, dr_high = dr_range
-  box_body = model.body_mass.shape[0] - 2  # 'box' (mocap_target is last)
-  obj_dofs = 6  # free joint
-
-  def _shift(p):
-    idx = 0
-    friction_mu = p[idx]
-    idx += 1
-    box_mass_scale = p[idx]
-    idx += 1
-    robot_mass_scale = p[idx]
-    idx += 1
-    damping_scale = p[idx]
-    idx += 1
-    gain_scale = p[idx]
-    idx += 1
-    assert idx == len(dr_low)
-
-    geom_friction = model.geom_friction.at[:, 0].set(friction_mu)
-    body_mass = model.body_mass
-    body_mass = body_mass.at[1:box_body].set(body_mass[1:box_body] * robot_mass_scale)
-    body_mass = body_mass.at[box_body].set(body_mass[box_body] * box_mass_scale)
-
-    dof_damping = model.dof_damping.at[: model.nv - obj_dofs].set(
-        model.dof_damping[: model.nv - obj_dofs] * damping_scale
-    )
-    dof_armature = model.dof_armature
-
-    kp_val = model.actuator_gainprm[:, 0] * gain_scale
-    actuator_gainprm = model.actuator_gainprm.at[:, 0].set(kp_val)
-    actuator_biasprm = model.actuator_biasprm.at[:, 1].set(-kp_val)
-
-    return geom_friction, body_mass, dof_damping, dof_armature, actuator_gainprm, actuator_biasprm
-
-  if rng is not None:
-    if rng.ndim == 1:
-      p = jax.random.uniform(rng, (len(dr_low),), minval=dr_low, maxval=dr_high)
-      geom_friction, body_mass, dof_damping, dof_armature, actuator_gainprm, actuator_biasprm = _shift(p)
-    else:
-      dist = functools.partial(
-          jax.random.uniform, shape=(len(dr_low),), minval=dr_low, maxval=dr_high
-      )
-      geom_friction, body_mass, dof_damping, dof_armature, actuator_gainprm, actuator_biasprm = jax.vmap(
-          lambda key: _shift(dist(key))
-      )(rng)
-  else:
-    if params.ndim == 1:
-      geom_friction, body_mass, dof_damping, dof_armature, actuator_gainprm, actuator_biasprm = _shift(params)
-    else:
-      geom_friction, body_mass, dof_damping, dof_armature, actuator_gainprm, actuator_biasprm = jax.vmap(_shift)(params)
+  in_axes = jax.tree_util.tree_map(lambda x: None, model)
+  in_axes = in_axes.tree_replace({
+      "geom_friction": 0,
+      "body_mass": 0,
+      "body_inertia": 0,
+      "body_ipos": 0,
+  })
 
   model = model.tree_replace({
       "geom_friction": geom_friction,
       "body_mass": body_mass,
-      "dof_damping": dof_damping,
-      "dof_armature": dof_armature,
-      "actuator_gainprm": actuator_gainprm,
-      "actuator_biasprm": actuator_biasprm,
+      "body_inertia": body_inertia,
+      "body_ipos": body_ipos,
   })
-
-  in_axes = jax.tree_util.tree_map(lambda x: None, model)
-  if (params is not None and getattr(params, "ndim", 0) == 2) or (
-      rng is not None and getattr(rng, "ndim", 0) == 2
-  ):
-    in_axes = in_axes.tree_replace({
-        "geom_friction": 0,
-        "body_mass": 0,
-        "dof_damping": 0,
-        "dof_armature": 0,
-        "actuator_gainprm": 0,
-        "actuator_biasprm": 0,
-    })
-
   return model, in_axes
 
 
+def domain_randomize(model: mjx.Model, dr_range, params=None, rng: jax.Array = None):
+  if rng is not None:
+    dr_low, dr_high = dr_range
+    dr_low = dr_low[:_MODEL_PARAM_SIZE]
+    dr_high = dr_high[:_MODEL_PARAM_SIZE]
+    dist = functools.partial(
+        jax.random.uniform, shape=(len(dr_low),), minval=dr_low, maxval=dr_high
+    )
+
+    @jax.vmap
+    def rand_dynamics(rng):
+      return _apply_domain_randomization(model, dist(rng))
+
+    randomized = rand_dynamics(rng)
+  elif params is not None:
+    params = params[..., :_MODEL_PARAM_SIZE]
+    if params.ndim == 1:
+      randomized = _apply_domain_randomization(model, params)
+    else:
+      randomized = jax.vmap(lambda p: _apply_domain_randomization(model, p))(params)
+  else:
+    raise ValueError("rng and params wrong!")
+
+  return _finalize_domain_randomization(model, *randomized)
+
+
 def domain_randomize_eval(
-    model: mjx.Model,
-    dr_range: tuple[jax.Array, jax.Array],
-    params: jax.Array = None,
-    rng: jax.Array = None,
+    model: mjx.Model, dr_range, params=None, rng: jax.Array = None
 ):
-  return domain_randomize(model=model, dr_range=dr_range, params=params, rng=rng)
+  return domain_randomize(model, dr_range, params=params, rng=rng)

@@ -23,9 +23,8 @@ import mujoco
 from mujoco import mjx
 import numpy as np
 
-from mujoco_playground._src import collision
-from custom_envs import mjx_env
-from custom_envs.manipulation.aloha import aloha_constants as consts
+from mujoco_playground._src import mjx_env
+from mujoco_playground._src.manipulation.aloha import aloha_constants as consts
 
 
 def get_assets() -> Dict[str, bytes]:
@@ -84,21 +83,10 @@ class AlohaEnv(mjx_env.MjxEnv):
     ])
 
     # Contact sensor IDs.
-    #
-    # Some ALOHA XMLs may not define these contact sensors. If absent, we fall
-    # back to geometric collision checks in `hand_table_collision`.
-    table_finger_found_sensor: list[int] = []
-    for geom in consts.FINGER_GEOMS:
-      try:
-        table_finger_found_sensor.append(
-            self._mj_model.sensor("table_" + geom + "_found").id
-        )
-      except KeyError:
-        table_finger_found_sensor = []
-        break
-    self._table_finger_found_sensor = (
-        table_finger_found_sensor if table_finger_found_sensor else None
-    )
+    self._table_finger_found_sensor = [
+        self._mj_model.sensor("table_" + geom + "_found").id
+        for geom in consts.FINGER_GEOMS
+    ]
 
   @property
   def xml_path(self) -> str:
@@ -117,16 +105,9 @@ class AlohaEnv(mjx_env.MjxEnv):
     return self._mjx_model
 
   def hand_table_collision(self, data) -> jp.ndarray:
-    if self._table_finger_found_sensor is not None:
-      hand_table_collisions = [
-          data.sensordata[self._mj_model.sensor_adr[sensorid]] > 0
-          for sensorid in self._table_finger_found_sensor
-      ]
-      return (sum(hand_table_collisions) > 0).astype(float)
-
-    # Fallback: compute collisions directly (works even when sensors are absent).
+    # Check for collisions with the floor.
     hand_table_collisions = [
-        collision.geoms_colliding(data, self._table_geom, g)
-        for g in self._finger_geoms
+        data.sensordata[self._mj_model.sensor_adr[sensorid]] > 0
+        for sensorid in self._table_finger_found_sensor
     ]
     return (sum(hand_table_collisions) > 0).astype(float)
