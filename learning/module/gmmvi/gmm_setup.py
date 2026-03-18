@@ -278,8 +278,13 @@ def remove_component(gmm_state: GMMState, bad_mask, MAX_COMPONENTS, DIM):
     mask = gmm_state.component_mask * (1.-bad_mask)
     log_weights = jnp.where(mask>0, gmm_state.log_weights, -jnp.inf)
     means = gmm_state.means * mask[:,None]
-    chols = gmm_state.chol_covs * mask[:,None, None] + \
-        jnp.full((MAX_COMPONENTS, DIM, DIM),jnp.eye(DIM), dtype=jnp.float32) * (1- mask[:, None, None])
+    if gmm_state.chol_covs.ndim == 2:
+        chols = gmm_state.chol_covs * mask[:, None] + jnp.ones((MAX_COMPONENTS, DIM), dtype=jnp.float32) * (
+            1 - mask[:, None]
+        )
+    else:
+        chols = gmm_state.chol_covs * mask[:,None, None] + \
+            jnp.full((MAX_COMPONENTS, DIM, DIM),jnp.eye(DIM), dtype=jnp.float32) * (1- mask[:, None, None])
     return gmm_state._replace(log_weights=_normalize_weights(log_weights, mask),
                     means = means,
                     chol_covs = chols,
@@ -342,60 +347,106 @@ def setup_log_densities_also_individual_fn(component_log_densities_fn: Callable,
     return log_densities_also_individual
 
 
-# def setup_diagonal_gmm(DIM) -> GMM:
-#     def init_diagonal_gmm_state(seed, num_initial_components, prior_mean, prior_scale, diagonal_covs, initial_cov=None):
-#         weights, means, chol_covs = _setup_initial_mixture_params(DIM, seed, diagonal_covs, num_initial_components,
-#                                                                   prior_mean, prior_scale, initial_cov)
+def setup_diagonal_gmm(DIM, MAX_COMPONENTS, bound_info=None) -> GMM:
+    if bound_info is not None:
+        eps = 1e-6
+        low, high = bound_info
+        bijector = lambda x:  jnp.tanh(x) * (high - low) / 2 + (low + high) / 2
+        inv_bijector = lambda x: 0.5 * (
+            jnp.log1p(jnp.clip((2 * x - (low + high)) / (high - low), -1.0 + eps, 1.0 - eps))
+            - jnp.log1p(-jnp.clip((2 * x - (low + high)) / (high - low), -1.0 + eps, 1.0 - eps))
+        )
+        bijector_log_prob = lambda x: jnp.sum(jnp.log(2.0) - jnp.log(high - low)) \
+            - jnp.log1p(-jnp.clip((2 * x - (low + high)) / (high - low), -1.0 + eps, 1.0 - eps) ** 2).sum(-1)
+    else:
+        bijector = lambda x: x
+        inv_bijector = lambda x: x
+        bijector_log_prob = lambda x: 0
 
-#         return GMMState(log_weights=_normalize_weights(jnp.log(weights)),
-#                         means=means,
-#                         chol_covs=chol_covs,
-#                         num_components=num_initial_components)
+    def init_diagonal_gmm_state(seed, num_initial_components, prior_mean, prior_scale, diagonal_covs, initial_cov=None):
+        weights, means, chol_covs = _setup_initial_mixture_params(
+            DIM,
+            seed,
+            True,
+            MAX_COMPONENTS,
+            num_initial_components,
+            prior_mean,
+            prior_scale,
+            initial_cov,
+        )
+        mask = jnp.concatenate([jnp.ones(num_initial_components), jnp.zeros(MAX_COMPONENTS - num_initial_components)])
+        return GMMState(
+            log_weights=_normalize_weights(jnp.log(weights), mask),
+            means=means,
+            chol_covs=chol_covs,
+            num_components=num_initial_components,
+            component_mask=mask,
+        )
 
-#     def sample_from_component(gmm_state: GMMState, index: int, num_samples: int, seed: chex.PRNGKey) -> chex.Array:
+    def sample_from_component(gmm_state: GMMState, index: int, num_samples: int, seed: chex.PRNGKey) -> chex.Array:
+        z = jax.random.normal(seed, (num_samples, DIM))
+        return gmm_state.means[index] + gmm_state.chol_covs[index] * z
 
-#         samples = jnp.transpose(jnp.expand_dims(gmm_state.means[index], 1) + jnp.expand_dims(gmm_state.chol_covs[index], 1)
-#                                 * jax.random.normal(seed, (DIM, num_samples)))
-#         return samples
+    def sample_from_component_bijected(gmm_state: GMMState, index: int, num_samples: int, seed: chex.PRNGKey) -> chex.Array:
+        return bijector(sample_from_component(gmm_state, index, num_samples, seed))
 
-#     def component_log_densities(gmm_state: GMMState, samples: chex.Array) -> chex.Array:
-#         diffs = jnp.expand_dims(samples, 0) - gmm_state.means
-#         inv_chol = 1. / gmm_state.chol_covs  # Inverse of diagonal elements
-#         mahalas = -0.5 * jnp.sum(jnp.square(diffs * inv_chol), axis=-1)
-#         const_parts = -jnp.sum(jnp.log(gmm_state.chol_covs), axis=1) - 0.5 * DIM * jnp.log(2 * jnp.pi)
-#         log_pdfs = mahalas + const_parts
-#         return log_pdfs
+    def component_log_densities(gmm_state: GMMState, sample: chex.Array) -> chex.Array:
+        mask = gmm_state.component_mask
+        chol_safe = gmm_state.chol_covs * mask[:, None] + (1.0 - mask[:, None])
+        diffs = jnp.expand_dims(sample, 0) - gmm_state.means
+        mahalas = -0.5 * jnp.sum(jnp.square(diffs / chol_safe), axis=-1)
+        const_parts = -jnp.sum(jnp.log(chol_safe), axis=1) - 0.5 * DIM * jnp.log(2 * jnp.pi)
+        return (mahalas + const_parts) * mask
 
-#     def gaussian_entropy(chol: chex.Array) -> chex.Array:
-#         return 0.5 * DIM * (jnp.log(2 * jnp.pi) + 1) + jnp.sum(jnp.log(chol))
+    def gaussian_entropy(chol: chex.Array) -> chex.Array:
+        return 0.5 * DIM * (jnp.log(2 * jnp.pi) + 1) + jnp.sum(jnp.log(chol))
 
-#     def add_component(gmm_state: GMMState, idx : int, initial_weight: chex.Array, initial_mean: chex.Array,
-#                       initial_cov: chex.Array):
-#         return GMMState(
-#             log_weights=_normalize_weights(gmm_state.log_weights.at[idx].set(jnp.log(initial_weight)))
-#         )
-#         # return GMMState(log_weights=_normalize_weights(jnp.concatenate((gmm_state.log_weights,
-#         #                                                                 jnp.expand_dims(jnp.log(initial_weight),
-#         #                                                                                 axis=0)),
-#         #                                                                axis=0)),
-#         #                 means=jnp.concatenate((gmm_state.means, jnp.expand_dims(initial_mean, axis=0)), axis=0),
-#         #                 chol_covs=jnp.concatenate(
-#         #                     (gmm_state.chol_covs, jnp.expand_dims(jnp.sqrt(initial_cov), axis=0)), axis=0),
-#         #                 num_components=gmm_state.num_components + 1)
+    def add_component(gmm_state: GMMState, idx: int, initial_weight: chex.Array, initial_mean: chex.Array, initial_cov: chex.Array):
+        mask = gmm_state.component_mask.at[idx].set(1)
+        if jnp.ndim(initial_cov) == 0:
+            initial_chol = jnp.sqrt(initial_cov) * jnp.ones((DIM,), dtype=jnp.float32)
+        elif jnp.ndim(initial_cov) == 1:
+            initial_chol = jnp.sqrt(initial_cov)
+        else:
+            initial_chol = jnp.sqrt(jnp.diag(initial_cov))
+        return GMMState(
+            log_weights=_normalize_weights(gmm_state.log_weights.at[idx].set(jnp.log(initial_weight)), mask),
+            means=gmm_state.means.at[idx].set(initial_mean),
+            chol_covs=gmm_state.chol_covs.at[idx].set(initial_chol),
+            num_components=gmm_state.num_components + 1,
+            component_mask=mask,
+        )
 
-#     return GMM(init_gmm_state=init_diagonal_gmm_state,
-#                sample=setup_sample_fn(sample_from_component),
-#                sample_from_components_no_shuffle=setup_sample_from_components_no_shuffle_fn(sample_from_component),
-#                sample_from_components_shuffle=setup_sample_from_components_shuffle_fn(sample_from_component),
-#                add_component=add_component,
-#                remove_component=remove_component,
-#                replace_components=replace_components,
-#                average_entropy=setup_get_average_entropy_fn(gaussian_entropy),
-#                replace_weights=replace_weights,
-#                component_log_densities=component_log_densities,
-#                log_density=setup_log_density_fn(component_log_densities),
-#                log_densities_also_individual=setup_log_densities_also_individual_fn(component_log_densities),
-#                log_density_and_grad=setup_log_density_and_grad_fn(component_log_densities))
+    return GMM(
+        init_gmm_state=init_diagonal_gmm_state,
+        sample=setup_sample_fn(sample_from_component_bijected),
+        sample_from_components_no_shuffle=setup_sample_from_components_no_shuffle_fn(sample_from_component_bijected),
+        sample_from_components_shuffle=setup_sample_from_components_shuffle_fn(sample_from_component_bijected),
+        add_component=add_component,
+        remove_component=functools.partial(remove_component, MAX_COMPONENTS=MAX_COMPONENTS, DIM=DIM),
+        replace_components=replace_components,
+        average_entropy=setup_get_average_entropy_fn(gaussian_entropy),
+        replace_weights=replace_weights,
+        component_log_densities=component_log_densities,
+        log_density=setup_log_density_fn(
+            component_log_densities,
+            inv_bijector=inv_bijector,
+            bijector_log_prob=bijector_log_prob,
+        ),
+        log_densities_also_individual=setup_log_densities_also_individual_fn(
+            component_log_densities,
+            inv_bijector=inv_bijector,
+            bijector_log_prob=bijector_log_prob,
+        ),
+        log_density_and_grad=setup_log_density_and_grad_fn(
+            component_log_densities,
+            inv_bijector=inv_bijector,
+            bijector_log_prob=bijector_log_prob,
+        ),
+        bijector=bijector,
+        inv_bijector=inv_bijector,
+        bijector_log_prob=bijector_log_prob,
+    )
 
 
 def setup_full_cov_gmm(DIM, MAX_COMPONENTS, bound_info=None) -> GMM:

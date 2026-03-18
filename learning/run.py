@@ -91,9 +91,12 @@ CAMERAS = {
     "T1JoystickRoughTerrain" :"track",
     "LeapCubeRotateZAxis" :"side",
     "LeapCubeReorient" :"side",
-    "PandaPickCube" :"side",
-    "PandaPickCubeOrientation" :"side",
-    "PandaOpenCabinet" :"side",
+    "PandaPickCube" :None,
+    "PandaPickCubeOrientation" :None,
+    "PandaOpenCabinet" :None,
+    "AlohaSinglePegInsertion" : "collaborator_pov",
+    "PandaRobotiqPushCube" : None,
+
 }
 
 def policy_params_fn(current_step, make_policy, params, ckpt_path: epath.Path):

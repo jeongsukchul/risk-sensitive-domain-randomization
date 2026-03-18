@@ -75,7 +75,7 @@ def setup_sampledb(DIM, KEEP_SAMPLES, MAX_SAMPLES, MAX_COMPONENTS, DIAGONAL_COVS
 
             means = new_means
             chols = new_chols
-            inv_chols = jnp.linalg.inv(new_chols)
+            inv_chols = 1.0 / new_chols if DIAGONAL_COVS else jnp.linalg.inv(new_chols)
         else:
             # Overwrite only the first SAMPLE_SIZE window; keep old content for invalid rows.
             samples = sampledb_state.samples
@@ -100,7 +100,7 @@ def setup_sampledb(DIM, KEEP_SAMPLES, MAX_SAMPLES, MAX_COMPONENTS, DIAGONAL_COVS
 
             means = new_means
             chols = new_chols
-            inv_chols = jnp.linalg.inv(new_chols)
+            inv_chols = 1.0 / new_chols if DIAGONAL_COVS else jnp.linalg.inv(new_chols)
 
         return SampleDBState(
             num_samples_written=num_samples_written,

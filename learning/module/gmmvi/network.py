@@ -12,7 +12,13 @@ from omegaconf import DictConfig
 # now pass cfg to your factory
 from learning.module.gmmvi.component_adaptation import ComponentAdaptationState, setup_vips_component_adaptation
 from learning.module.gmmvi.configs import get_default_algorithm_config
-from learning.module.gmmvi.gmm_setup import GMMWrapper, GMMWrapperState, setup_full_cov_gmm, setup_gmm_wrapper
+from learning.module.gmmvi.gmm_setup import (
+    GMMWrapper,
+    GMMWrapperState,
+    setup_diagonal_gmm,
+    setup_full_cov_gmm,
+    setup_gmm_wrapper,
+)
 from learning.module.gmmvi.least_squares import setup_quad_regression
 from learning.module.gmmvi.ng_update import get_ng_update_fns
 from learning.module.gmmvi.sample_db import SampleDB, SampleDBState, setup_sampledb
@@ -22,6 +28,7 @@ from learning.module.gmmvi.weight_update import setup_weight_update_fn
 from pathlib import Path
 yaml_path = (Path(__file__).resolve().parent / "gmmvi.yaml")  # file-relative
 cfg = OmegaConf.load(str(yaml_path))
+_HIGH_DIM_DIAGONAL_THRESHOLD = 64
 
 class GMMTrainingState(NamedTuple):
     temperature: float
@@ -51,14 +58,19 @@ def create_gmm_network_and_state(
     prior_scale : float = .3,
     bound_info : dict = None,
 ):  
-    
-    gmm = setup_full_cov_gmm(dim, cfg.max_components, bound_info)
+    use_diagonal_covs = bool(cfg.use_diagonal_convs) or dim >= _HIGH_DIM_DIAGONAL_THRESHOLD
+    gmm_ctor = setup_diagonal_gmm if use_diagonal_covs else setup_full_cov_gmm
+    gmm = gmm_ctor(dim, cfg.max_components, bound_info)
+    # The current trainer only consumes the newest training batch from SampleDB.
+    # Keeping a 100k buffer on high-dimensional tasks adds memory pressure without
+    # helping GMM updates, because component adaptation is disabled in train.py.
+    max_database_size = min(cfg.max_database_size, max(batch_size, num_envs))
     
     gmm_state = gmm.init_gmm_state(key,
                                 cfg.num_initial_components,
                                 prior_mean,
                                 prior_scale,
-                                cfg.use_diagonal_convs,
+                                use_diagonal_covs,
                                 prior_scale**2)
     model = setup_gmm_wrapper(gmm,
                             cfg.max_components,
@@ -68,9 +80,9 @@ def create_gmm_network_and_state(
     model_state = model.init_gmm_wrapper_state(gmm_state)
     sample_db = setup_sampledb(dim,
                             cfg.use_sample_database,
-                            cfg.max_database_size,
+                            max_database_size,
                             cfg.max_components,
-                            cfg.use_diagonal_convs,
+                            use_diagonal_covs,
                             batch_size,
                             num_envs,
                             inv_bijector=model.inv_bijector)
@@ -80,7 +92,7 @@ def create_gmm_network_and_state(
     ng_update_fn, hass_grad_fn, more_hass_grad_fn = get_ng_update_fns(model,
                                             quad_regression_fn,
                                             dim,
-                                            cfg.use_diagonal_convs,
+                                            use_diagonal_covs,
                                             cfg.use_self_normalized_importance_weights,
                                             cfg.temperature,
                                             cfg.initial_l2_regularizer,
@@ -92,7 +104,7 @@ def create_gmm_network_and_state(
                         dim,
                         prior_mean,
                         prior_scale ** 2,
-                        cfg.use_diagonal_convs,
+                        use_diagonal_covs,
                         cfg.del_iters,
                         cfg.add_iters,
                         cfg.max_components,
