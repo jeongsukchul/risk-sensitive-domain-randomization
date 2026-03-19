@@ -53,7 +53,7 @@ def default_config() -> config_dict.ConfigDict:
       vision=False,
       vision_config=default_vision_config(),
       impl="jax",
-      nconmax=0,
+      naconmax=0,
       njmax=2,
   )
 
@@ -172,7 +172,7 @@ class Balance(mjx_env.MjxEnv):
         qpos=qpos,
         qvel=qvel,
         impl=self.mjx_model.impl.value,
-        nconmax=self._config.nconmax,
+        naconmax=self._config.naconmax,
         njmax=self._config.njmax,
     )
     data = mjx.forward(self.mjx_model, data)

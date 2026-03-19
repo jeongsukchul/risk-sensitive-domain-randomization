@@ -16,7 +16,7 @@
 
 """Constants for TetherIA Aero Hand Open."""
 
-from mujoco_playground._src import mjx_env
+from custom_envs import mjx_env
 
 ROOT_PATH = mjx_env.ROOT_PATH / "manipulation" / "aero_hand"
 CUBE_XML = ROOT_PATH / "xmls" / "scene_mjx_cube.xml"

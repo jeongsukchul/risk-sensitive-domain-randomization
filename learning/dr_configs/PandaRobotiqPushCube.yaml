@@ -1,0 +1,23 @@
+task: PandaRobotiqPushCube
+
+parameters:
+  - {name: finger_friction, group: dynamics, low: 0.5, high: 1.5, learnable: true}
+  - {name: object_friction, group: dynamics, low: 0.3, high: 1.5, learnable: true}
+  - {name: object_mass_scale, group: dynamics, low: 0.8, high: 1.2, learnable: true}
+  - {name: object_ipos_x, group: dynamics, low: -0.005, high: 0.005, learnable: true}
+  - {name: object_ipos_y, group: dynamics, low: -0.005, high: 0.005, learnable: true}
+  - {name: object_ipos_z, group: dynamics, low: -0.005, high: 0.005, learnable: true}
+  - {name: box_pos_x, group: reset, low: 0.4, high: 0.65, learnable: true}
+  - {name: box_pos_y, group: reset, low: -0.2, high: 0.2, learnable: true}
+  - {name: box_yaw, group: reset, low: 0.0, high: 6.283184307179586, learnable: true}
+  - {name: target_pos_x, group: reset, low: 0.54784, high: 0.58783996, learnable: true}
+  - {name: target_pos_y, group: reset, low: -0.0753974, high: 0.0246026, learnable: true}
+  - {name: target_pos_z, group: reset, low: 0.0256525, high: 0.0356525, learnable: true}
+  - {name: target_delta_yaw, group: reset, low: 0.0, high: 0.7853981633974483, learnable: true}
+  - {name: arm_offset_0, group: reset, low: -0.173838, high: 0.173838, learnable: true}
+  - {name: arm_offset_1, group: reset, low: -0.105768, high: 0.105768, learnable: true}
+  - {name: arm_offset_2, group: reset, low: -0.173838, high: 0.173838, learnable: true}
+  - {name: arm_offset_3, group: reset, low: -0.184308, high: -0.004188, learnable: true}
+  - {name: arm_offset_4, group: reset, low: -0.260757, high: 0.260757, learnable: true}
+  - {name: arm_offset_5, group: reset, low: -0.001575, high: 0.337725, learnable: true}
+  - {name: arm_offset_6, group: reset, low: -0.260757, high: 0.260757, learnable: true}

@@ -22,7 +22,7 @@ import mujoco
 from mujoco import mjx
 import numpy as np
 
-from mujoco_playground._src import mjx_env
+from custom_envs import mjx_env
 
 ARM_JOINTS = [
     "joint1",

@@ -24,7 +24,8 @@ from mujoco import mjx
 from mujoco.mjx._src import math
 from mujoco.mjx._src import types
 
-from mujoco_playground._src import mjx_env
+from custom_envs import mjx_env
+from learning.dr_config import get_structural_dr_bounds
 from mujoco_playground._src import reward as reward_util
 from mujoco_playground._src.manipulation.franka_emika_panda_robotiq import panda_robotiq
 import numpy as np
@@ -88,6 +89,7 @@ def default_config():
               action_rate=-0.1,
           ),
       ),
+      dynamics_randomization_in_domain_randomization=True,
       reset_randomization_in_domain_randomization=True,
       impl="jax",
       naconmax=32 * 8192,
@@ -229,8 +231,11 @@ class PandaRobotiqPushCube(panda_robotiq.PandaRobotiqBase):
         "angle_curriculum": jp.array([45, 45, 90, 135, 180], dtype=float),
         "pos_curriculum": jp.array([0.05, 0.05, 0.1, 0.2, 0.2], dtype=float),
     }
-    obs = self._get_single_obs(data, info)
-    info["obs_history"] = jp.zeros(self._config.obs_history_len * obs.shape[0])
+    actor_obs = self._get_single_obs(data, info)
+    info["obs_history"] = jp.zeros(
+        self._config.obs_history_len * actor_obs.shape[0]
+    )
+    obs = self._get_obs_from_single_obs(data, info, actor_obs)
 
     reward, done = jp.zeros(2)
     state = mjx_env.State(data, obs, reward, done, metrics, info)
@@ -504,27 +509,69 @@ class PandaRobotiqPushCube(panda_robotiq.PandaRobotiqBase):
     ori_error = 2.0 * jp.asin(jp.clip(math.norm(quat_diff[1:]), a_max=1.0))
     return ori_error
 
-  def _get_obs(self, state: mjx_env.State) -> jax.Array:
-    obs = self._get_single_obs(state.data, state.info)
-    obs_size = obs.shape[0]
+  def _get_obs(self, state: mjx_env.State) -> dict[str, jax.Array]:
+    actor_obs = self._get_single_obs(state.data, state.info)
+    return self._get_obs_from_single_obs(state.data, state.info, actor_obs)
+
+  def _get_obs_from_single_obs(
+      self, data: mjx.Data, info: dict[str, Any], actor_obs: jax.Array
+  ) -> dict[str, jax.Array]:
+    obs_size = actor_obs.shape[0]
 
     # fill the buffer
     obs_history = (
-        jp.roll(state.info["obs_history"], obs_size).at[:obs_size].set(obs)
+        jp.roll(info["obs_history"], obs_size).at[:obs_size].set(actor_obs)
     )
-    state.info["obs_history"] = obs_history
+    info["obs_history"] = obs_history
 
     # add observation delay
-    state.info["rng"], key = jax.random.split(state.info["rng"])
+    info["rng"], key = jax.random.split(info["rng"])
     obs_idx = jax.random.randint(
         key,
         (1,),
         minval=self._config.noise_config.obs_min_delay,
         maxval=self._config.noise_config.obs_max_delay,
     )
-    obs = obs_history.reshape((-1, obs_size))[obs_idx[0]]
+    state = obs_history.reshape((-1, obs_size))[obs_idx[0]]
 
-    return obs
+    target_pos = data.mocap_pos[self._mocap_target, :].ravel()
+    target_quat = data.mocap_quat[self._mocap_target, :].ravel()
+    target_mat = math.quat_to_mat(target_quat)
+    robot_qpos = data.qpos[
+        self._q_low_joint_pos_index : self._q_upper_joint_pos_index
+    ]
+    robot_qvel = data.qvel[
+        self._qd_low_joint_pos_index : self._qd_upper_joint_pos_index
+    ]
+    gripper_pos = data.site_xpos[self._gripper_site]
+    gripper_mat = data.site_xmat[self._gripper_site]
+    obj_pos = data.xpos[self._obj_body]
+    obj_mat = data.xmat[self._obj_body]
+
+    privileged_state = jp.concatenate([
+        state,
+        target_pos,
+        target_mat.ravel()[3:],
+        info["last_action"],
+        robot_qpos,
+        robot_qvel,
+        gripper_pos,
+        gripper_mat.ravel()[3:],
+        obj_mat.ravel()[3:],
+        obj_pos,
+        data.qfrc_bias,
+        data.actuator_force,
+        self.mjx_model.geom_friction[self._left_finger_geom, 0:1],
+        self.mjx_model.geom_friction[self._obj_geom, 0:1],
+        self.mjx_model.body_mass[self._obj_body : self._obj_body + 1],
+        self.mjx_model.body_inertia[self._obj_body],
+        self.mjx_model.body_ipos[self._obj_body],
+    ])
+
+    return {
+        "state": state,
+        "privileged_state": privileged_state,
+    }
 
   def _get_single_obs(self, data: mjx.Data, info: dict[str, Any]) -> jax.Array:
     target_pos = data.mocap_pos[self._mocap_target, :].ravel()
@@ -636,45 +683,13 @@ class PandaRobotiqPushCube(panda_robotiq.PandaRobotiqBase):
 
   @property
   def dr_range(self):
-    arm_offset_low = (
-        0.3 * self._jnt_range[:, 0] * self._joint_range_init_percent_limit
+    bounds = get_structural_dr_bounds(
+        "PandaRobotiqPushCube",
+        include_reset_params=self._config.reset_randomization_in_domain_randomization,
     )
-    arm_offset_high = (
-        0.3 * self._jnt_range[:, 1] * self._joint_range_init_percent_limit
-    )
-
-    low = [
-        jp.array([0.5]),
-        jp.array([0.3]),
-        jp.array([0.8]),
-        jp.full((3,), -0.005),
-    ]
-    high = [
-        jp.array([1.5]),
-        jp.array([1.5]),
-        jp.array([1.2]),
-        jp.full((3,), 0.005),
-    ]
-
-    if not self._config.reset_randomization_in_domain_randomization:
-      return jp.concatenate(low), jp.concatenate(high)
-
-    target_low, target_high = self._target_pos_bounds()
-    low.extend([
-        jp.array([OBJ_SAMPLE_MIN[0], OBJ_SAMPLE_MIN[1]]),
-        jp.array([0.0]),
-        target_low,
-        jp.array([0.0]),
-        jp.array(arm_offset_low),
-    ])
-    high.extend([
-        jp.array([OBJ_SAMPLE_MAX[0], OBJ_SAMPLE_MAX[1]]),
-        jp.array([2.0 * jp.pi - _UNIT_INTERVAL_EPS]),
-        target_high,
-        jp.array([jp.pi / 4.0]),
-        jp.array(arm_offset_high),
-    ])
-    return jp.concatenate(low), jp.concatenate(high)
+    if bounds is None:
+      raise ValueError("Missing DR YAML config for PandaRobotiqPushCube.")
+    return tuple(jp.asarray(x) for x in bounds)
 
   @property
   def action_size(self):

@@ -14,7 +14,7 @@
 # ==============================================================================
 """Constants for ALOHA."""
 
-from mujoco_playground._src import mjx_env
+from custom_envs import mjx_env
 
 XML_PATH = mjx_env.ROOT_PATH / "manipulation" / "aloha" / "xmls"
 

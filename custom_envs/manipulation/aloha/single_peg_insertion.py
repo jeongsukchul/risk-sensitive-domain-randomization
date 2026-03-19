@@ -23,7 +23,8 @@ from ml_collections import config_dict
 from mujoco import mjx
 import numpy as np
 
-from mujoco_playground._src import mjx_env
+from custom_envs import mjx_env
+from learning.dr_config import get_structural_dr_bounds
 from mujoco_playground._src import reward as reward_util
 from mujoco_playground._src.manipulation.aloha import aloha_constants as consts
 from mujoco_playground._src.manipulation.aloha import base as aloha_base
@@ -54,6 +55,7 @@ def default_config() -> config_dict.ConfigDict:
               peg_insertion_reward=8,
           )
       ),
+      dynamics_randomization_in_domain_randomization=True,
       reset_randomization_in_domain_randomization=True,
       impl="jax",
       naconmax=24 * 1024,
@@ -158,29 +160,13 @@ class SinglePegInsertion(aloha_base.AlohaEnv):
 
   @property
   def dr_range(self):
-    low = [
-        jp.array([0.5]),
-        jp.array([0.5]),
-        jp.array([0.8]),
-        jp.array([0.8]),
-        jp.full((3,), -0.005),
-        jp.full((3,), -0.005),
-    ]
-    high = [
-        jp.array([1.5]),
-        jp.array([1.5]),
-        jp.array([1.2]),
-        jp.array([1.2]),
-        jp.full((3,), 0.005),
-        jp.full((3,), 0.005),
-    ]
-
-    if not self._config.reset_randomization_in_domain_randomization:
-      return jp.concatenate(low), jp.concatenate(high)
-
-    low.extend([jp.full((2,), -0.1), jp.full((2,), -0.1)])
-    high.extend([jp.full((2,), 0.1), jp.full((2,), 0.1)])
-    return jp.concatenate(low), jp.concatenate(high)
+    bounds = get_structural_dr_bounds(
+        "AlohaSinglePegInsertion",
+        include_reset_params=self._config.reset_randomization_in_domain_randomization,
+    )
+    if bounds is None:
+      raise ValueError("Missing DR YAML config for AlohaSinglePegInsertion.")
+    return tuple(jp.asarray(x) for x in bounds)
 
   def step(self, state: mjx_env.State, action: jax.Array) -> mjx_env.State:
     delta = action * self._config.action_scale
@@ -224,7 +210,7 @@ class SinglePegInsertion(aloha_base.AlohaEnv):
     obs = self._get_obs(data)
     return mjx_env.State(data, obs, reward, done, state.metrics, state.info)
 
-  def _get_obs(self, data: mjx.Data) -> jax.Array:
+  def _get_obs(self, data: mjx.Data) -> dict[str, jax.Array]:
     left_gripper_pos = data.site_xpos[self._left_gripper_site]
     socket_pos = data.xpos[self._socket_body]
     right_gripper_pos = data.site_xpos[self._right_gripper_site]
@@ -234,7 +220,7 @@ class SinglePegInsertion(aloha_base.AlohaEnv):
     socket_z = data.xmat[self._socket_body].ravel()[6:]
     peg_z = data.xmat[self._peg_body].ravel()[6:]
 
-    obs = jp.concatenate([
+    state = jp.concatenate([
         data.qpos,
         data.qvel,
         left_gripper_pos,
@@ -246,8 +232,33 @@ class SinglePegInsertion(aloha_base.AlohaEnv):
         socket_z,
         peg_z,
     ])
+    peg_geom = self._mj_model.geom("red_peg").id
+    socket_geoms = jp.array([
+        self._mj_model.geom("socket-B").id,
+        self._mj_model.geom("socket-T").id,
+        self._mj_model.geom("socket-L").id,
+        self._mj_model.geom("socket-R").id,
+        self._mj_model.geom("wall").id,
+    ])
+    privileged_state = jp.concatenate([
+        state,
+        data.qfrc_bias,
+        data.actuator_force,
+        self.mjx_model.geom_friction[peg_geom, 0:1],
+        self.mjx_model.geom_friction[socket_geoms, 0],
+        self.mjx_model.body_mass[
+            jp.array([self._peg_body, self._socket_body])
+        ],
+        self.mjx_model.body_inertia[self._peg_body],
+        self.mjx_model.body_inertia[self._socket_body],
+        self.mjx_model.body_ipos[self._peg_body],
+        self.mjx_model.body_ipos[self._socket_body],
+    ])
 
-    return obs
+    return {
+        "state": state,
+        "privileged_state": privileged_state,
+    }
 
   def _get_reward(
       self, data: mjx.Data, use_peg_insertion_reward: bool

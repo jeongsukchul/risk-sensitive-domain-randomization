@@ -30,6 +30,9 @@ def wrap_for_adv_training(
     ] = None,
     dr_range_low: jnp.ndarray = None,
     dr_range_high: jnp.ndarray = None,
+    full_dr_range_low: jnp.ndarray = None,
+    full_dr_range_high: jnp.ndarray = None,
+    learnable_mask: jnp.ndarray = None,
     full_reset: bool = False,
     get_grad = False,
 ) -> Wrapper:
@@ -50,7 +53,17 @@ def wrap_for_adv_training(
     environment did not already have batch dimensions, it is additional Vmap
     wrapped.
   """
-  env = AdVmapWrapper(env, randomization_fn, param_size, dr_range_low, dr_range_high, get_grad)
+  env = AdVmapWrapper(
+      env,
+      randomization_fn,
+      param_size,
+      dr_range_low,
+      dr_range_high,
+      full_dr_range_low,
+      full_dr_range_high,
+      learnable_mask,
+      get_grad,
+  )
   env = EpisodeWrapper(env, episode_length, action_repeat)
   env = BraxAutoResetWrapper(env, full_reset=full_reset)
   return env
@@ -64,6 +77,9 @@ class AdVmapWrapper(Wrapper):
       param_size: int,
       dr_range_low: jnp.ndarray = None,
       dr_range_high: jnp.ndarray = None,
+      full_dr_range_low: jnp.ndarray = None,
+      full_dr_range_high: jnp.ndarray = None,
+      learnable_mask: jnp.ndarray = None,
       get_grad = False,
   ):
     super().__init__(env)
@@ -72,9 +88,43 @@ class AdVmapWrapper(Wrapper):
     self.param_size = param_size
     self.dr_range_low = dr_range_low
     self.dr_range_high = dr_range_high
+    self.full_dr_range_low = (
+        dr_range_low if full_dr_range_low is None else full_dr_range_low
+    )
+    self.full_dr_range_high = (
+        dr_range_high if full_dr_range_high is None else full_dr_range_high
+    )
+    self.learnable_mask = None
+    if learnable_mask is not None:
+      self.learnable_mask = jnp.asarray(learnable_mask, dtype=bool)
+      if int(jnp.sum(self.learnable_mask)) != int(param_size):
+        raise ValueError("learnable_mask count must match param_size.")
     self._supports_reset_params = "params" in inspect.signature(
         self.env.unwrapped.reset
     ).parameters
+
+  def merge_params(self, rng: jax.Array, params: jax.Array = None) -> jax.Array:
+    if self.learnable_mask is None:
+      if params is not None:
+        return params
+      return jax.random.uniform(
+          rng,
+          (self.param_size,),
+          minval=self.dr_range_low,
+          maxval=self.dr_range_high,
+      )
+
+    full_params = jax.random.uniform(
+        rng,
+        (self.full_dr_range_low.shape[0],),
+        minval=self.full_dr_range_low,
+        maxval=self.full_dr_range_high,
+    )
+    if params is None:
+      return full_params
+    if params.shape[-1] == self.full_dr_range_low.shape[0]:
+      return params
+    return full_params.at[self.learnable_mask].set(params)
 
   @contextlib.contextmanager
   def v_env_fn(self, mjx_model: mjx.Model):
@@ -89,19 +139,13 @@ class AdVmapWrapper(Wrapper):
   def reset(self, rng: jax.Array, params: jax.Array = None) -> mjx_env.State:
     # state = jax.vmap(reset, in_axes=[self._in_axes, 0])(self._mjx_model_v, rng)
     def dr_reset(rng, params):
-      if params is None:
-        param_rng, rng = jax.random.split(rng)
-        params = jax.random.uniform(
-            param_rng,
-            (self.param_size,),
-            minval=self.dr_range_low,
-            maxval=self.dr_range_high,
-        )
-      mjx_model, inaxes = self.rand_fn(params=params)
+      param_rng, rng = jax.random.split(rng)
+      full_params = self.merge_params(param_rng, params)
+      mjx_model, inaxes = self.rand_fn(params=full_params)
       with self.v_env_fn(mjx_model) as v_env:
         if self._supports_reset_params:
-          return v_env.reset(rng, params=params), params
-        return v_env.reset(rng), params
+          return v_env.reset(rng, params=full_params), full_params
+        return v_env.reset(rng), full_params
     if params is None:
       state, params = jax.vmap(dr_reset, in_axes=(0, None))(rng, None)
     else:
@@ -180,6 +224,9 @@ class EpisodeWrapper(Wrapper):
     state.info['episode_done'] = done
     return state.replace(done=done)
 
+  def merge_params(self, rng: jax.Array, params: jax.Array = None) -> jax.Array:
+    return self.env.merge_params(rng, params)
+
 class BraxAutoResetWrapper(Wrapper):
   """Automatically resets Brax envs that are done."""
   def __init__(self, env: Any, full_reset: bool = False):
@@ -203,7 +250,12 @@ class BraxAutoResetWrapper(Wrapper):
     reset_state = None
     current_params = state.info.get('dr_params', params)
     reset_param_size = getattr(self.env.unwrapped, 'reset_param_size', 0)
+    rng_key = jax.vmap(jax.random.split)(state.info[f'{self._info_key}_rng'])
+    reset_rng, reset_key = rng_key[..., 0], rng_key[..., 1]
     reset_candidate_params = params
+    merge_params_fn = getattr(self.env, "merge_params", None)
+    if params is not None and merge_params_fn is not None:
+      reset_candidate_params = jax.vmap(merge_params_fn)(reset_key, params)
     if (
         params is not None
         and current_params is not None
@@ -212,12 +264,10 @@ class BraxAutoResetWrapper(Wrapper):
       reset_candidate_params = jnp.concatenate(
           [
               current_params[..., :-reset_param_size],
-              params[..., -reset_param_size:],
+              reset_candidate_params[..., -reset_param_size:],
           ],
           axis=-1,
       )
-    rng_key = jax.vmap(jax.random.split)(state.info[f'{self._info_key}_rng'])
-    reset_rng, reset_key = rng_key[..., 0], rng_key[..., 1]
     if self._full_reset:
       reset_state = self.reset(reset_key, params=reset_candidate_params)
       reset_data = reset_state.data

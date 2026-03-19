@@ -11,7 +11,7 @@ exp_name : test
 
 # evaluation
 checkpoint: ???
-impl : warp #or jax
+impl : jax #or warp
 eval_with_training_env : false #added
 num_evals : 20
 
@@ -34,6 +34,8 @@ randomization: true
 final_randomization: true
 custom_wrapper: true
 dr_train_ratio : 1.
+dynamics_randomization_in_domain_randomization: true
+reset_randomization_in_domain_randomization: true
 group: ???
 # epopt
 epsilon : 0.1

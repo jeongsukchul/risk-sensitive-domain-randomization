@@ -24,7 +24,7 @@ from mujoco.mjx._src import math
 import numpy as np
 
 from mujoco_playground._src import gait
-from mujoco_playground._src import mjx_env
+from custom_envs import mjx_env
 from mujoco_playground._src.locomotion.t1 import base as t1_base
 from mujoco_playground._src.locomotion.t1 import t1_constants as consts
 

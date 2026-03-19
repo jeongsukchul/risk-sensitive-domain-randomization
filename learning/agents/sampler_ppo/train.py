@@ -41,6 +41,7 @@ import flax
 import jax
 import jax.numpy as jnp
 from learning.agents.sampler_ppo.distributions import ADRState, DoraemonState, _log_prob_beta_on_box, _unpack_beta, get_adr_sample, plot_adr_density_2d, plot_beta_density_2d, sample_beta_on_box
+from learning.dr_config import build_dr_spec
 from learning.helper import make_dir
 from learning.module.gmmvi.network import GMMTrainingState
 from learning.module.bijx.utils import render_flow_pdf_2d_subplots
@@ -82,6 +83,29 @@ class TrainingState:
 
 def _unpmap(v):
   return jax.tree_util.tree_map(lambda x: x[0], v)
+
+
+def _print_dr_spec_summary(dr_spec) -> None:
+  learnable_names = [
+      name
+      for name, is_learnable in zip(dr_spec.param_names, dr_spec.learnable_mask)
+      if bool(is_learnable)
+  ]
+  uniform_names = [
+      name
+      for name, is_learnable in zip(dr_spec.param_names, dr_spec.learnable_mask)
+      if not bool(is_learnable)
+  ]
+  print("DR learnable parameters:", learnable_names)
+  print("DR uniform-only parameters:", uniform_names)
+  print(
+      "DR dimensions:",
+      {
+          "full": dr_spec.full_dim,
+          "learnable": dr_spec.learnable_dim,
+          "uniform_only": dr_spec.full_dim - dr_spec.learnable_dim,
+      },
+  )
 
 
 def _strip_weak_type(tree):
@@ -266,6 +290,7 @@ def train(
     dr_train_ratio = 1.0,
     use_wandb= False,
     sampler_visualization: bool = False,
+    dr_config_task: Optional[str] = None,
     sampler_update_freq=10,
     gamma = 0.5,
     beta = 1.0,
@@ -385,23 +410,51 @@ def train(
   assert num_envs % device_count == 0
   import copy
   env = copy.deepcopy(environment)
-  nominal_dynamics_params= env.nominal_params
+  nominal_dynamics_params_full = jnp.asarray(env.nominal_params)
   reset_param_size = getattr(env, "reset_param_size", 0)
   print("num timesteps", num_timesteps)
   print("num_evals", num_evals)
   print("num_trainign_Steps_per_epoch", num_training_steps_per_epoch)
-  print("nominal params", nominal_dynamics_params)
+  print("nominal params", nominal_dynamics_params_full)
   print("dr range", env.dr_range)
   print("sampler update freq", sampler_update_freq)
   save_dir = make_dir(work_dir / "results" / sampler_choice)
   sampler_visualization = bool(sampler_visualization)
+  dr_spec = None
+  learnable_mask = None
+  full_dr_range_low = None
+  full_dr_range_high = None
   if hasattr(env,'dr_range') :
-    low, high = env.dr_range
-    dr_mid = (low  + high) / 2.
-    dr_scale = dr_train_ratio * (high - low) / 2.
-    dr_range_low, dr_range_high = dr_mid - dr_train_ratio*dr_scale, dr_mid + dr_train_ratio*dr_scale
+    full_dr_range_low, full_dr_range_high = env.dr_range
+    if dr_config_task is not None and sampler_choice != "NODR":
+      dr_spec = build_dr_spec(
+          dr_config_task,
+          include_reset_params=reset_param_size > 0,
+          enable_dynamics_learning=getattr(
+              env._config,
+              "dynamics_randomization_in_domain_randomization",
+              True,
+          ),
+          enable_reset_learning=getattr(
+              env._config,
+              "reset_randomization_in_domain_randomization",
+              True,
+          ),
+      )
+    if dr_spec is not None:
+      learnable_mask = dr_spec.learnable_mask
+      dr_range_low, dr_range_high = dr_spec.learnable_low, dr_spec.learnable_high
+      nominal_dynamics_params = nominal_dynamics_params_full[learnable_mask]
+      _print_dr_spec_summary(dr_spec)
+    else:
+      low, high = full_dr_range_low, full_dr_range_high
+      nominal_dynamics_params = nominal_dynamics_params_full
+      dr_mid = (low  + high) / 2.
+      dr_scale = dr_train_ratio * (high - low) / 2.
+      dr_range_low, dr_range_high = dr_mid - dr_train_ratio*dr_scale, dr_mid + dr_train_ratio*dr_scale
     training_dr_range = (dr_range_low,  dr_range_high)
   else:
+    nominal_dynamics_params = nominal_dynamics_params_full
     training_dr_range = None
   training_randomization_fn = None
 
@@ -424,6 +477,9 @@ def train(
     param_size = len(dr_range_low),
     dr_range_low=dr_range_low,
     dr_range_high=dr_range_high,
+    full_dr_range_low=full_dr_range_low,
+    full_dr_range_high=full_dr_range_high,
+    learnable_mask=learnable_mask,
     full_reset=True,
   )
 
@@ -749,7 +805,8 @@ def train(
     state, data, reset_happened = get_experience(training_state, state, dynamics_params,\
             key_generate_unroll, unroll_length, batch_size * num_minibatches // num_envs if sampler_choice!="EPOpt" else int(batch_size * num_minibatches/epsilon //num_envs) ,)
     if (
-        dynamics_params is not None
+        dr_spec is None
+        and dynamics_params is not None
         and prev_dynamics_params is not None
         and reset_param_size > 0
     ):
@@ -766,6 +823,9 @@ def train(
 
     if rewards is None:
       rewards = data.reward  # (K, L, B)
+    rollout_episode_done = data.extras['state_extras']['episode_done']
+    rollout_episode_returns = data.extras['state_extras']['episode_metrics']['sum_reward']
+    rollout_episode_lengths = data.extras['state_extras']['episode_metrics']['length']
     # Have leading dimensions (batch_size * num_minibatches, unroll_length)
     data = jax.tree_util.tree_map(lambda x: jnp.swapaxes(x, 1, 2), data)
     data = jax.tree_util.tree_map(
@@ -809,29 +869,23 @@ def train(
         length=num_updates_per_batch,
     )
     # if sampler_choice != "GMM":
-    values = jnp.maximum(rewards.mean(axis=(0,1)), 0) if sampler_choice!="EPOpt" else 0#+ bootstrap_value
+    episode_done = rollout_episode_done
+    episode_returns = rollout_episode_returns
+    # completed_episode_count = episode_done.sum(axis=(0, 1))
+    (
+        mean_partial_episode_return,
+        mean_partial_episode_reward_rate,
+    ) = samplerppo_helper.select_max_length_segment_metrics(
+        episode_done=episode_done,
+        episode_returns=episode_returns,
+        episode_lengths=rollout_episode_lengths,
+    )
+    print("mean_partial_episode_reward_rate", mean_partial_episode_reward_rate)
+    values = mean_partial_episode_reward_rate if sampler_choice!="EPOpt" else 0
     cumulated_values += values
-    # For Debuggin GMM
-    # target = Funnel(dim=2, sample_bounds=[-30, 30])
-    # target_logprob = jax.vmap(target.log_prob)
-    # target_pdf = target_logprob(dynamics_params - (dr_range_low + dr_range_high)/2) # [num_envs]
-    # scheduler update
     if use_scheduling:
       scheduler_key, key = jax.random.split(key)
-      # def update_scheduler(scheduler_state, _cummulated_values):
-      #   sorted_values = jnp.sort(_cummulated_values)
-      #   N = _cummulated_values.shape[0]
-      #   k20 = int(N* .2)
-      #   CVaR20 = sorted_values[:k20].mean()
-      #   feedback = CVaR20 - scheduler_state.prev_cvar
-      #   scheduler_state = scheduler_state.replace(prev_cvar = CVaR20)
-      #   return scheduler.update_dists(scheduler_state, feedback)
-      # scheduler_state = jax.lax.cond(training_state.update_steps % sampler_update_freq==0, \
-      #           lambda: update_scheduler(training_state.scheduler_state, cumulated_values), \
-      #            lambda: training_state.scheduler_state )
       scheduler_state = training_state.scheduler_state
-      # scheduler_state, _beta = scheduler.sample(scheduler_state, scheduler_key)
-      # linear schedule
       _beta=0.0
       if scheduler_mode=="linear":
         _beta = start_beta - (start_beta - end_beta) * (training_state.update_steps / num_training_steps)
@@ -944,14 +998,37 @@ def train(
     else:
       raise ValueError("No Sampler!")
     # update_signal=1
+    averaged_cumulated_values = cumulated_values / sampler_update_freq
+    target_lnpdf_for_logging = _beta * averaged_cumulated_values
     metrics.update({
-      'target_pdf_min': update_signal* cumulated_values.min(),
-      'target_pdf_max': update_signal* cumulated_values.max(),
-      'target_pdf_mean': update_signal* cumulated_values.mean(),
-      'target_pdf_q25': update_signal* jnp.quantile(cumulated_values, .25),
-      'target_pdf_q50': update_signal* jnp.quantile(cumulated_values, .50),
-      'target_pdf_q75': update_signal* jnp.quantile(cumulated_values, .75),
-      'target_pdf_std': update_signal* cumulated_values.std(),
+      # 'sampler_partial_episode_return_min': update_signal * mean_partial_episode_return.min(),
+      # 'sampler_partial_episode_return_max': update_signal * mean_partial_episode_return.max(),
+      # 'sampler_partial_episode_return_mean': update_signal * mean_partial_episode_return.mean(),
+      # 'sampler_partial_episode_return_q25': update_signal * jnp.quantile(mean_partial_episode_return, .25),
+      # 'sampler_partial_episode_return_q50': update_signal * jnp.quantile(mean_partial_episode_return, .50),
+      # 'sampler_partial_episode_return_q75': update_signal * jnp.quantile(mean_partial_episode_return, .75),
+      # 'sampler_partial_episode_return_std': update_signal * mean_partial_episode_return.std(),
+      # 'sampler_partial_episode_reward_rate_min': update_signal * mean_partial_episode_reward_rate.min(),
+      # 'sampler_partial_episode_reward_rate_max': update_signal * mean_partial_episode_reward_rate.max(),
+      # 'sampler_partial_episode_reward_rate_mean': update_signal * mean_partial_episode_reward_rate.mean(),
+      # 'sampler_partial_episode_reward_rate_q25': update_signal * jnp.quantile(mean_partial_episode_reward_rate, .25),
+      # 'sampler_partial_episode_reward_rate_q50': update_signal * jnp.quantile(mean_partial_episode_reward_rate, .50),
+      # 'sampler_partial_episode_reward_rate_q75': update_signal * jnp.quantile(mean_partial_episode_reward_rate, .75),
+      # 'sampler_partial_episode_reward_rate_std': update_signal * mean_partial_episode_reward_rate.std(),
+      'sampler_values_min': update_signal * averaged_cumulated_values.min(),
+      'sampler_values_max': update_signal * averaged_cumulated_values.max(),
+      'sampler_values_mean': update_signal * averaged_cumulated_values.mean(),
+      'sampler_values_q25': update_signal * jnp.quantile(averaged_cumulated_values, .25),
+      'sampler_values_q50': update_signal * jnp.quantile(averaged_cumulated_values, .50),
+      'sampler_values_q75': update_signal * jnp.quantile(averaged_cumulated_values, .75),
+      'sampler_values_std': update_signal * averaged_cumulated_values.std(),
+      'target_pdf_min': update_signal * target_lnpdf_for_logging.min(),
+      'target_pdf_max': update_signal * target_lnpdf_for_logging.max(),
+      'target_pdf_mean': update_signal * target_lnpdf_for_logging.mean(),
+      'target_pdf_q25': update_signal * jnp.quantile(target_lnpdf_for_logging, .25),
+      'target_pdf_q50': update_signal * jnp.quantile(target_lnpdf_for_logging, .50),
+      'target_pdf_q75': update_signal * jnp.quantile(target_lnpdf_for_logging, .75),
+      'target_pdf_std': update_signal * target_lnpdf_for_logging.std(),
       'beta': update_signal * _beta,
     })
     new_training_state = TrainingState(
@@ -1111,6 +1188,9 @@ def train(
       param_size = len(dr_range_low),
       dr_range_low=dr_range_low,
       dr_range_high=dr_range_high,
+      full_dr_range_low=full_dr_range_low,
+      full_dr_range_high=full_dr_range_high,
+      learnable_mask=learnable_mask,
   )  # pytype: disable=wrong-keyword-args
 
   evaluator = AdvEvaluator(

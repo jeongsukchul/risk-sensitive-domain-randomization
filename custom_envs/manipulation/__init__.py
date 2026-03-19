@@ -63,8 +63,8 @@ _randomizer = {
     "LeapCubeRotateZAxis": leap_rotate_z.domain_randomize,
     "LeapCubeReorient": leap_cube_reorient.domain_randomize,
     # "PandaOpenCabinet": panda_open_cabinet.domain_randomize,
-    # "PandaPickCube": panda_pick.domain_randomize,
-    # "PandaPickCubeOrientation": panda_pick.domain_randomize,
+    "PandaPickCube": panda_pick.domain_randomize,
+    "PandaPickCubeOrientation": panda_pick.domain_randomize,
     "PandaRobotiqPushCube": robotiq_push_cube.domain_randomize,
 }
 
@@ -75,8 +75,8 @@ _randomizer_eval = {
     # "AlohaPegInsertion": aloha_peg.domain_randomize_eval,
     "LeapCubeReorient": leap_cube_reorient.domain_randomize_eval,
     # "PandaOpenCabinet": panda_open_cabinet.domain_randomize_eval,
-    # "PandaPickCube": panda_pick.domain_randomize_eval,
-    # "PandaPickCubeOrientation": panda_pick.domain_randomize_eval,
+    "PandaPickCube": panda_pick.domain_randomize_eval,
+    "PandaPickCubeOrientation": panda_pick.domain_randomize_eval,
     "PandaRobotiqPushCube": robotiq_push_cube.domain_randomize_eval,
 }
 

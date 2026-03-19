@@ -24,7 +24,7 @@ from ml_collections import config_dict
 from mujoco import mjx
 import numpy as np
 
-from mujoco_playground._src import mjx_env
+from custom_envs import mjx_env
 from mujoco_playground._src.manipulation.leap_hand import base as leap_hand_base
 from mujoco_playground._src.manipulation.leap_hand import leap_hand_constants as consts
 
@@ -57,7 +57,7 @@ def default_config() -> config_dict.ConfigDict:
       ),
       reset_randomization_in_domain_randomization=True,
       impl='jax',
-      nconmax=30 * 8192,
+      naconmax=30 * 8192,
       njmax=128,
   )
 
@@ -160,7 +160,7 @@ class CubeRotateZAxis(leap_hand_base.LeapHandEnv):
         ctrl=q_hand,
         mocap_pos=jp.array([-100.0, -100.0, -100.0]),  # Hide goal for task.
         impl=self._mjx_model.impl.value,
-        nconmax=self._config.nconmax,
+        naconmax=self._config.naconmax,
         njmax=self._config.njmax,
     )
 

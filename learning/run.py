@@ -42,6 +42,7 @@ import shutil
 from learning.module.wrapper.wrapper import Wrapper
 from learning.module.wrapper.adv_wrapper import wrap_for_adv_training
 from custom_envs import mjx_env
+from learning.dr_config import build_dr_spec
 from utils import save_configs_to_wandb_and_local
 from learning.module.wrapper.wrapper import Wrapper
 import scipy
@@ -288,6 +289,7 @@ def train_ppo(cfg:dict, randomization_fn, env, eval_env=None):
         sampler_update_freq =cfg.sampler_update_freq,
         n_sampler_iters = cfg.n_sampler_iters,
         sampler_visualization=getattr(cfg, "sampler_visualization", False),
+        dr_config_task=cfg.task,
         success_threshold = cfg.success_threshold,
         success_rate_condition = cfg.success_rate_condition,
         work_dir = cfg.work_dir,
@@ -508,6 +510,17 @@ def train(cfg: dict):
     shutil.copy('config.yaml', os.path.join(cfg_dir, 'config.yaml'))
     env_cfg = registry.get_default_config(cfg.task)
     env_cfg['impl'] = cfg.impl
+    if 'reset_randomization_in_domain_randomization' in cfg:
+        env_cfg.reset_randomization_in_domain_randomization = (
+            cfg.reset_randomization_in_domain_randomization
+        )
+    if (
+        'dynamics_randomization_in_domain_randomization' in cfg
+        and 'dynamics_randomization_in_domain_randomization' in env_cfg
+    ):
+        env_cfg.dynamics_randomization_in_domain_randomization = (
+            cfg.dynamics_randomization_in_domain_randomization
+        )
     if cfg.policy == "td3" :
         if "stand" in cfg.task:
             env_cfg.reward_config.scales.energy = -5e-5
@@ -575,6 +588,20 @@ def train(cfg: dict):
             rollout_frames = []
 
             if randomizer_eval is not None:
+                dr_spec = build_dr_spec(
+                    cfg.task,
+                    include_reset_params=getattr(eval_env, "reset_param_size", 0) > 0,
+                    enable_dynamics_learning=getattr(
+                        eval_env._config,
+                        "dynamics_randomization_in_domain_randomization",
+                        True,
+                    ),
+                    enable_reset_learning=getattr(
+                        eval_env._config,
+                        "reset_randomization_in_domain_randomization",
+                        True,
+                    ),
+                )
                 batched_eval_env = wrap_for_adv_training(
                     copy.deepcopy(eval_env),
                     param_size=percentile_params.shape[1],
@@ -584,8 +611,23 @@ def train(cfg: dict):
                         randomizer_eval,
                         dr_range=eval_env.dr_range,
                     ),
-                    dr_range_low=jnp.asarray(eval_env.dr_range[0]),
-                    dr_range_high=jnp.asarray(eval_env.dr_range[1]),
+                    dr_range_low=(
+                        jnp.asarray(dr_spec.learnable_low)
+                        if dr_spec is not None
+                        else jnp.asarray(eval_env.dr_range[0])
+                    ),
+                    dr_range_high=(
+                        jnp.asarray(dr_spec.learnable_high)
+                        if dr_spec is not None
+                        else jnp.asarray(eval_env.dr_range[1])
+                    ),
+                    full_dr_range_low=jnp.asarray(eval_env.dr_range[0]),
+                    full_dr_range_high=jnp.asarray(eval_env.dr_range[1]),
+                    learnable_mask=(
+                        jnp.asarray(dr_spec.learnable_mask)
+                        if dr_spec is not None
+                        else None
+                    ),
                 )
                 jit_batched_reset = jax.jit(batched_eval_env.reset)
                 jit_batched_step = jax.jit(

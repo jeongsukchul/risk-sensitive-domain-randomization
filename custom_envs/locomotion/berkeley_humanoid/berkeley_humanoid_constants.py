@@ -16,7 +16,7 @@
 
 from etils import epath
 
-from mujoco_playground._src import mjx_env
+from custom_envs import mjx_env
 
 ROOT_PATH = mjx_env.ROOT_PATH / "locomotion" / "berkeley_humanoid"
 FEET_ONLY_FLAT_TERRAIN_XML = (

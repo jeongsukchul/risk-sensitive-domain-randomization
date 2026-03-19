@@ -22,7 +22,7 @@ from ml_collections import config_dict
 from mujoco import mjx
 import numpy as np
 
-from mujoco_playground._src import mjx_env
+from custom_envs import mjx_env
 from mujoco_playground._src.locomotion.op3 import base as op3_base
 from mujoco_playground._src.locomotion.op3 import op3_constants as consts
 

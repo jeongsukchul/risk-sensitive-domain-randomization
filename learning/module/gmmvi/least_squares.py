@@ -24,6 +24,7 @@ def setup_quad_regression(DIM):
                                    triu_idx_const=jnp.array(
                                        jnp.transpose(jnp.stack(jnp.where(jnp.triu(jnp.ones([DIM, DIM], jnp.bool_))))))
                                    )
+    use_linear_fallback = quad_reg_state.num_features > 2048
 
     def fit_quadratic(regularizer: float, inputs: chex.Array,
                       outputs: chex.Array, num_samples,
@@ -32,8 +33,8 @@ def setup_quad_regression(DIM):
             -> Tuple[chex.Array, chex.Array, chex.Array]:
         valid = jnp.isfinite(outputs)
         outputs = jnp.where(valid, outputs, 0.)
-        def _fit(regularizer: float, num_samples: int, inputs: chex.Array,
-                 outputs: chex.Array, weights: chex.Array = None) -> chex.Array:
+        def _fit_quadratic(regularizer: float, num_samples: int, inputs: chex.Array,
+                           outputs: chex.Array, weights: chex.Array = None) -> chex.Array:
             def _feature_fn(num_samples: int, x: chex.Array) -> chex.Array:
                 linear_features = x
                 constant_feature = jnp.ones((len(x), 1))
@@ -70,6 +71,32 @@ def setup_quad_regression(DIM):
                                                   weighted_features @ jnp.expand_dims(outputs, 1)))
             return params
 
+        def _fit_linear(regularizer: float, inputs: chex.Array,
+                        outputs: chex.Array, weights: chex.Array = None) -> chex.Array:
+            linear_features = inputs
+            constant_feature = jnp.ones((len(inputs), 1))
+            features = jnp.concatenate((linear_features, constant_feature), axis=1)
+
+            if len(jnp.shape(outputs)) > 1:
+                outputs = jnp.squeeze(outputs)
+            if weights is not None:
+                if len(weights.shape) == 1:
+                    weights = jnp.expand_dims(weights, 1)
+                weights = valid[:, None] * weights
+                weighted_features = jnp.transpose(weights * features)
+            else:
+                weighted_features = jnp.transpose(valid[:, None] * features)
+
+            reg_mat = jnp.eye(DIM + 1) * regularizer
+            reg_mat = reg_mat.at[-1, -1].set(0.0)
+            params = jnp.squeeze(jnp.linalg.solve(
+                weighted_features @ features + reg_mat,
+                weighted_features @ jnp.expand_dims(outputs, 1),
+            ))
+            lin_term = params[:-1]
+            const_term = params[-1]
+            return lin_term, const_term
+
         whitening = True
         if sample_mean is None:
             assert sample_chol_cov is None
@@ -80,16 +107,22 @@ def setup_quad_regression(DIM):
             inv_samples_chol_cov = jnp.linalg.inv(sample_chol_cov)
             inputs = (inputs - sample_mean) @ jnp.transpose(inv_samples_chol_cov)
 
-        params = _fit(regularizer, num_samples, inputs, outputs, weights)
-        quad_flat = params[:quad_reg_state.num_quad_features]
-        I, J = jnp.triu_indices(DIM)
-        qt = jnp.zeros((DIM, DIM)).at[I, J].set(quad_flat) 
-        # qt = qt.at[quad_reg_state.triu_idx_const[:, 0], quad_reg_state.triu_idx_const[:, 1]].set(params[- (DIM + 1)])
-        # qt = tf.scatter_nd(quad_reg_state.triu_idx_const, params[:- (quad_reg_state.dim + 1)], [quad_reg_state.dim, quad_reg_state.dim])
-        
-        quad_term = - qt - jnp.transpose(qt)
-        lin_term = params[-(DIM+ 1):-1]
-        const_term = params[-1]
+        if use_linear_fallback:
+            # High-dimensional quadratic regression forms an O(D^2) feature vector
+            # and an O(D^2 x D^2) normal matrix per component, which is the main
+            # GPU RAM cliff on manipulation tasks like LeapCubeReorient.
+            quad_term = jnp.zeros((DIM, DIM), dtype=inputs.dtype)
+            lin_term, const_term = _fit_linear(regularizer, inputs, outputs, weights)
+        else:
+            params = _fit_quadratic(regularizer, num_samples, inputs, outputs, weights)
+            quad_flat = params[:quad_reg_state.num_quad_features]
+            I, J = jnp.triu_indices(DIM)
+            qt = jnp.zeros((DIM, DIM)).at[I, J].set(quad_flat) 
+            # qt = qt.at[quad_reg_state.triu_idx_const[:, 0], quad_reg_state.triu_idx_const[:, 1]].set(params[- (DIM + 1)])
+            # qt = tf.scatter_nd(quad_reg_state.triu_idx_const, params[:- (quad_reg_state.dim + 1)], [quad_reg_state.dim, quad_reg_state.dim])
+            quad_term = - qt - jnp.transpose(qt)
+            lin_term = params[-(DIM+ 1):-1]
+            const_term = params[-1]
 
         # unwhitening:
         if whitening and sample_mean is not None and sample_chol_cov is not None:

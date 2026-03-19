@@ -25,6 +25,7 @@ from mujoco.mjx._src import math
 import numpy as np
 
 from custom_envs import mjx_env
+from learning.dr_config import get_structural_dr_bounds
 from mujoco_playground._src import reward
 from mujoco_playground._src.manipulation.leap_hand import base as leap_hand_base
 from mujoco_playground._src.manipulation.leap_hand import leap_hand_constants as consts
@@ -67,6 +68,7 @@ def default_config() -> config_dict.ConfigDict:
           pert_duration_steps=[1, 100],
           pert_wait_steps=[60, 150],
       ),
+      dynamics_randomization_in_domain_randomization=True,
       reset_randomization_in_domain_randomization=True,
       impl='jax',
       naconmax=30 * 8192,
@@ -585,76 +587,13 @@ class CubeReorient(leap_hand_base.LeapHandEnv):
 
   @property
   def dr_range(self):
-    # 1. Fingertip friction (1 param): U(0.5, 1.0)
-    low = [jp.array([0.5])]
-    high = [jp.array([1.0])]
-
-    # 2. Cube mass scale (1 param): U(0.8, 1.2)
-    low.append(jp.array([0.8]))
-    high.append(jp.array([1.2]))
-
-    # 3. Cube position offset (3 params): U(-5e-3, 5e-3)
-    low.append(jp.full((3,), -0.005))
-    high.append(jp.full((3,), 0.005))
-
-    # 4. Hand qpos0 jitter (16 params): U(-0.05, 0.05)
-    # Note: Added to base, not scaled.
-    low.append(jp.full((16,), -0.05))
-    high.append(jp.full((16,), 0.05))
-
-    # 5. Static friction scale (16 params): U(0.5, 2.0)
-    low.append(jp.full((16,), 0.9))
-    high.append(jp.full((16,), 1.1))
-
-    # 6. Armature scale (16 params): U(1.0, 1.05)
-    low.append(jp.full((16,), 1.0))
-    high.append(jp.full((16,), 1.05))
-
-    # 7. Hand link mass scale (17 params): U(0.9, 1.1)
-    # 17 bodies in the hand definition
-    low.append(jp.full((17,), 0.9))
-    high.append(jp.full((17,), 1.1))
-
-    # 8. Joint stiffness (kp) scale (16 params): U(0.8, 1.2)
-    low.append(jp.full((16,), 0.8))
-    high.append(jp.full((16,), 1.2))
-
-    # 9. Joint damping (kd) scale (16 params): U(0.8, 1.2)
-    low.append(jp.full((16,), 0.8))
-    high.append(jp.full((16,), 1.2))
-
-    if not self._config.reset_randomization_in_domain_randomization:
-      return jp.concatenate(low), jp.concatenate(high)
-
-    # Reset goal quaternion latent (3 params): U(eps, 1 - eps)
-    low.append(jp.full((3,), _UNIT_INTERVAL_EPS))
-    high.append(jp.full((3,), 1.0 - _UNIT_INTERVAL_EPS))
-
-    # Reset hand pose latent for N(0, 1) via inverse CDF (16 params).
-    low.append(jp.full((consts.NQ,), _UNIT_INTERVAL_EPS))
-    high.append(jp.full((consts.NQ,), 1.0 - _UNIT_INTERVAL_EPS))
-
-    # Reset cube position offset (3 params): U(-0.01, 0.01)
-    low.append(jp.full((3,), -0.01))
-    high.append(jp.full((3,), 0.01))
-
-    # Reset cube quaternion latent (3 params): U(eps, 1 - eps)
-    low.append(jp.full((3,), _UNIT_INTERVAL_EPS))
-    high.append(jp.full((3,), 1.0 - _UNIT_INTERVAL_EPS))
-
-    # Reset perturbation timing latents for randint mapping (2 params).
-    low.append(jp.full((1,), 0.0))
-    high.append(jp.full((1,), 1.0 - _UNIT_INTERVAL_EPS))
-    low.append(jp.full((1,), 0.0))
-    high.append(jp.full((1,), 1.0 - _UNIT_INTERVAL_EPS))
-
-    # Reset perturbation magnitudes (2 params): uniform in config ranges.
-    low.append(jp.array([self._config.pert_config.linear_velocity_pert[0]]))
-    high.append(jp.array([self._config.pert_config.linear_velocity_pert[1]]))
-    low.append(jp.array([self._config.pert_config.angular_velocity_pert[0]]))
-    high.append(jp.array([self._config.pert_config.angular_velocity_pert[1]]))
-
-    return jp.concatenate(low), jp.concatenate(high)
+    bounds = get_structural_dr_bounds(
+        "LeapCubeReorient",
+        include_reset_params=self._config.reset_randomization_in_domain_randomization,
+    )
+    if bounds is None:
+      raise ValueError("Missing DR YAML config for LeapCubeReorient.")
+    return tuple(jp.asarray(x) for x in bounds)
 import functools
 def domain_randomize(model: mjx.Model, dr_range, params=None, rng: jax.Array = None):
     # --- Setup IDs (kept self-contained) ---

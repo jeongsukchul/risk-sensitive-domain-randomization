@@ -4,6 +4,7 @@ from typing import Any, Callable, MutableMapping, Optional, Sequence, Tuple
 from absl import logging
 import flax
 import imageio
+import jax.numpy as jnp
 import matplotlib.pyplot as plt
 import numpy as np
 import scipy
@@ -185,6 +186,79 @@ def compute_percentile_dynamics_params(
   idx = np.rint((percentile_levels / 100.0) * max(n - 1, 0)).astype(int)
   idx = np.clip(idx, 0, max(n - 1, 0))
   return sorted_dyn[idx], sorted_rew[idx]
+
+
+def select_max_length_segment_metrics(
+    episode_done: jnp.ndarray,
+    episode_returns: jnp.ndarray,
+    episode_lengths: jnp.ndarray,
+) -> Tuple[jnp.ndarray, jnp.ndarray]:
+  episode_done = episode_done.reshape(-1, episode_done.shape[-1]).astype(bool)
+  episode_returns = episode_returns.reshape(-1, episode_returns.shape[-1])
+  episode_lengths = episode_lengths.reshape(-1, episode_lengths.shape[-1])
+
+  segment_reward_rates = jnp.where(
+      episode_done,
+      episode_returns / jnp.maximum(episode_lengths, 1.0),
+      0.0,
+  )
+  segment_returns = jnp.where(
+      episode_done,
+      episode_returns,
+      0.0,
+  )
+  segment_lengths = jnp.where(
+      episode_done,
+      episode_lengths,
+      0.0,
+  )
+  final_segment_reward_rate = jnp.where(
+      episode_done[-1, :],
+      0.0,
+      episode_returns[-1] / jnp.maximum(episode_lengths[-1], 1.0),
+  )
+  final_segment_return = jnp.where(
+      episode_done[-1, :],
+      0.0,
+      final_segment_reward_rate * episode_lengths[-1],
+  )
+  final_segment_length = jnp.where(
+      episode_done[-1, :],
+      0.0,
+      episode_lengths[-1],
+  )
+  max_segment_length = jnp.maximum(
+      segment_lengths.max(axis=0), final_segment_length
+  )
+  selected_done_mask = jnp.logical_and(
+      episode_done,
+      segment_lengths == max_segment_length[None, :],
+  )
+  selected_final_mask = jnp.logical_and(
+      jnp.logical_not(episode_done[-1, :]),
+      final_segment_length == max_segment_length,
+  )
+  selected_segment_count = (
+      selected_done_mask.sum(axis=0).astype(jnp.float32)
+      + selected_final_mask.astype(jnp.float32)
+  )
+  selected_segment_count = jnp.maximum(selected_segment_count, 1.0)
+  selected_reward_rate_sum = jnp.where(
+      selected_done_mask,
+      segment_reward_rates,
+      0.0,
+  ).sum(axis=0) + jnp.where(
+      selected_final_mask, final_segment_reward_rate, 0.0
+  )
+  selected_return_sum = jnp.where(
+      selected_done_mask,
+      segment_returns,
+      0.0,
+  ).sum(axis=0) + jnp.where(selected_final_mask, final_segment_return, 0.0)
+  return (
+      selected_return_sum / selected_segment_count,
+      selected_reward_rate_sum / selected_segment_count,
+  )
 
 
 def select_sampler_state(

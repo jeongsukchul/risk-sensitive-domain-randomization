@@ -14,7 +14,7 @@
 # ==============================================================================
 """Constants for OP3."""
 
-from mujoco_playground._src import mjx_env
+from custom_envs import mjx_env
 
 ROOT_PATH = mjx_env.ROOT_PATH / "locomotion" / "op3"
 FEET_ONLY_XML = ROOT_PATH / "xmls" / "scene_mjx_feetonly.xml"

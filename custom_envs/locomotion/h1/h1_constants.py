@@ -14,7 +14,7 @@
 # ==============================================================================
 """H1 constants."""
 
-from mujoco_playground._src import mjx_env
+from custom_envs import mjx_env
 
 ROOT_PATH = mjx_env.ROOT_PATH / "locomotion" / "h1" / "xmls"
 FEET_ONLY_XML = ROOT_PATH / "scene_mjx_feetonly.xml"

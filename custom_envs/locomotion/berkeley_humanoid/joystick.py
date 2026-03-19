@@ -24,7 +24,7 @@ from mujoco.mjx._src import math
 import numpy as np
 
 from mujoco_playground._src import gait
-from mujoco_playground._src import mjx_env
+from custom_envs import mjx_env
 from mujoco_playground._src.locomotion.berkeley_humanoid import base as berkeley_humanoid_base
 from mujoco_playground._src.locomotion.berkeley_humanoid import berkeley_humanoid_constants as consts
 
