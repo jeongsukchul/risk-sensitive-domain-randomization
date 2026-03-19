@@ -1,4 +1,4 @@
-playground==0.0.5
+playground
 brax
 termcolor
 mediapy
@@ -10,7 +10,7 @@ hydra-core
 numpyro
 mergedeep
 einops
-warp-lang==1.10.1
+warp-lang
 pandas
 wandb
 bijx
