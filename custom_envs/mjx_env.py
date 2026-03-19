@@ -15,6 +15,7 @@
 """Core classes for MuJoCo Playground."""
 
 import abc
+import os
 import subprocess
 import sys
 from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple, Union
@@ -31,11 +32,15 @@ import tqdm
 
 # Root path is used for loading XML strings directly using etils.epath.
 ROOT_PATH = epath.Path(__file__).parent
+# Repository root for compatibility paths.
+REPO_ROOT = ROOT_PATH.parent
 # Base directory for external dependencies.
-EXTERNAL_DEPS_PATH = epath.Path(__file__).parent.parent / "external_deps"
+EXTERNAL_DEPS_PATH = REPO_ROOT / "external_deps"
 # The menagerie path is used to load robot assets.
 # Resource paths do not have glob implemented, so we use a bare epath.Path.
 MENAGERIE_PATH = EXTERNAL_DEPS_PATH / "mujoco_menagerie"
+# Some XMLs still reference a legacy repo-root path.
+LEGACY_MENAGERIE_PATH = REPO_ROOT / "mujoco_menagerie"
 # Commit SHA of the menagerie repo.
 MENAGERIE_COMMIT_SHA = "14ceccf557cc47240202f2354d684eca58ff8de4"
 
@@ -106,6 +111,23 @@ def ensure_menagerie_exists() -> None:
     except subprocess.CalledProcessError as e:
       print(f"Error downloading mujoco_menagerie: {e}", file=sys.stderr)
       raise
+
+  _ensure_menagerie_compat_path()
+
+
+def _ensure_menagerie_compat_path() -> None:
+  """Expose a repo-root alias for XMLs that still use legacy paths."""
+  if LEGACY_MENAGERIE_PATH.exists():
+    return
+
+  try:
+    os.symlink(MENAGERIE_PATH, LEGACY_MENAGERIE_PATH, target_is_directory=True)
+  except OSError as e:
+    print(
+        "Warning: could not create compatibility symlink for "
+        f"mujoco_menagerie: {e}",
+        file=sys.stderr,
+    )
 
 
 Observation = Union[jax.Array, Mapping[str, jax.Array]]
