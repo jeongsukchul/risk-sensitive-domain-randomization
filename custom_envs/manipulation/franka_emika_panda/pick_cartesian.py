@@ -24,9 +24,9 @@ import mujoco
 from mujoco import mjx
 
 from custom_envs import mjx_env
-from mujoco_playground._src.manipulation.franka_emika_panda import panda
-from mujoco_playground._src.manipulation.franka_emika_panda import panda_kinematics
-from mujoco_playground._src.manipulation.franka_emika_panda import pick
+from custom_envs.manipulation.franka_emika_panda import panda
+from custom_envs.manipulation.franka_emika_panda import panda_kinematics
+from custom_envs.manipulation.franka_emika_panda import pick
 
 
 def default_vision_config() -> config_dict.ConfigDict:

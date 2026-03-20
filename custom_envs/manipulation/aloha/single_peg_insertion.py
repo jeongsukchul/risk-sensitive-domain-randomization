@@ -26,8 +26,8 @@ import numpy as np
 from custom_envs import mjx_env
 from learning.dr_config import get_structural_dr_bounds
 from mujoco_playground._src import reward as reward_util
-from mujoco_playground._src.manipulation.aloha import aloha_constants as consts
-from mujoco_playground._src.manipulation.aloha import base as aloha_base
+from custom_envs.manipulation.aloha import aloha_constants as consts
+from custom_envs.manipulation.aloha import base as aloha_base
 
 
 _MODEL_PARAM_SIZE = 1 + 1 + 1 + 1 + 3 + 3

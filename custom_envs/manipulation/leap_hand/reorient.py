@@ -27,8 +27,8 @@ import numpy as np
 from custom_envs import mjx_env
 from learning.dr_config import get_structural_dr_bounds
 from mujoco_playground._src import reward
-from mujoco_playground._src.manipulation.leap_hand import base as leap_hand_base
-from mujoco_playground._src.manipulation.leap_hand import leap_hand_constants as consts
+from custom_envs.manipulation.leap_hand import base as leap_hand_base
+from custom_envs.manipulation.leap_hand import leap_hand_constants as consts
 
 def default_config() -> config_dict.ConfigDict:
   return config_dict.create(

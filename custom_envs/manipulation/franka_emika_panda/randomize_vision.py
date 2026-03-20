@@ -21,7 +21,7 @@ from mujoco import mjx
 from mujoco.mjx._src import math
 import numpy as np
 
-from mujoco_playground._src.manipulation.franka_emika_panda import pick_cartesian
+from custom_envs.manipulation.franka_emika_panda import pick_cartesian
 
 
 def sample_light_position():

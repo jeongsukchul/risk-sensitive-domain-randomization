@@ -27,7 +27,7 @@ from mujoco.mjx._src import types
 from custom_envs import mjx_env
 from learning.dr_config import get_structural_dr_bounds
 from mujoco_playground._src import reward as reward_util
-from mujoco_playground._src.manipulation.franka_emika_panda_robotiq import panda_robotiq
+from custom_envs.manipulation.franka_emika_panda_robotiq import panda_robotiq
 import numpy as np
 
 WORKSPACE_MIN = (0.3, -0.5, 0.0)

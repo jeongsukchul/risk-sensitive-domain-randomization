@@ -25,8 +25,8 @@ from mujoco import mjx
 import numpy as np
 
 from custom_envs import mjx_env
-from mujoco_playground._src.manipulation.aero_hand import aero_hand_constants as consts
-from mujoco_playground._src.manipulation.aero_hand import base as aero_hand_base
+from custom_envs.manipulation.aero_hand import aero_hand_constants as consts
+from custom_envs.manipulation.aero_hand import base as aero_hand_base
 
 
 def default_config() -> config_dict.ConfigDict:

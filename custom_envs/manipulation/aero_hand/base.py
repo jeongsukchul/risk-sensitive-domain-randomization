@@ -26,7 +26,7 @@ import mujoco
 from mujoco import mjx
 
 from custom_envs import mjx_env
-from mujoco_playground._src.manipulation.aero_hand import aero_hand_constants as consts
+from custom_envs.manipulation.aero_hand import aero_hand_constants as consts
 
 
 def get_assets() -> Dict[str, bytes]:

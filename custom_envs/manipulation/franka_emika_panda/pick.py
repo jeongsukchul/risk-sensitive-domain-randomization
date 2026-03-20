@@ -24,7 +24,7 @@ from mujoco import mjx
 from mujoco.mjx._src import math
 from custom_envs import mjx_env
 from learning.dr_config import get_structural_dr_bounds
-from mujoco_playground._src.manipulation.franka_emika_panda import panda
+from custom_envs.manipulation.franka_emika_panda import panda
 from mujoco_playground._src.mjx_env import State  # pylint: disable=g-importing-member
 import numpy as np
 
