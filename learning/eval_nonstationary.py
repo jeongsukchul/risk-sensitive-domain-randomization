@@ -13,6 +13,7 @@ from brax.training.acme import running_statistics
 import argparse
 import flax
 from pathlib import Path  # Needed for checking Path objects
+from runtime_env import configure_jax_runtime
 
 # --- Local Imports ---
 from helper import parse_cfg
@@ -69,11 +70,7 @@ CONFIG = {
 }
 
 # --- Environment Setup ---
-xla_flags = os.environ.get('XLA_FLAGS', '')
-xla_flags += ' --xla_gpu_triton_gemm_any=True'
-os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
-os.environ['XLA_FLAGS'] = xla_flags
-os.environ['JAX_PLATFORM_NAME'] = 'gpu'
+configure_jax_runtime()
 
 def get_work_dir(cfg):
     base_path = f"./logs/{cfg.task}/{cfg.seed}/{cfg.policy}"

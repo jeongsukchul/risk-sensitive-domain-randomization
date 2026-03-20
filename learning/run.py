@@ -4,13 +4,9 @@ import imageio
 import mediapy as media
 import copy
 from omegaconf import OmegaConf
+from runtime_env import configure_jax_runtime
 # sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
-os.environ['MUJOCO_GL'] = 'egl'
-os.environ['XLA_PYTHON_CLIENT_PREALLOCATE'] = 'false'
-# os.environ['XLA_FLAGS'] = '--xla_gpu_autotune_level=0'
-xla_flags = os.environ.get('XLA_FLAGS', '')
-xla_flags += ' --xla_gpu_triton_gemm_any=True'
-os.environ['XLA_FLAGS'] = xla_flags
+configure_jax_runtime()
 # @title Import MuJoCo, MJX, and Brax
 from datetime import datetime
 import functools
@@ -750,10 +746,4 @@ def train(cfg: dict):
                 'eval_video': wandb.Video(video_path, fps=fps, format='mp4')
             })
 if __name__ == "__main__":
-    xla_flags = os.environ.get("XLA_FLAGS", "")
-    xla_flags += " --xla_gpu_triton_gemm_any=True"
-    os.environ["XLA_FLAGS"] = xla_flags
-    os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
-    os.environ["MUJOCO_GL"] = "egl"
-    os.environ['JAX_PLATFORM_NAME'] = 'gpu'
     train()

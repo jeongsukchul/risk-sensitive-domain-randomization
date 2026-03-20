@@ -4,6 +4,9 @@ from datetime import datetime
 import os
 import pickle
 from typing import List, NamedTuple, Optional, Sequence
+from learning.runtime_env import configure_jax_runtime
+
+configure_jax_runtime()
 
 import flax.linen as nn
 import jax
@@ -12,8 +15,6 @@ import optax
 import wandb
 from brax.training.networks import FeedForwardNetwork
 from brax.training import types
-
-os.environ["XLA_FLAGS"] = "--xla_gpu_triton_gemm_any=True"
 
 
 @dataclass
