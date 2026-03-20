@@ -191,12 +191,15 @@ class PandaPickCube(panda.PandaBase):
   @property
   def nominal_params(self):
     model_params = jp.ones(_MODEL_PARAM_SIZE)
+
     reset_params = jp.concatenate([
         jp.zeros(2),
         jp.array([0.0, 0.0, 0.3]),
         jp.array([1.0, 0.0, 0.0]),
         jp.array([0.0]),
     ])
+    if not self._config.reset_randomization_in_domain_randomization:
+      return model_params
     return jp.concatenate([model_params, reset_params])
 
   @property

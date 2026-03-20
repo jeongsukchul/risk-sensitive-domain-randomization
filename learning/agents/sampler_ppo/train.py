@@ -411,6 +411,7 @@ def train(
   import copy
   env = copy.deepcopy(environment)
   nominal_dynamics_params_full = jnp.asarray(env.nominal_params)
+  
   reset_param_size = getattr(env, "reset_param_size", 0)
   print("num timesteps", num_timesteps)
   print("num_evals", num_evals)

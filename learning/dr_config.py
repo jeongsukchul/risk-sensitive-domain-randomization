@@ -49,7 +49,6 @@ def build_dr_spec(
     raw = _load_yaml(task)
     if raw is None:
         return None
-
     parameters = raw.get("parameters", [])
     kept = []
     for entry in parameters:
@@ -60,7 +59,6 @@ def build_dr_spec(
 
     if not kept:
         raise ValueError(f"No DR parameters remain after filtering task '{task}'.")
-
     param_names = tuple(entry["name"] for entry in kept)
     groups = tuple(entry["group"] for entry in kept)
     full_low = jnp.asarray([float(entry["low"]) for entry in kept], dtype=jnp.float32)
@@ -81,7 +79,6 @@ def build_dr_spec(
         dtype=bool,
     )
     learnable_mask_np = np.logical_and(default_learnable, group_enabled)
-
     if not np.any(learnable_mask_np):
         raise ValueError(
             f"Task '{task}' has no learnable DR parameters under the current flags."
