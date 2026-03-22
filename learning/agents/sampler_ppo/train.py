@@ -332,7 +332,7 @@ def train(
   Returns:
     Tuple of (make_policy function, network params, metrics)
   """
-  num_eval_envs=128
+  num_eval_envs=4096
   
   assert batch_size * num_minibatches % num_envs == 0
   _validate_madrona_args(

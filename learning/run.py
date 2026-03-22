@@ -505,6 +505,7 @@ def train(cfg: dict):
     cfg_dir = make_dir(cfg.work_dir / "cfg")
     shutil.copy('config.yaml', os.path.join(cfg_dir, 'config.yaml'))
     env_cfg = registry.get_default_config(cfg.task)
+    print("episode length in cfg", env_cfg.episode_length)
     env_cfg['impl'] = cfg.impl
     if 'reset_randomization_in_domain_randomization' in cfg:
         env_cfg.reset_randomization_in_domain_randomization = (

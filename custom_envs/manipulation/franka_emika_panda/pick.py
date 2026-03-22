@@ -38,7 +38,7 @@ def default_config() -> config_dict.ConfigDict:
   config = config_dict.create(
       ctrl_dt=0.02,
       sim_dt=0.005,
-      episode_length=150,
+      episode_length=300,
       action_repeat=1,
       action_scale=0.04,
       dynamics_randomization_in_domain_randomization=True,
@@ -58,7 +58,7 @@ def default_config() -> config_dict.ConfigDict:
       impl='jax',
       naconmax=24 * 2048,
       naccdmax=24 * 2048,
-      njmax=128,
+      njmax=294,
   )
   return config
 

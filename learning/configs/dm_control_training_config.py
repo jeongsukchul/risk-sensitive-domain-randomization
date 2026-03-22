@@ -16,7 +16,7 @@
 
 from ml_collections import config_dict
 
-from mujoco_playground._src import dm_control_suite
+from custom_envs import dm_control_suite
 from module.termination_fn import get_termination_fn
 
 

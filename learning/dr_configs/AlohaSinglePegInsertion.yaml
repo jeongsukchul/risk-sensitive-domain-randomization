@@ -1,16 +1,16 @@
 task: AlohaSinglePegInsertion
 
 parameters:
-  - {name: peg_friction, group: dynamics, low: 0.5, high: 1.5, learnable: true}
-  - {name: socket_friction, group: dynamics, low: 0.5, high: 1.5, learnable: true}
-  - {name: peg_mass_scale, group: dynamics, low: 0.8, high: 1.2, learnable: true}
-  - {name: socket_mass_scale, group: dynamics, low: 0.8, high: 1.2, learnable: true}
-  - {name: peg_ipos_x, group: dynamics, low: -0., high: 0., learnable: false}
-  - {name: peg_ipos_y, group: dynamics, low: -0., high: 0., learnable: false}
-  - {name: peg_ipos_z, group: dynamics, low: -0., high: 0., learnable: false}
-  - {name: socket_ipos_x, group: dynamics, low: -0., high: 0., learnable: false}
-  - {name: socket_ipos_y, group: dynamics, low: -0., high: 0., learnable: false}
-  - {name: socket_ipos_z, group: dynamics, low: -0., high: 0., learnable: false}
+  - {name: peg_friction, group: dynamics, low: 0.9, high: 1.1, learnable: true}
+  - {name: socket_friction, group: dynamics, low: 0.9, high: 1.1, learnable: true}
+  - {name: peg_mass_scale, group: dynamics, low: 0.9, high: 1.1, learnable: true}
+  - {name: socket_mass_scale, group: dynamics, low: 0.9, high: 1.1, learnable: true}
+  # - {name: peg_ipos_x, group: dynamics, low: -0., high: 0., learnable: false}
+  # - {name: peg_ipos_y, group: dynamics, low: -0., high: 0., learnable: false}
+  # - {name: peg_ipos_z, group: dynamics, low: -0., high: 0., learnable: false}
+  # - {name: socket_ipos_x, group: dynamics, low: -0., high: 0., learnable: false}
+  # - {name: socket_ipos_y, group: dynamics, low: -0., high: 0., learnable: false}
+  # - {name: socket_ipos_z, group: dynamics, low: -0., high: 0., learnable: false}
   - {name: reset_peg_x, group: reset, low: -0.1, high: 0.1, learnable: true}
   - {name: reset_peg_y, group: reset, low: -0.1, high: 0.1, learnable: true}
   - {name: reset_socket_x, group: reset, low: -0.1, high: 0.1, learnable: true}

@@ -145,8 +145,8 @@ class SinglePegInsertion(aloha_base.AlohaEnv):
         jp.ones(1),
         jp.ones(1),
         jp.ones(1),
-        jp.zeros(3),
-        jp.zeros(3),
+        # jp.zeros(3),
+        # jp.zeros(3),
     ])
     if not self._config.reset_randomization_in_domain_randomization:
       return model_params
@@ -242,8 +242,8 @@ class SinglePegInsertion(aloha_base.AlohaEnv):
     ])
     privileged_state = jp.concatenate([
         state,
-        data.qfrc_bias,
-        data.actuator_force,
+        # data.qfrc_bias,
+        # data.actuator_force,
         self.mjx_model.geom_friction[peg_geom, 0:1],
         self.mjx_model.geom_friction[socket_geoms, 0],
         self.mjx_model.body_mass[
@@ -251,8 +251,8 @@ class SinglePegInsertion(aloha_base.AlohaEnv):
         ],
         self.mjx_model.body_inertia[self._peg_body],
         self.mjx_model.body_inertia[self._socket_body],
-        self.mjx_model.body_ipos[self._peg_body],
-        self.mjx_model.body_ipos[self._socket_body],
+        # self.mjx_model.body_ipos[self._peg_body],
+        # self.mjx_model.body_ipos[self._socket_body],
     ])
 
     return {
@@ -367,20 +367,20 @@ def _apply_domain_randomization(model: mjx.Model, params: jax.Array):
   )
   idx += 1
 
-  body_ipos = model.body_ipos.at[peg_body].set(
-      model.body_ipos[peg_body] + params[idx : idx + 3]
-  )
-  idx += 3
-  body_ipos = body_ipos.at[socket_body].set(
-      model.body_ipos[socket_body] + params[idx : idx + 3]
-  )
-  idx += 3
+#   body_ipos = model.body_ipos.at[peg_body].set(
+#       model.body_ipos[peg_body] + params[idx : idx + 3]
+#   )
+#   idx += 3
+#   body_ipos = body_ipos.at[socket_body].set(
+#       model.body_ipos[socket_body] + params[idx : idx + 3]
+#   )
+#   idx += 3
 
   return (
       geom_friction,
       body_mass,
       body_inertia,
-      body_ipos,
+    #   body_ipos,
   )
 
 
@@ -389,21 +389,21 @@ def _finalize_domain_randomization(
     geom_friction,
     body_mass,
     body_inertia,
-    body_ipos,
+    # body_ipos,
 ):
   in_axes = jax.tree_util.tree_map(lambda x: None, model)
   in_axes = in_axes.tree_replace({
       "geom_friction": 0,
       "body_mass": 0,
       "body_inertia": 0,
-      "body_ipos": 0,
+    #   "body_ipos": 0,
   })
 
   model = model.tree_replace({
       "geom_friction": geom_friction,
       "body_mass": body_mass,
       "body_inertia": body_inertia,
-      "body_ipos": body_ipos,
+    #   "body_ipos": body_ipos,
   })
   return model, in_axes
 

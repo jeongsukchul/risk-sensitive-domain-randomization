@@ -16,7 +16,7 @@
 
 from typing import Optional
 from ml_collections import config_dict
-from mujoco_playground._src import manipulation
+from custom_envs import manipulation
 
 
 def manipulation_ppo_config(
@@ -63,7 +63,12 @@ def manipulation_ppo_config(
     rl_config.entropy_cost = 1e-2
     rl_config.num_envs = 1024
     rl_config.batch_size = 512
-    rl_config.network_factory.policy_hidden_layer_sizes = (256, 256, 256, 256)
+    rl_config.network_factory = config_dict.create(
+        policy_hidden_layer_sizes=(256, 256, 256, 256),
+        value_hidden_layer_sizes=(256, 256, 256, 256, 256),
+        policy_obs_key="state",
+        value_obs_key="privileged_state",
+    )
   elif env_name == "PandaOpenCabinet":
     rl_config.num_timesteps = 40_000_000
     rl_config.num_evals = 4
@@ -103,9 +108,14 @@ def manipulation_ppo_config(
     rl_config.entropy_cost = 2e-2
     rl_config.num_envs = 1024
     rl_config.batch_size = 1024
-    rl_config.network_factory.policy_hidden_layer_sizes = (32, 32, 32, 32)
+    rl_config.network_factory = config_dict.create(
+        policy_hidden_layer_sizes=(32, 32, 32, 32),
+        value_hidden_layer_sizes=(256, 256, 256, 256, 256),
+        policy_obs_key="state",
+        value_obs_key="privileged_state",
+    )
   elif env_name == "PandaRobotiqPushCube":
-    rl_config.num_timesteps = 1_800_000_000
+    rl_config.num_timesteps = 3_600_000_000
     rl_config.num_evals = 10
     rl_config.unroll_length = 100
     rl_config.num_minibatches = 32
@@ -117,7 +127,12 @@ def manipulation_ppo_config(
     rl_config.batch_size = 512
     rl_config.num_resets_per_eval = 1
     rl_config.num_eval_envs = 32
-    rl_config.network_factory.policy_hidden_layer_sizes = (64, 64, 64, 64)
+    rl_config.network_factory = config_dict.create(
+        policy_hidden_layer_sizes=(64, 64, 64, 64),
+        value_hidden_layer_sizes=(256, 256, 256, 256, 256),
+        policy_obs_key="state",
+        value_obs_key="privileged_state",
+    )
   elif env_name == "LeapCubeRotateZAxis":
     rl_config.num_timesteps = 100_000_000
     rl_config.num_evals = 10
@@ -137,7 +152,7 @@ def manipulation_ppo_config(
         value_obs_key="privileged_state",
     )
   elif env_name == "LeapCubeReorient":
-    rl_config.num_timesteps = 300_000_000
+    rl_config.num_timesteps = 400_000_000
     rl_config.num_evals = 20
     rl_config.num_minibatches = 32
     rl_config.unroll_length = 40
