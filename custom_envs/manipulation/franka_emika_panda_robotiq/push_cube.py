@@ -95,6 +95,7 @@ def default_config():
       naconmax=32 * 8192,
       naccdmax=32 * 8192,
       njmax=256,
+      scale_for_sampler = 50,
   )
 
 
@@ -127,6 +128,7 @@ class PandaRobotiqPushCube(panda_robotiq.PandaRobotiqBase):
         config_overrides,
     )
     self._post_init(obj_name="box", keyframe="home")
+    self.scale_for_sampler = self._config.scale_for_sampler
 
   def _get_rand_target_pos(
       self, rng: jax.Array, offset: jax.Array

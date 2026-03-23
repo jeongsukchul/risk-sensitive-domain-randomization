@@ -1000,6 +1000,11 @@ def train(
       raise ValueError("No Sampler!")
     # update_signal=1
     averaged_cumulated_values = cumulated_values / sampler_update_freq
+    scale_for_sampler = getattr(env, "scale_for_sampler", None)
+    if scale_for_sampler is not None:
+      averaged_cumulated_values = (
+          averaged_cumulated_values * scale_for_sampler
+      )
     target_lnpdf_for_logging = _beta * averaged_cumulated_values
     metrics.update({
       # 'sampler_partial_episode_return_min': update_signal * mean_partial_episode_return.min(),
