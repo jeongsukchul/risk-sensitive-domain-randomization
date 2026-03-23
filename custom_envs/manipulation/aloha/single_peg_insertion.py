@@ -30,7 +30,7 @@ from custom_envs.manipulation.aloha import aloha_constants as consts
 from custom_envs.manipulation.aloha import base as aloha_base
 
 
-_MODEL_PARAM_SIZE = 1 + 1 + 1 + 1 + 3 + 3
+_MODEL_PARAM_SIZE = 1 + 1 + 1 + 1 #+ 3 + 3
 _RESET_PARAM_SIZE = 2 + 2
 
 
@@ -38,9 +38,10 @@ def default_config() -> config_dict.ConfigDict:
   return config_dict.create(
       ctrl_dt=0.0025,
       sim_dt=0.0025,
-      episode_length=1000,
+      episode_length=2000,
       action_repeat=2,
       action_scale=0.005,
+      history_len=3,
       reward_config=config_dict.create(
           scales=config_dict.create(
               left_reward=1,
@@ -58,7 +59,8 @@ def default_config() -> config_dict.ConfigDict:
       dynamics_randomization_in_domain_randomization=True,
       reset_randomization_in_domain_randomization=True,
       impl="jax",
-      naconmax=24 * 1024,
+      naconmax=24 * 4096,
+      naccdmax=24 * 4096,
       njmax=256,
   )
 
@@ -104,7 +106,6 @@ class SinglePegInsertion(aloha_base.AlohaEnv):
         params is not None
         and self._config.reset_randomization_in_domain_randomization
     )
-
     if not use_reset_randomization_params:
       rng, rng_peg, rng_socket = jax.random.split(rng, 3)
       peg_xy = jax.random.uniform(rng_peg, (2,), minval=-0.1, maxval=0.1)
@@ -113,7 +114,6 @@ class SinglePegInsertion(aloha_base.AlohaEnv):
       reset_params = params[_MODEL_PARAM_SIZE : _MODEL_PARAM_SIZE + _RESET_PARAM_SIZE]
       peg_xy = reset_params[:2]
       socket_xy = reset_params[2:4]
-
     init_q = self._init_q.at[self._peg_qadr : self._peg_qadr + 2].add(peg_xy)
     init_q = init_q.at[self._socket_qadr : self._socket_qadr + 2].add(socket_xy)
 
@@ -124,11 +124,13 @@ class SinglePegInsertion(aloha_base.AlohaEnv):
         ctrl=self._init_ctrl,
         impl=self._mjx_model.impl.value,
         naconmax=self._config.naconmax,
+        naccdmax=self._config.naccdmax,
         njmax=self._config.njmax,
     )
 
     info = {"rng": rng}
-    obs = self._get_obs(data)
+    obs_history = jp.zeros(self._config.history_len * self._get_state(data).shape[0])
+    obs = self._get_obs(data, obs_history)
     reward, done = jp.zeros(2)
     metrics = {
         "out_of_bounds": jp.array(0.0, dtype=float),
@@ -207,10 +209,10 @@ class SinglePegInsertion(aloha_base.AlohaEnv):
         peg_end2_dist_to_line=peg_end2_dist_to_line,
         out_of_bounds=out_of_bounds.astype(float),
     )
-    obs = self._get_obs(data)
+    obs = self._get_obs(data, state.obs["state"])
     return mjx_env.State(data, obs, reward, done, state.metrics, state.info)
 
-  def _get_obs(self, data: mjx.Data) -> dict[str, jax.Array]:
+  def _get_state(self, data: mjx.Data) -> jax.Array:
     left_gripper_pos = data.site_xpos[self._left_gripper_site]
     socket_pos = data.xpos[self._socket_body]
     right_gripper_pos = data.site_xpos[self._right_gripper_site]
@@ -220,7 +222,7 @@ class SinglePegInsertion(aloha_base.AlohaEnv):
     socket_z = data.xmat[self._socket_body].ravel()[6:]
     peg_z = data.xmat[self._peg_body].ravel()[6:]
 
-    state = jp.concatenate([
+    return jp.concatenate([
         data.qpos,
         data.qvel,
         left_gripper_pos,
@@ -232,6 +234,14 @@ class SinglePegInsertion(aloha_base.AlohaEnv):
         socket_z,
         peg_z,
     ])
+
+  def _get_obs(
+      self, data: mjx.Data, obs_history: jax.Array
+  ) -> dict[str, jax.Array]:
+    state = self._get_state(data)
+    obs_history = jp.roll(obs_history, state.size)
+    obs_history = obs_history.at[: state.size].set(state)
+
     peg_geom = self._mj_model.geom("red_peg").id
     socket_geoms = jp.array([
         self._mj_model.geom("socket-B").id,
@@ -241,7 +251,7 @@ class SinglePegInsertion(aloha_base.AlohaEnv):
         self._mj_model.geom("wall").id,
     ])
     privileged_state = jp.concatenate([
-        state,
+        obs_history,
         # data.qfrc_bias,
         # data.actuator_force,
         self.mjx_model.geom_friction[peg_geom, 0:1],
@@ -256,7 +266,7 @@ class SinglePegInsertion(aloha_base.AlohaEnv):
     ])
 
     return {
-        "state": state,
+        "state": obs_history,
         "privileged_state": privileged_state,
     }
 

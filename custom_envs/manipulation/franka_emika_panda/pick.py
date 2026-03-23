@@ -56,9 +56,9 @@ def default_config() -> config_dict.ConfigDict:
           )
       ),
       impl='jax',
-      naconmax=24 * 2048,
-      naccdmax=24 * 2048,
-      njmax=294,
+      naconmax=24 * 4096,
+      naccdmax=24 * 4096,
+      njmax=128,
   )
   return config
 
@@ -342,7 +342,7 @@ def _apply_domain_randomization(model: mjx.Model, params: jax.Array):
 
   idx = 0
   geom_friction = model.geom_friction.at[left_finger_geom, 0].set(params[idx])
-  geom_friction = geom_friction.at[right_finger_geom, 0].set(params[idx])
+#   geom_friction = geom_friction.at[right_finger_geom, 0].set(params[idx])
   idx += 1
 
   body_mass = model.body_mass.at[cube_body].set(
