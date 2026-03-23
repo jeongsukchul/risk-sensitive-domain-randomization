@@ -342,7 +342,7 @@ def _apply_domain_randomization(model: mjx.Model, params: jax.Array):
 
   idx = 0
   geom_friction = model.geom_friction.at[left_finger_geom, 0].set(params[idx])
-#   geom_friction = geom_friction.at[right_finger_geom, 0].set(params[idx])
+  geom_friction = geom_friction.at[right_finger_geom, 0].set(params[idx])
   idx += 1
 
   body_mass = model.body_mass.at[cube_body].set(

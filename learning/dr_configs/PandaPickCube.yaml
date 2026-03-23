@@ -1,7 +1,7 @@
 task: PandaPickCube
 
 parameters:
-  - {name: finger_friction, group: dynamics, low: 0.3, high: 3.0, learnable: true}
+  - {name: finger_friction, group: dynamics, low: 0.3, high: 4.0, learnable: true}
   - {name: cube_mass_scale, group: dynamics, low: 0.1, high: 8.0, learnable: true}
   - {name: link_mass_scale_00, group: dynamics, low: 0.8, high: 1.2, learnable: false}
   - {name: link_mass_scale_01, group: dynamics, low: 0.8, high: 1.2, learnable: false}
