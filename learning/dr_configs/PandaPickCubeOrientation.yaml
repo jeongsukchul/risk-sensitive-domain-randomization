@@ -2,7 +2,7 @@ task: PandaPickCubeOrientation
 
 parameters:
   - {name: finger_friction, group: dynamics, low: 0.5, high: 1.5, learnable: true}
-  - {name: cube_mass_scale, group: dynamics, low: 0.5, high: 1.5, learnable: true}
+  - {name: cube_mass_scale, group: dynamics, low: 0.5, high: 4., learnable: true}
   - {name: link_mass_scale_00, group: dynamics, low: 0.8, high: 1.2, learnable: true}
   - {name: link_mass_scale_01, group: dynamics, low: 0.8, high: 1.2, learnable: true}
   - {name: link_mass_scale_02, group: dynamics, low: 0.8, high: 1.2, learnable: true}

@@ -58,6 +58,7 @@ def default_config() -> config_dict.ConfigDict:
       reset_randomization_in_domain_randomization=True,
       impl='jax',
       naconmax=30 * 8192,
+      naccdmax=30 * 8192,
       njmax=128,
   )
 
@@ -161,6 +162,7 @@ class CubeRotateZAxis(leap_hand_base.LeapHandEnv):
         mocap_pos=jp.array([-100.0, -100.0, -100.0]),  # Hide goal for task.
         impl=self._mjx_model.impl.value,
         naconmax=self._config.naconmax,
+        naccdmax=self._config.naccdmax,
         njmax=self._config.njmax,
     )
 

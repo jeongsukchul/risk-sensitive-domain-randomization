@@ -1,8 +1,8 @@
 task: LeapCubeRotateZAxis
 
 parameters:
-  - {name: fingertip_friction, group: dynamics, low: 0.5, high: 1.0, learnable: true}
-  - {name: cube_mass_scale, group: dynamics, low: 0.8, high: 1.2, learnable: true}
+  - {name: fingertip_friction, group: dynamics, low: 0.5, high: 2.0, learnable: true}
+  - {name: cube_mass_scale, group: dynamics, low: 0.5, high: 2., learnable: true}
   - {name: cube_ipos_x, group: dynamics, low: -0.005, high: 0.005, learnable: true}
   - {name: cube_ipos_y, group: dynamics, low: -0.005, high: 0.005, learnable: true}
   - {name: cube_ipos_z, group: dynamics, low: -0.005, high: 0.005, learnable: true}
@@ -22,22 +22,22 @@ parameters:
   - {name: qpos0_jitter_13, group: dynamics, low: -0.05, high: 0.05, learnable: false}
   - {name: qpos0_jitter_14, group: dynamics, low: -0.05, high: 0.05, learnable: false}
   - {name: qpos0_jitter_15, group: dynamics, low: -0.05, high: 0.05, learnable: false}
-  - {name: friction_scale_00, group: dynamics, low: 0.5, high: 2.0, learnable: false}
-  - {name: friction_scale_01, group: dynamics, low: 0.5, high: 2.0, learnable: false}
-  - {name: friction_scale_02, group: dynamics, low: 0.5, high: 2.0, learnable: false}
-  - {name: friction_scale_03, group: dynamics, low: 0.5, high: 2.0, learnable: false}
-  - {name: friction_scale_04, group: dynamics, low: 0.5, high: 2.0, learnable: false}
-  - {name: friction_scale_05, group: dynamics, low: 0.5, high: 2.0, learnable: false}
-  - {name: friction_scale_06, group: dynamics, low: 0.5, high: 2.0, learnable: false}
-  - {name: friction_scale_07, group: dynamics, low: 0.5, high: 2.0, learnable: false}
-  - {name: friction_scale_08, group: dynamics, low: 0.5, high: 2.0, learnable: false}
-  - {name: friction_scale_09, group: dynamics, low: 0.5, high: 2.0, learnable: false}
-  - {name: friction_scale_10, group: dynamics, low: 0.5, high: 2.0, learnable: false}
-  - {name: friction_scale_11, group: dynamics, low: 0.5, high: 2.0, learnable: false}
-  - {name: friction_scale_12, group: dynamics, low: 0.5, high: 2.0, learnable: false}
-  - {name: friction_scale_13, group: dynamics, low: 0.5, high: 2.0, learnable: false}
-  - {name: friction_scale_14, group: dynamics, low: 0.5, high: 2.0, learnable: false}
-  - {name: friction_scale_15, group: dynamics, low: 0.5, high: 2.0, learnable: false}
+  - {name: friction_scale_00, group: dynamics, low: 0.3, high: 3.0, learnable: false}
+  - {name: friction_scale_01, group: dynamics, low: 0.3, high: 3.0, learnable: false}
+  - {name: friction_scale_02, group: dynamics, low: 0.3, high: 3.0, learnable: false}
+  - {name: friction_scale_03, group: dynamics, low: 0.3, high: 3.0, learnable: false}
+  - {name: friction_scale_04, group: dynamics, low: 0.3, high: 3.0, learnable: false}
+  - {name: friction_scale_05, group: dynamics, low: 0.3, high: 3.0, learnable: false}
+  - {name: friction_scale_06, group: dynamics, low: 0.3, high: 3.0, learnable: false}
+  - {name: friction_scale_07, group: dynamics, low: 0.3, high: 3.0, learnable: false}
+  - {name: friction_scale_08, group: dynamics, low: 0.3, high: 3.0, learnable: false}
+  - {name: friction_scale_09, group: dynamics, low: 0.3, high: 3.0, learnable: false}
+  - {name: friction_scale_10, group: dynamics, low: 0.3, high: 3.0, learnable: false}
+  - {name: friction_scale_11, group: dynamics, low: 0.3, high: 3.0, learnable: false}
+  - {name: friction_scale_12, group: dynamics, low: 0.3, high: 3.0, learnable: false}
+  - {name: friction_scale_13, group: dynamics, low: 0.3, high: 3.0, learnable: false}
+  - {name: friction_scale_14, group: dynamics, low: 0.3, high: 3.0, learnable: false}
+  - {name: friction_scale_15, group: dynamics, low: 0.3, high: 3.0, learnable: false}
   - {name: armature_scale_00, group: dynamics, low: 1.0, high: 1.05, learnable: false}
   - {name: armature_scale_01, group: dynamics, low: 1.0, high: 1.05, learnable: false}
   - {name: armature_scale_02, group: dynamics, low: 1.0, high: 1.05, learnable: false}
@@ -54,23 +54,23 @@ parameters:
   - {name: armature_scale_13, group: dynamics, low: 1.0, high: 1.05, learnable: false}
   - {name: armature_scale_14, group: dynamics, low: 1.0, high: 1.05, learnable: false}
   - {name: armature_scale_15, group: dynamics, low: 1.0, high: 1.05, learnable: false}
-  - {name: hand_mass_scale_00, group: dynamics, low: 0.9, high: 1.1, learnable: false}
-  - {name: hand_mass_scale_01, group: dynamics, low: 0.9, high: 1.1, learnable: false}
-  - {name: hand_mass_scale_02, group: dynamics, low: 0.9, high: 1.1, learnable: false}
-  - {name: hand_mass_scale_03, group: dynamics, low: 0.9, high: 1.1, learnable: false}
-  - {name: hand_mass_scale_04, group: dynamics, low: 0.9, high: 1.1, learnable: false}
-  - {name: hand_mass_scale_05, group: dynamics, low: 0.9, high: 1.1, learnable: false}
-  - {name: hand_mass_scale_06, group: dynamics, low: 0.9, high: 1.1, learnable: false}
-  - {name: hand_mass_scale_07, group: dynamics, low: 0.9, high: 1.1, learnable: false}
-  - {name: hand_mass_scale_08, group: dynamics, low: 0.9, high: 1.1, learnable: false}
-  - {name: hand_mass_scale_09, group: dynamics, low: 0.9, high: 1.1, learnable: false}
-  - {name: hand_mass_scale_10, group: dynamics, low: 0.9, high: 1.1, learnable: false}
-  - {name: hand_mass_scale_11, group: dynamics, low: 0.9, high: 1.1, learnable: false}
-  - {name: hand_mass_scale_12, group: dynamics, low: 0.9, high: 1.1, learnable: false}
-  - {name: hand_mass_scale_13, group: dynamics, low: 0.9, high: 1.1, learnable: false}
-  - {name: hand_mass_scale_14, group: dynamics, low: 0.9, high: 1.1, learnable: false}
-  - {name: hand_mass_scale_15, group: dynamics, low: 0.9, high: 1.1, learnable: false}
-  - {name: hand_mass_scale_16, group: dynamics, low: 0.9, high: 1.1, learnable: false}
+  - {name: hand_mass_scale_00, group: dynamics, low: 0.7, high: 1.3, learnable: false}
+  - {name: hand_mass_scale_01, group: dynamics, low: 0.7, high: 1.3, learnable: false}
+  - {name: hand_mass_scale_02, group: dynamics, low: 0.7, high: 1.3, learnable: false}
+  - {name: hand_mass_scale_03, group: dynamics, low: 0.7, high: 1.3, learnable: false}
+  - {name: hand_mass_scale_04, group: dynamics, low: 0.7, high: 1.3, learnable: false}
+  - {name: hand_mass_scale_05, group: dynamics, low: 0.7, high: 1.3, learnable: false}
+  - {name: hand_mass_scale_06, group: dynamics, low: 0.7, high: 1.3, learnable: false}
+  - {name: hand_mass_scale_07, group: dynamics, low: 0.7, high: 1.3, learnable: false}
+  - {name: hand_mass_scale_08, group: dynamics, low: 0.7, high: 1.3, learnable: false}
+  - {name: hand_mass_scale_09, group: dynamics, low: 0.7, high: 1.3, learnable: false}
+  - {name: hand_mass_scale_10, group: dynamics, low: 0.7, high: 1.3, learnable: false}
+  - {name: hand_mass_scale_11, group: dynamics, low: 0.7, high: 1.3, learnable: false}
+  - {name: hand_mass_scale_12, group: dynamics, low: 0.7, high: 1.3, learnable: false}
+  - {name: hand_mass_scale_13, group: dynamics, low: 0.7, high: 1.3, learnable: false}
+  - {name: hand_mass_scale_14, group: dynamics, low: 0.7, high: 1.3, learnable: false}
+  - {name: hand_mass_scale_15, group: dynamics, low: 0.7, high: 1.3, learnable: false}
+  - {name: hand_mass_scale_16, group: dynamics, low: 0.7, high: 1.3, learnable: false}
   - {name: kp_scale_00, group: dynamics, low: 0.8, high: 1.2, learnable: false}
   - {name: kp_scale_01, group: dynamics, low: 0.8, high: 1.2, learnable: false}
   - {name: kp_scale_02, group: dynamics, low: 0.8, high: 1.2, learnable: false}
