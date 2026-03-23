@@ -62,7 +62,7 @@ def default_config() -> config_dict.ConfigDict:
   )
 
 
-_MODEL_PARAM_SIZE = 1 + 1 + 3 + 16 + 16 + 17 + 16 + 16
+_MODEL_PARAM_SIZE = 1 + 1 + 3 + 16 + 16 + 16 + 17 + 16 + 16
 _RESET_PARAM_SIZE = consts.NQ + 3 + 3
 _UNIT_INTERVAL_EPS = 1e-6
 
