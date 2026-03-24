@@ -1,12 +1,12 @@
 task: PandaRobotiqPushCube
 
 parameters:
-  - {name: finger_friction, group: dynamics, low: 0.5, high: 1.5, learnable: true}
-  - {name: object_friction, group: dynamics, low: 0.3, high: 1.5, learnable: true}
-  - {name: object_mass_scale, group: dynamics, low: 0.8, high: 1.2, learnable: true}
-  - {name: object_ipos_x, group: dynamics, low: -0.005, high: 0.005, learnable: true}
-  - {name: object_ipos_y, group: dynamics, low: -0.005, high: 0.005, learnable: true}
-  - {name: object_ipos_z, group: dynamics, low: -0.005, high: 0.005, learnable: true}
+  - {name: finger_friction, group: dynamics, low: 0.5, high: 2., learnable: true}
+  - {name: object_friction, group: dynamics, low: 0.3, high: 2., learnable: true}
+  - {name: object_mass_scale, group: dynamics, low: 0.5, high: 2., learnable: true}
+  - {name: object_ipos_x, group: dynamics, low: -0.01, high: 0.01, learnable: true}
+  - {name: object_ipos_y, group: dynamics, low: -0.01, high: 0.01, learnable: true}
+  - {name: object_ipos_z, group: dynamics, low: -0.01, high: 0.01, learnable: true}
   - {name: box_pos_x, group: reset, low: 0.4, high: 0.65, learnable: true}
   - {name: box_pos_y, group: reset, low: -0.2, high: 0.2, learnable: true}
   - {name: box_yaw, group: reset, low: 0.0, high: 6.283184307179586, learnable: true}
