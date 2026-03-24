@@ -1238,7 +1238,7 @@ def train(
         )),
         dynamics_params=dynamics_params_grid,
         training_metrics=metrics,
-        num_eval_seeds=1,
+        num_eval_seeds=10,
         success_threshold=success_threshold,
     )
     logging.info(metrics)
@@ -1307,7 +1307,7 @@ def train(
         )),
         dynamics_params=dynamics_params_grid,
         training_metrics={},
-        num_eval_seeds=1,
+        num_eval_seeds=10,
         success_threshold=success_threshold,
     )
     eval_fig = samplerppo_helper.create_eval_heatmap_figure(
@@ -1502,7 +1502,7 @@ def train(
         )),
         dynamics_params=dynamics_params_grid,
         training_metrics={},
-        num_eval_seeds=1,
+        num_eval_seeds=10,
         success_threshold=success_threshold,
     )
     logging.info(metrics)
@@ -1614,7 +1614,7 @@ def train(
               )),
               dynamics_params=samples,
               training_metrics=metrics,
-              num_eval_seeds=1,
+              num_eval_seeds=10,
               success_threshold=success_threshold,
           )
           _beta = 1 if sampler_choice=="DORAEMON" else beta
@@ -1646,7 +1646,7 @@ def train(
                 )),
                 dynamics_params=dynamics_params_grid,
                 training_metrics=metrics,
-                num_eval_seeds=1,
+                num_eval_seeds=10,
                 success_threshold=success_threshold,
             )
             rewards.append(_reward_1d)
@@ -1670,7 +1670,7 @@ def train(
             )),
             dynamics_params=dynamics_params_grid,
             training_metrics=metrics,
-            num_eval_seeds=1,
+            num_eval_seeds=10,
             success_threshold=success_threshold,
         )
         final_eval_dynamics_percentiles, final_eval_reward_percentiles = samplerppo_helper.compute_percentile_dynamics_params(
@@ -1874,7 +1874,7 @@ def train(
             )),
             dynamics_params=dynamics_params_grid,
             training_metrics=metrics,
-            num_eval_seeds=1,
+            num_eval_seeds=10,
             success_threshold=success_threshold,
         )
         final_eval_dynamics_percentiles, final_eval_reward_percentiles = samplerppo_helper.compute_percentile_dynamics_params(
