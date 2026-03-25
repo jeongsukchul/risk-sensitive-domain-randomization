@@ -2058,6 +2058,11 @@ def train(
     metrics['final_eval/dynamics_params_percentiles'] = final_eval_dynamics_percentiles.tolist()
     metrics['final_eval/reward_percentiles'] = final_eval_reward_percentiles.tolist()
   logging.info('total steps: %s', total_steps)
+  if process_id == 0:
+    # Emit an explicit terminal point so W&B history reaches the final
+    # environment step even if the last visible point came from an earlier
+    # epoch-level callback.
+    progress_fn(total_steps, metrics)
   # ... [End of your training loop] ...
 
   # --- SAVE LATEST STATE START ---
