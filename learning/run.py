@@ -3,6 +3,7 @@ import sys
 import imageio
 import mediapy as media
 import copy
+from types import SimpleNamespace
 from omegaconf import OmegaConf
 from runtime_env import configure_jax_runtime
 # sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
@@ -140,6 +141,44 @@ def _extract_single_trajectory(trajectory, batch_index, batch_size):
         for state in trajectory
     ]
 
+
+def _build_wandb_config(cfg):
+    config = OmegaConf.to_container(cfg, resolve=True)
+    if isinstance(config, dict):
+        config.setdefault("env_name", cfg.task)
+    return config
+
+
+def _snapshot_render_state(state, batched=False):
+    data = state.data
+    render_data = SimpleNamespace(
+        qpos=np.asarray(jax.device_get(data.qpos)),
+        qvel=np.asarray(jax.device_get(data.qvel)),
+        mocap_pos=np.asarray(jax.device_get(data.mocap_pos)),
+        mocap_quat=np.asarray(jax.device_get(data.mocap_quat)),
+        xfrc_applied=np.asarray(jax.device_get(data.xfrc_applied)),
+    )
+    if batched:
+        return render_data
+    return SimpleNamespace(data=render_data)
+
+
+def _extract_single_render_trajectory(trajectory, batch_index):
+    rollout = []
+    for state_data in trajectory:
+        rollout.append(
+            SimpleNamespace(
+                data=SimpleNamespace(
+                    qpos=state_data.qpos[batch_index],
+                    qvel=state_data.qvel[batch_index],
+                    mocap_pos=state_data.mocap_pos[batch_index],
+                    mocap_quat=state_data.mocap_quat[batch_index],
+                    xfrc_applied=state_data.xfrc_applied[batch_index],
+                )
+            )
+        )
+    return rollout
+
 def _tile_frame_sequences(frame_sequences, grid_cols=4, bg_value=0, tile_labels=None):
     if not frame_sequences:
         return []
@@ -249,9 +288,8 @@ def train_ppo(cfg:dict, randomization_fn, env, eval_env=None):
             entity=cfg.wandb_entity, 
             name=wandb_name,
             dir=make_dir(cfg.work_dir),
-            config=OmegaConf.to_container(cfg, resolve=True),
+            config=_build_wandb_config(cfg),
         )
-        wandb.config.update({"env_name": cfg.task})
     ppo_params.num_evals = cfg.num_evals
     network_factory = samplerppo_networks.make_samplerppo_networks
     train_fn = sampler_ppo.train
@@ -386,9 +424,8 @@ def train_td3(cfg:dict, randomization_fn, env, eval_env=None):
             entity=cfg.wandb_entity, 
             name=wandb_name,
             dir=make_dir(cfg.work_dir),
-            config=OmegaConf.to_container(cfg, resolve=True),
+            config=_build_wandb_config(cfg),
         )
-        wandb.config.update({"env_name": cfg.task})
 
     network_factory = td3_networks.make_td3_networks
     if "network_factory" in td3_params:
@@ -447,9 +484,8 @@ def train_m2td3(cfg:dict, randomization_fn, env, eval_env=None):
             entity=cfg.wandb_entity, 
             name=wandb_name, 
             dir=make_dir(cfg.work_dir),
-            config=OmegaConf.to_container(cfg, resolve=True),
+            config=_build_wandb_config(cfg),
         )
-        wandb.config.update({"env_name": cfg.task})
 
     network_factory = m2td3_networks.make_m2td3_networks
     if "network_factory" in m2td3_params:
@@ -638,24 +674,27 @@ def train(cfg: dict):
                 reset_rng, rng = jax.random.split(rng)
                 reset_keys = jax.random.split(reset_rng, len(percentile_levels))
                 state = jit_batched_reset(reset_keys)
-                batched_trajectory = [jax.device_get(state)]
-                reward_batch = np.zeros(len(percentile_levels), dtype=np.float32)
+                batched_trajectory = [_snapshot_render_state(state, batched=True)]
+                reward_batch = np.asarray(
+                    jax.device_get(state.reward), dtype=np.float32
+                )
 
                 for _ in range(env_cfg.episode_length):
                     act_rng, rng = jax.random.split(rng)
                     action, _ = jit_policy_fn(state.obs, act_rng)
                     state = jit_batched_step(state, action, percentile_params_jax)
-                    state_cpu = jax.device_get(state)
-                    batched_trajectory.append(state_cpu)
-                    reward_batch += np.asarray(state_cpu.reward, dtype=np.float32)
+                    batched_trajectory.append(
+                        _snapshot_render_state(state, batched=True)
+                    )
+                    reward_batch += np.asarray(
+                        jax.device_get(state.reward), dtype=np.float32
+                    )
 
                 reward_list = reward_batch.tolist()
 
                 for batch_index in range(len(percentile_levels)):
-                    rollout = _extract_single_trajectory(
-                        batched_trajectory,
-                        batch_index,
-                        len(percentile_levels),
+                    rollout = _extract_single_render_trajectory(
+                        batched_trajectory, batch_index
                     )
                     frames_i = eval_env.render(rollout, camera=CAMERAS[cfg.task])
                     rollout_frames.append(frames_i)
@@ -672,15 +711,15 @@ def train(cfg: dict):
                     jit_step = jax.jit(percentile_env.step)
                     reset_rng, rng = jax.random.split(rng)
                     state = jit_reset(reset_rng)
-                    rollout = [jax.device_get(state)]
-                    episode_reward = 0.0
+                    rollout = [_snapshot_render_state(state)]
+                    episode_reward = float(jax.device_get(state.reward))
 
                     for _ in range(env_cfg.episode_length):
                         act_rng, rng = jax.random.split(rng)
                         action, _ = jit_policy_fn(state.obs, act_rng)
                         state = jit_step(state, action)
-                        rollout.append(jax.device_get(state))
-                        episode_reward += float(state.reward)
+                        rollout.append(_snapshot_render_state(state))
+                        episode_reward += float(jax.device_get(state.reward))
 
                     frames_i = eval_env.render(rollout, camera=CAMERAS[cfg.task])
                     rollout_frames.append(frames_i)
@@ -723,14 +762,14 @@ def train(cfg: dict):
             for i in range(n_episodes):
                 state = jit_reset(rngs[i])
                 if i == 0:
-                    rollout = [jax.device_get(state)]
+                    rollout = [_snapshot_render_state(state)]
                 current_episode_reward = 0
                 for _ in range(env_cfg.episode_length):
                     act_rng, rng = jax.random.split(rng)
                     action, _ = jit_policy_fn(state.obs, act_rng)
                     state = jit_step(state, action)
                     if i == 0:
-                        rollout.append(jax.device_get(state))
+                        rollout.append(_snapshot_render_state(state))
                     current_episode_reward += state.reward
                 reward_list.append(float(current_episode_reward))
 

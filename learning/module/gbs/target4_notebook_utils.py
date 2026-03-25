@@ -19,6 +19,19 @@ from learning.module.gbs.gbs_loss import (
 from learning.module.gbs.gbs_trainer import make_gbs_model
 
 
+def tanh_box_bijector(z, low, high):
+    half = 0.5 * (high - low)
+    mid = 0.5 * (high + low)
+    return mid + half * jnp.tanh(z)
+
+
+def tanh_box_logabsdet(z, low, high):
+    z = jnp.atleast_2d(z)
+    half = 0.5 * (high - low)
+    jac_diag = half * (1.0 - jnp.tanh(z) ** 2)
+    return jnp.sum(jnp.log(jnp.clip(jac_diag, 1e-12)), axis=-1)
+
+
 def truncated_exponential_logprob_1d(x, lam):
     x = jnp.asarray(x)
     lam = jnp.asarray(lam)
@@ -106,6 +119,7 @@ def run_gbs_toy_target4(
     model_type="pisgrad",
     model_num_layers=2,
     model_num_hid=64,
+    final_sample_size=2**14,
 ):
     if snap_iters is None:
         snap_iters = []
@@ -134,13 +148,24 @@ def run_gbs_toy_target4(
     if low.shape[0] != dim or high.shape[0] != dim:
         raise ValueError(f"low/high must match dim={dim}, got {low.shape} and {high.shape}")
 
+    # Train in unconstrained latent space z and map to the box [low, high] via tanh.
+    # This keeps the prior sampler and prior_log_prob consistent while respecting the
+    # bounded target support.
+    def to_box(z):
+        return tanh_box_bijector(z, low=low, high=high)
+
+    def target4_logprob_latent(z, lam):
+        x_box = to_box(z)
+        return target4_logprob(x_box, lam) + tanh_box_logabsdet(z, low=low, high=high)
+
+    latent_prior_loc = jnp.zeros(dim, dtype=jnp.float32)
+    process_center = jnp.zeros(dim, dtype=jnp.float32)
+
     prior = distrax.MultivariateNormalDiag(
-        loc=jnp.ones(dim) * 0.5,
+        loc=latent_prior_loc,
         scale_diag=jnp.ones(dim) * init_std,
     )
-    prior_sampler = lambda k: jnp.clip(
-        jnp.squeeze(prior.sample(seed=k, sample_shape=(1,))), low, high
-    )
+    prior_sampler = lambda k: jnp.squeeze(prior.sample(seed=k, sample_shape=(1,)))
     prior_log_prob = prior.log_prob
 
     model_cfg = dict(
@@ -177,8 +202,9 @@ def run_gbs_toy_target4(
                 num_steps,
                 proc,
                 True,
+                process_center=process_center,
             )
-            target_lp_vals = jnp.asarray(target4_logprob(xT, lam)).reshape(-1)
+            target_lp_vals = jnp.asarray(target4_logprob_latent(xT, lam)).reshape(-1)
             rnd_total = prior_log_prob(x0) + rnd_running - target_lp_vals
             loss, aux, _ = lv_loss_from_rnd(rnd_total, xT=xT)
             return loss, aux
@@ -199,8 +225,9 @@ def run_gbs_toy_target4(
                 num_steps,
                 proc,
                 True,
+                process_center=process_center,
             )
-            target_lp_vals = jnp.asarray(target4_logprob(xT, lam)).reshape(-1)
+            target_lp_vals = jnp.asarray(target4_logprob_latent(xT, lam)).reshape(-1)
             loss, aux = lv_loss_from_values(x0, xT, log_ratio, prior_log_prob, target_lp_vals)
             return loss, aux
 
@@ -235,15 +262,18 @@ def run_gbs_toy_target4(
         model_state = (fwd_state, bwd_state)
 
         if loss_mode == "tr_lv":
-            x0, xT, _rnd_running = rnd_jit(
+            x0, xT_latent, _rnd_running = rnd_jit(
                 k_step, model_state, fwd_state.params,
-                batch_size, prior_sampler, num_steps, proc, True
+                batch_size, prior_sampler, num_steps, proc, True,
+                process_center=process_center,
             )
         else:
-            x0, xT, _log_ratio = rnd_jit(
+            x0, xT_latent, _log_ratio = rnd_jit(
                 k_step, model_state, fwd_state.params, bwd_state.params,
-                batch_size, prior_sampler, num_steps, proc, True
+                batch_size, prior_sampler, num_steps, proc, True,
+                process_center=process_center,
             )
+        xT = to_box(xT_latent)
 
         (fwd_grads, bwd_grads), aux = loss_grad(
             k_step, model_state, fwd_state.params, bwd_state.params, jnp.asarray(current_lambda)
@@ -293,15 +323,16 @@ def run_gbs_toy_target4(
     key, k_final = jax.random.split(key)
     B = 2**14
     if loss_mode == "tr_lv":
-        _, xT_final, _ = rnd_time_reversal_lv_no_target(
+        _, xT_final_latent, _ = rnd_time_reversal_lv_no_target(
             k_final, (fwd_state, bwd_state), fwd_state.params,
-            B, prior_sampler, num_steps, proc, True
+            final_sample_size, prior_sampler, num_steps, proc, True, process_center=process_center
         )
     else:
-        _, xT_final, _ = rnd_no_target(
+        _, xT_final_latent, _ = rnd_no_target(
             k_final, (fwd_state, bwd_state), fwd_state.params, bwd_state.params,
-            B, prior_sampler, num_steps, proc, True
+            final_sample_size, prior_sampler, num_steps, proc, True, process_center=process_center
         )
+    xT_final = to_box(xT_final_latent)
     np.save((save_dir / "gbs_samples.npy").as_posix(), np.array(xT_final))
 
     return fwd_state, bwd_state, hist, np.asarray(xT_final)

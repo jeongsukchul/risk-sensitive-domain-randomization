@@ -4,6 +4,8 @@ import argparse
 import os
 from pathlib import Path
 
+from learning.module.gbs.gbs_loss import rnd_no_target
+
 os.environ.setdefault("XLA_PYTHON_CLIENT_PREALLOCATE", "false")
 
 import jax.numpy as jnp
@@ -88,9 +90,9 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="GBS toy experiment with dynamic target4.")
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--dim", type=int, default=2, help="Dimension d in lambda = beta * p / d.")
-    parser.add_argument("--iters", type=int, default=20000)
+    parser.add_argument("--iters", type=int, default=2000)
     parser.add_argument("--batch_size", type=int, default=512)
-    parser.add_argument("--num_steps", type=int, default=25)
+    parser.add_argument("--num_steps", type=int, default=100)
     parser.add_argument("--lr", type=float, default=1e-3)
     parser.add_argument("--init_std", type=float, default=0.5)
     parser.add_argument("--beta", type=float, default=6.0)
@@ -104,7 +106,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--metric_num_bins", type=int, default=128)
     parser.add_argument("--loss_mode", choices=["tr_lv", "dis"], default="tr_lv")
-    parser.add_argument("--model_type", choices=["pisgrad", "potential"], default="potential")
+    parser.add_argument("--model_type", choices=["pisgrad", "potential"], default="pisgrad")
     parser.add_argument("--model_num_layers", type=int, default=2)
     parser.add_argument("--model_num_hid", type=int, default=64)
     parser.add_argument("--save_dir", type=str, default="results")
@@ -120,7 +122,7 @@ def main() -> None:
     low = jnp.zeros(args.dim)
     high = jnp.ones(args.dim)
 
-    _, _, hist, xT_final = run_gbs_toy_target4(
+    fwd_state, bwd_state, hist, xT_final = run_gbs_toy_target4(
         low=low,
         high=high,
         dim=args.dim,
@@ -140,6 +142,7 @@ def main() -> None:
         model_type=args.model_type,
         model_num_layers=args.model_num_layers,
         model_num_hid=args.model_num_hid,
+        final_sample_size=2**14
     )
 
     hist_np = {k: np.asarray(v, dtype=np.float64) for k, v in hist.items()}

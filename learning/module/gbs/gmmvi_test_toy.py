@@ -201,7 +201,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--num_envs", type=int, default=512)
     parser.add_argument("--batch_size", type=int, default=512)
     parser.add_argument("--n_eval_samples", type=int, default=4096)
-    parser.add_argument("--prior_scale", type=float, default=0.1)
+    parser.add_argument("--prior_scale", type=float, default=0.5)
     parser.add_argument("--beta", type=float, default=10.0)
     parser.add_argument("--tau", type=float, default=0.10)
     parser.add_argument("--initial_p", type=float, default=None)
