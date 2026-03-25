@@ -40,7 +40,7 @@ def default_config() -> config_dict.ConfigDict:
       sim_dt=0.0025,
       episode_length=2000,
       action_repeat=2,
-      action_scale=0.005,
+      action_scale=0.004,
       history_len=3,
       reward_config=config_dict.create(
           scales=config_dict.create(
@@ -54,6 +54,7 @@ def default_config() -> config_dict.ConfigDict:
               socket_entrance_reward=4,
               peg_end2_reward=4,
               peg_insertion_reward=8,
+              action_rate=-0.01,
           )
       ),
       dynamics_randomization_in_domain_randomization=True,
@@ -128,7 +129,10 @@ class SinglePegInsertion(aloha_base.AlohaEnv):
         njmax=self._config.njmax,
     )
 
-    info = {"rng": rng}
+    info = {
+        "rng": rng,
+        "last_action": jp.zeros(self.action_size, dtype=float),
+    }
     obs_history = jp.zeros(self._config.history_len * self._get_state(data).shape[0])
     obs = self._get_obs(data, obs_history)
     reward, done = jp.zeros(2)
@@ -171,11 +175,13 @@ class SinglePegInsertion(aloha_base.AlohaEnv):
     return tuple(jp.asarray(x) for x in bounds)
 
   def step(self, state: mjx_env.State, action: jax.Array) -> mjx_env.State:
+    action = jp.clip(action, -1.0, 1.0)
     delta = action * self._config.action_scale
     ctrl = state.data.ctrl + delta
     ctrl = jp.clip(ctrl, self._lowers, self._uppers)
 
     data = mjx_env.step(self._mjx_model, state.data, ctrl, self.n_substeps)
+    invalid_state = jp.isnan(data.qpos).any() | jp.isnan(data.qvel).any()
 
     socket_entrance_pos = data.site_xpos[self._socket_entrance_site]
     socket_rear_pos = data.site_xpos[self._socket_rear_site]
@@ -194,16 +200,25 @@ class SinglePegInsertion(aloha_base.AlohaEnv):
     raw_rewards = self._get_reward(
         data, use_peg_insertion_reward=(peg_end2_dist_to_line < 0.005)
     )
+    raw_rewards["action_rate"] = jp.linalg.norm(action - state.info["last_action"])
     rewards = {
         k: v * self._config.reward_config.scales[k]
         for k, v in raw_rewards.items()
     }
+    rewards = jax.tree_util.tree_map(
+        lambda x: jp.nan_to_num(x, nan=0.0, posinf=0.0, neginf=0.0), rewards
+    )
     reward = sum(rewards.values()) / sum(
         self._config.reward_config.scales.values()
     )
+    reward = jp.nan_to_num(reward, nan=0.0, posinf=0.0, neginf=0.0)
+    peg_end2_dist_to_line = jp.nan_to_num(
+        peg_end2_dist_to_line, nan=1.0, posinf=1.0, neginf=1.0
+    )
 
-    done = out_of_bounds | jp.isnan(data.qpos).any() | jp.isnan(data.qvel).any()
+    done = out_of_bounds | invalid_state
     done = done.astype(float)
+    state.info["last_action"] = action
     state.metrics.update(
         **rewards,
         peg_end2_dist_to_line=peg_end2_dist_to_line,
