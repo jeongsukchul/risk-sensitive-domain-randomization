@@ -58,7 +58,7 @@ from learning.module.wrapper.evaluator import AdvEvaluator, Evaluator, generate_
 from flax import nnx
 import os
 from flax.training import train_state as flax_train_state
-from learning.module.gbs.gbs_trainer import PISGRADNet, plot_sample_density_2d
+from learning.module.gbs.gbs_trainer import make_gbs_model, plot_sample_density_2d
 InferenceParams = Tuple[running_statistics.NestedMeanStd, Params]
 Metrics = types.Metrics
 
@@ -319,6 +319,7 @@ def train(
     gbs_sde_ctrl_noise: Optional[float] = None,
     gbs_sde_ctrl_dropout: Optional[float] = None,
     gbs_use_tanh_bijection: bool = True,
+    gbs_model_type: str = "pisgrad",  # "pisgrad" or "potential"
     gbs_model_num_layers: int = 2,
     gbs_model_num_hid: int = 64,
     gbs_sigma_const: float = 1.0,
@@ -579,12 +580,14 @@ def train(
 
   if sampler_choice == "GBS":
     gbs_key_fwd, gbs_key_bwd = jax.random.split(gmm_key)
-    gbs_model_fwd = PISGRADNet(
+    gbs_model_fwd = make_gbs_model(
+        model_type=gbs_model_type,
         dim=len(dr_range_low),
         num_layers=gbs_model_num_layers,
         num_hid=gbs_model_num_hid,
     )
-    gbs_model_bwd = PISGRADNet(
+    gbs_model_bwd = make_gbs_model(
+        model_type=gbs_model_type,
         dim=len(dr_range_low),
         num_layers=gbs_model_num_layers,
         num_hid=gbs_model_num_hid,

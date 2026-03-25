@@ -97,6 +97,86 @@ class PISGRADNet(nn.Module):
         return out_state_p_grad
 
 
+class PotentialPISGRADNet(nn.Module):
+    """Potential-based control model for GBS.
+
+    This model parameterizes a scalar potential phi(t, x) and returns its
+    gradient with respect to x. It keeps the same call signature as
+    ``PISGRADNet`` so it can be swapped into the existing GBS trainer without
+    changing the rollout code.
+
+    Note:
+    - ``lgv_term`` is accepted for API compatibility but intentionally unused.
+    - The sampler already applies the process diffusion coefficient outside the
+      model, so this class returns only grad_x phi(t, x).
+    """
+
+    dim: int
+
+    num_layers: int = 2
+    num_hid: int = 64
+    outer_clip: float = 1e4
+
+    weight_init: float = 1e-8
+    bias_init: float = 0.0
+
+    def setup(self):
+        self.timestep_phase = self.param(
+            "timestep_phase", nn.initializers.zeros_init(), (1, self.num_hid)
+        )
+        self.timestep_coeff = jnp.linspace(start=0.1, stop=100, num=self.num_hid)[None]
+
+        self.time_coder_state = nn.Sequential(
+            [nn.Dense(self.num_hid), nn.gelu, nn.Dense(self.num_hid)]
+        )
+
+        self.potential_net = nn.Sequential(
+            [nn.Sequential([nn.Dense(self.num_hid), nn.gelu]) for _ in range(self.num_layers)]
+            + [
+                nn.Dense(
+                    1,
+                    kernel_init=nn.initializers.constant(self.weight_init),
+                    bias_init=nn.initializers.constant(self.bias_init),
+                )
+            ]
+        )
+
+    def get_fourier_features(self, timesteps):
+        sin_embed_cond = jnp.sin((self.timestep_coeff * timesteps) + self.timestep_phase)
+        cos_embed_cond = jnp.cos((self.timestep_coeff * timesteps) + self.timestep_phase)
+        return jnp.concatenate([sin_embed_cond, cos_embed_cond], axis=-1)
+
+    def _potential_single(self, x_single, t_emb_single):
+        extended_input = jnp.concatenate((x_single, t_emb_single), axis=-1)
+        out = self.potential_net(extended_input)
+        return jnp.squeeze(out, axis=-1)
+
+    def __call__(self, input_array, time_array, lgv_term):
+        del lgv_term
+        time_array_emb = self.get_fourier_features(time_array)
+        t_net = self.time_coder_state(time_array_emb)
+
+        if len(input_array.shape) == 1:
+            if time_array_emb.ndim > 1:
+                t_net = t_net[0]
+            grad_fn = jax.grad(self._potential_single, argnums=0)
+            out = grad_fn(input_array, t_net)
+        else:
+            grad_fn = jax.vmap(jax.grad(self._potential_single, argnums=0), in_axes=(0, 0))
+            out = grad_fn(input_array, t_net)
+
+        return jnp.clip(out, -self.outer_clip, self.outer_clip)
+
+
+def make_gbs_model(model_type: str = "pisgrad", **model_kwargs):
+    model_type = model_type.lower()
+    if model_type == "pisgrad":
+        return PISGRADNet(**model_kwargs)
+    if model_type == "potential":
+        return PotentialPISGRADNet(**model_kwargs)
+    raise ValueError(f"Unknown GBS model_type: {model_type}")
+
+
 def plot_sample_density_2d(
     samples,
     low,
@@ -294,7 +374,9 @@ def gbs_trainer(cfg, target, target_log_prob):
     prior_log_prob = prior.log_prob  # JAX-traceable
 
     # Models
-    fwd_model = PISGRADNet(**alg_cfg.model)
+    model_cfg = dict(alg_cfg.model)
+    model_type = model_cfg.pop("model_type", "pisgrad")
+    fwd_model = make_gbs_model(model_type=model_type, **model_cfg)
     key, key_gen = jax.random.split(key_gen)
     fwd_params = fwd_model.init(
         key,
@@ -302,7 +384,7 @@ def gbs_trainer(cfg, target, target_log_prob):
         jnp.ones([alg_cfg.batch_size, 1]),
         jnp.ones([alg_cfg.batch_size, dim]),
     )
-    bwd_model = PISGRADNet(**alg_cfg.model)
+    bwd_model = make_gbs_model(model_type=model_type, **model_cfg)
     key, key_gen = jax.random.split(key_gen)
     bwd_params = bwd_model.init(
         key,
