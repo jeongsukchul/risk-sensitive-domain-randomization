@@ -8,6 +8,8 @@ from omegaconf import OmegaConf
 from runtime_env import configure_jax_runtime
 # sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 configure_jax_runtime()
+from mjwarp_gjk_patch import apply_gjk_stall_patch
+apply_gjk_stall_patch()
 # @title Import MuJoCo, MJX, and Brax
 from datetime import datetime
 import functools
@@ -675,8 +677,8 @@ def train(cfg: dict):
                 reset_keys = jax.random.split(reset_rng, len(percentile_levels))
                 state = jit_batched_reset(reset_keys)
                 batched_trajectory = [_snapshot_render_state(state, batched=True)]
-                reward_batch = np.asarray(
-                    jax.device_get(state.reward), dtype=np.float32
+                reward_batch = np.array(
+                    jax.device_get(state.reward), dtype=np.float32, copy=True
                 )
 
                 for _ in range(env_cfg.episode_length):
@@ -686,8 +688,8 @@ def train(cfg: dict):
                     batched_trajectory.append(
                         _snapshot_render_state(state, batched=True)
                     )
-                    reward_batch += np.asarray(
-                        jax.device_get(state.reward), dtype=np.float32
+                    reward_batch += np.array(
+                        jax.device_get(state.reward), dtype=np.float32, copy=True
                     )
 
                 reward_list = reward_batch.tolist()
