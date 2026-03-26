@@ -151,7 +151,7 @@ def _build_wandb_config(cfg):
     return config
 
 
-def _snapshot_render_state(state, batched=False):
+def _snapshot_render_state(state):
     data = state.data
     render_data = SimpleNamespace(
         qpos=np.asarray(jax.device_get(data.qpos)),
@@ -160,26 +160,7 @@ def _snapshot_render_state(state, batched=False):
         mocap_quat=np.asarray(jax.device_get(data.mocap_quat)),
         xfrc_applied=np.asarray(jax.device_get(data.xfrc_applied)),
     )
-    if batched:
-        return render_data
     return SimpleNamespace(data=render_data)
-
-
-def _extract_single_render_trajectory(trajectory, batch_index):
-    rollout = []
-    for state_data in trajectory:
-        rollout.append(
-            SimpleNamespace(
-                data=SimpleNamespace(
-                    qpos=state_data.qpos[batch_index],
-                    qvel=state_data.qvel[batch_index],
-                    mocap_pos=state_data.mocap_pos[batch_index],
-                    mocap_quat=state_data.mocap_quat[batch_index],
-                    xfrc_applied=state_data.xfrc_applied[batch_index],
-                )
-            )
-        )
-    return rollout
 
 def _tile_frame_sequences(frame_sequences, grid_cols=4, bg_value=0, tile_labels=None):
     if not frame_sequences:
@@ -676,7 +657,6 @@ def train(cfg: dict):
                 reset_rng, rng = jax.random.split(rng)
                 reset_keys = jax.random.split(reset_rng, len(percentile_levels))
                 state = jit_batched_reset(reset_keys)
-                batched_trajectory = [_snapshot_render_state(state, batched=True)]
                 reward_batch = np.array(
                     jax.device_get(state.reward), dtype=np.float32, copy=True
                 )
@@ -685,19 +665,31 @@ def train(cfg: dict):
                     act_rng, rng = jax.random.split(rng)
                     action, _ = jit_policy_fn(state.obs, act_rng)
                     state = jit_batched_step(state, action, percentile_params_jax)
-                    batched_trajectory.append(
-                        _snapshot_render_state(state, batched=True)
-                    )
                     reward_batch += np.array(
                         jax.device_get(state.reward), dtype=np.float32, copy=True
                     )
 
                 reward_list = reward_batch.tolist()
 
-                for batch_index in range(len(percentile_levels)):
-                    rollout = _extract_single_render_trajectory(
-                        batched_trajectory, batch_index
+                for dyn_params in percentile_params:
+                    percentile_env = registry.load(cfg.task, config=env_cfg)
+                    percentile_env = _apply_fixed_dynamics_params(
+                        percentile_env,
+                        randomizer_eval,
+                        dyn_params,
                     )
+                    jit_reset = jax.jit(percentile_env.reset)
+                    jit_step = jax.jit(percentile_env.step)
+                    reset_rng, rng = jax.random.split(rng)
+                    state = jit_reset(reset_rng)
+                    rollout = [_snapshot_render_state(state)]
+
+                    for _ in range(env_cfg.episode_length):
+                        act_rng, rng = jax.random.split(rng)
+                        action, _ = jit_policy_fn(state.obs, act_rng)
+                        state = jit_step(state, action)
+                        rollout.append(_snapshot_render_state(state))
+
                     frames_i = eval_env.render(rollout, camera=CAMERAS[cfg.task])
                     rollout_frames.append(frames_i)
             else:

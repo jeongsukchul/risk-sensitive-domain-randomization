@@ -116,8 +116,8 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="GBS toy experiment with dynamic target4.")
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--dim", type=int, default=2, help="Dimension d in lambda = beta * p / d.")
-    parser.add_argument("--iters", type=int, default=2000)
-    parser.add_argument("--batch_size", type=int, default=512)
+    parser.add_argument("--iters", type=int, default=4000)
+    parser.add_argument("--batch_size", type=int, default=128)
     parser.add_argument("--num_steps", type=int, default=100)
     parser.add_argument("--lr", type=float, default=1e-3)
     parser.add_argument("--init_std", type=float, default=0.5)
@@ -139,7 +139,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--p_jump_prob",
         type=float,
-        default=0.01,
+        default=0.,
         help="Probability that a scheduled p update jumps to Uniform[0, 1].",
     )
     parser.add_argument("--metric_num_bins", type=int, default=128)
