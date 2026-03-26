@@ -8,6 +8,9 @@ from learning.module.gbs.gbs_loss import rnd_no_target
 
 os.environ.setdefault("XLA_PYTHON_CLIENT_PREALLOCATE", "false")
 
+os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
+os.environ["GLOG_minloglevel"] = "2"
+
 import jax.numpy as jnp
 import numpy as np
 from matplotlib import pyplot as plt
@@ -43,9 +46,11 @@ def plot_target4_contour(ax, lam: float, n: int = 200, gamma: float = 0.45) -> N
 
 def save_metric_plot(hist: dict[str, list[float]], output_path: Path) -> None:
     iters = np.arange(len(hist["target4/p"]))
-    fig, axes = plt.subplots(1, 2, figsize=(12, 4))
+    fig, axes = plt.subplots(1, 3, figsize=(16, 4))
 
     axes[0].plot(iters, hist["target4/p"], label="p", color="tab:blue")
+    axes[0].plot(iters, hist["target4/p_base"], label="base p", color="tab:pink")
+    axes[0].plot(iters, hist["target4/p_ema"], label="ema p", color="tab:cyan")
     axes[0].plot(iters, hist["target4/lambda"], label="lambda", color="tab:orange")
     axes[0].plot(iters, hist["target4/sample_mean"], label="sample mean", color="tab:green")
     axes[0].set_title("Target4 dynamics")
@@ -66,10 +71,21 @@ def save_metric_plot(hist: dict[str, list[float]], output_path: Path) -> None:
         color="tab:purple",
     )
     axes[1].plot(iters, hist["target4/wasserstein"], label="Wasserstein", color="tab:brown")
+    axes[1].plot(iters, hist["target4/sinkhorn"], label="Sinkhorn", color="tab:cyan")
+
     axes[1].set_title("Target4 distances")
     axes[1].set_xlabel("iteration")
     axes[1].grid(alpha=0.3)
     axes[1].legend()
+
+    axes[2].plot(iters, hist["target4/ess"], label="ESS", color="tab:olive")
+    axes[2].plot(iters, hist["target4/energy_w2"], label="Energy W2", color="tab:brown")
+    axes[2].plot(iters, hist["target4/p_updated"], label="p updated", color="tab:gray")
+    axes[2].plot(iters, hist["target4/p_jumped"], label="p jumped", color="tab:red")
+    axes[2].set_title("Target4 ESS / Energy W2")
+    axes[2].set_xlabel("iteration")
+    axes[2].grid(alpha=0.3)
+    axes[2].legend()
 
     fig.tight_layout()
     fig.savefig(output_path.as_posix(), dpi=150)
@@ -104,7 +120,22 @@ def parse_args() -> argparse.Namespace:
         default=1,
         help="Update p every k iterations. Use 0 to keep p fixed for the whole run.",
     )
+    parser.add_argument(
+        "--p_ema_alpha",
+        type=float,
+        default=0.9,
+        help="EMA coefficient on previous p during scheduled updates.",
+    )
+    parser.add_argument(
+        "--p_jump_prob",
+        type=float,
+        default=0.1,
+        help="Probability that a scheduled p update jumps to Uniform[0, 1].",
+    )
     parser.add_argument("--metric_num_bins", type=int, default=128)
+    parser.add_argument("--sinkhorn_num_samples", type=int, default=2000)
+    parser.add_argument("--n_particles", type=int, default=None)
+    parser.add_argument("--n_spatial_dim", type=int, default=1)
     parser.add_argument("--loss_mode", choices=["tr_lv", "dis"], default="tr_lv")
     parser.add_argument("--model_type", choices=["pisgrad", "potential"], default="pisgrad")
     parser.add_argument("--model_num_layers", type=int, default=2)
@@ -136,8 +167,13 @@ def main() -> None:
         tau=args.tau,
         initial_p=args.initial_p,
         p_update_freq=args.p_update_freq,
+        p_ema_alpha=args.p_ema_alpha,
+        p_jump_prob=args.p_jump_prob,
         loss_mode=args.loss_mode,
         metric_num_bins=args.metric_num_bins,
+        sinkhorn_num_samples=args.sinkhorn_num_samples,
+        n_particles=args.n_particles,
+        n_spatial_dim=args.n_spatial_dim,
         save_dir=save_dir,
         model_type=args.model_type,
         model_num_layers=args.model_num_layers,
@@ -153,6 +189,9 @@ def main() -> None:
     final_forward_kl = float(hist["target4/forward_kl"][-1])
     final_reverse_kl = float(hist["target4/reverse_kl"][-1])
     final_wasserstein = float(hist["target4/wasserstein"][-1])
+    final_sinkhorn = float(hist["target4/sinkhorn"][-1])
+    final_ess = float(hist["target4/ess"][-1])
+    final_energy_w2 = float(hist["target4/energy_w2"][-1])
 
     save_metric_plot(hist, save_dir / "target4_metrics.png")
     if args.dim >= 2:
@@ -162,11 +201,16 @@ def main() -> None:
     print(f"dimension d: {args.dim}")
     print(f"model type: {args.model_type}")
     print(f"p update frequency: {args.p_update_freq} (0 means fixed p)")
+    print(f"p ema alpha: {args.p_ema_alpha:.3f}")
+    print(f"p jump probability: {args.p_jump_prob:.3f}")
     print(f"final p: {final_p:.6f}")
     print(f"final lambda = beta * p / d: {final_lambda:.6f}")
     print(f"final forward KL: {final_forward_kl:.6f}")
     print(f"final reverse KL: {final_reverse_kl:.6f}")
     print(f"final Wasserstein: {final_wasserstein:.6f}")
+    print(f"final Sinkhorn: {final_sinkhorn:.6f}")
+    print(f"final ESS: {final_ess:.6f}")
+    print(f"final Energy W2: {final_energy_w2:.6f}")
 
     if args.show:
         metrics = plt.imread((save_dir / "target4_metrics.png").as_posix())

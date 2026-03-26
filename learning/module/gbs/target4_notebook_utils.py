@@ -17,6 +17,11 @@ from learning.module.gbs.gbs_loss import (
     lv_loss_from_rnd,
 )
 from learning.module.gbs.gbs_trainer import make_gbs_model
+from learning.module.gbs.sinkhorn_metrics import (
+    energy_wasserstein_1d,
+    effective_sample_size_from_log_weights,
+    sinkhorn_distance,
+)
 
 
 def tanh_box_bijector(z, low, high):
@@ -54,6 +59,18 @@ def update_p_from_samples(x, tau):
     sample_mean = jnp.mean(x)
     p = jax.nn.sigmoid((sample_mean - 1.0) / tau)
     return p, sample_mean
+
+
+def update_p_with_ema_and_jump(prev_p, sample_mean, tau, ema_alpha, jump_prob, key):
+    base_p = float(jax.nn.sigmoid((sample_mean - 1.0) / tau))
+    ema_p = float(np.clip(ema_alpha * prev_p + (1.0 - ema_alpha) * base_p, 0.0, 1.0))
+    key_jump, key_uniform = jax.random.split(key)
+    jumped = bool(jax.random.bernoulli(key_jump, p=jump_prob))
+    if jumped:
+        new_p = float(jax.random.uniform(key_uniform, minval=0.0, maxval=1.0))
+    else:
+        new_p = ema_p
+    return new_p, base_p, ema_p, jumped
 
 
 def truncated_exponential_cdf(x, lam):
@@ -113,8 +130,13 @@ def run_gbs_toy_target4(
     tau=0.1,
     initial_p=None,
     p_update_freq=1,
+    p_ema_alpha=0.9,
+    p_jump_prob=0.0,
     loss_mode="tr_lv",
     metric_num_bins=128,
+    sinkhorn_num_samples=256,
+    n_particles=None,
+    n_spatial_dim=1,
     save_dir=".",
     model_type="pisgrad",
     model_num_layers=2,
@@ -147,6 +169,14 @@ def run_gbs_toy_target4(
     high = jnp.asarray(high)
     if low.shape[0] != dim or high.shape[0] != dim:
         raise ValueError(f"low/high must match dim={dim}, got {low.shape} and {high.shape}")
+    if n_particles is None:
+        if dim % n_spatial_dim != 0:
+            raise ValueError(f"dim={dim} must be divisible by n_spatial_dim={n_spatial_dim}")
+        n_particles = dim // n_spatial_dim
+    if n_particles * n_spatial_dim != dim:
+        raise ValueError(
+            f"n_particles * n_spatial_dim must equal dim, got {n_particles} * {n_spatial_dim} != {dim}"
+        )
 
     # Train in unconstrained latent space z and map to the box [low, high] via tanh.
     # This keeps the prior sampler and prior_log_prob consistent while respecting the
@@ -250,7 +280,13 @@ def run_gbs_toy_target4(
             "target4/forward_kl": [],
             "target4/reverse_kl": [],
             "target4/wasserstein": [],
+            "target4/sinkhorn": [],
+            "target4/ess": [],
+            "target4/energy_w2": [],
             "target4/p_updated": [],
+            "target4/p_jumped": [],
+            "target4/p_base": [],
+            "target4/p_ema": [],
         }
     )
 
@@ -286,9 +322,22 @@ def run_gbs_toy_target4(
                 hist[k].append(float(aux[k]))
 
         sample_mean = float(jnp.mean(xT))
-        key, k_metric = jax.random.split(key)
+        key, k_metric, k_update = jax.random.split(key, 3)
         forward_kl, reverse_kl, wasserstein = compute_target4_metrics(
             xT, current_lambda, num_bins=metric_num_bins, key=k_metric
+        )
+        key, k_sink = jax.random.split(key)
+        sinkhorn_target = sample_truncated_exponential(k_sink, current_lambda, xT.shape)
+        n_sink = min(int(sinkhorn_num_samples), int(xT.shape[0]))
+        sinkhorn = sinkhorn_distance(xT[:n_sink], sinkhorn_target[:n_sink])
+        ess = effective_sample_size_from_log_weights(target4_logprob(xT, current_lambda))
+        energy_w2 = float(
+            energy_wasserstein_1d(
+                xT[:n_sink],
+                sinkhorn_target[:n_sink],
+                n_particles=n_particles,
+                n_spatial_dim=n_spatial_dim,
+            )
         )
 
         hist["target4/p"].append(float(p))
@@ -297,10 +346,26 @@ def run_gbs_toy_target4(
         hist["target4/forward_kl"].append(forward_kl)
         hist["target4/reverse_kl"].append(reverse_kl)
         hist["target4/wasserstein"].append(wasserstein)
+        hist["target4/sinkhorn"].append(sinkhorn)
+        hist["target4/ess"].append(ess)
+        hist["target4/energy_w2"].append(energy_w2)
         should_update_p = p_update_freq > 0 and ((t + 1) % p_update_freq == 0)
         hist["target4/p_updated"].append(float(should_update_p))
+        hist["target4/p_jumped"].append(0.0)
+        hist["target4/p_base"].append(float(jax.nn.sigmoid((sample_mean - 1.0) / tau)))
+        hist["target4/p_ema"].append(float(p))
         if should_update_p:
-            p = float(jax.nn.sigmoid((sample_mean - 1.0) / tau))
+            p, base_p, ema_p, jumped = update_p_with_ema_and_jump(
+                prev_p=p,
+                sample_mean=sample_mean,
+                tau=tau,
+                ema_alpha=p_ema_alpha,
+                jump_prob=p_jump_prob,
+                key=k_update,
+            )
+            hist["target4/p_jumped"][-1] = float(jumped)
+            hist["target4/p_base"][-1] = float(base_p)
+            hist["target4/p_ema"][-1] = float(ema_p)
 
         if gif_path and (t in snap_iters):
             frames.append(np.asarray(xT))
