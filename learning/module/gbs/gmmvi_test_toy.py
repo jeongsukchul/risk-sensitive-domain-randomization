@@ -18,6 +18,7 @@ from tqdm import trange
 from learning.module.gmmvi.network import GMMTrainingState, create_gmm_network_and_state
 from learning.module.gbs.target4_notebook_utils import (
     compute_target4_metrics,
+    optimal_p_from_target_mean,
     sample_truncated_exponential,
     target4_logprob,
     update_p_with_ema_and_jump,
@@ -53,7 +54,7 @@ def plot_target4_contour(ax, lam: float, n: int = 200, gamma: float = 0.45) -> N
 
 def save_metric_plot(hist: dict[str, list[float]], output_path: Path) -> None:
     iters = np.arange(len(hist["target4/p"]))
-    fig, axes = plt.subplots(1, 3, figsize=(16, 4))
+    fig, axes = plt.subplots(1, 4, figsize=(20, 4))
 
     axes[0].plot(iters, hist["target4/p"], label="p", color="tab:blue")
     axes[0].plot(iters, hist["target4/p_base"], label="base p", color="tab:pink")
@@ -92,6 +93,14 @@ def save_metric_plot(hist: dict[str, list[float]], output_path: Path) -> None:
     axes[2].set_xlabel("iteration")
     axes[2].grid(alpha=0.3)
     axes[2].legend()
+
+    axes[3].plot(iters, hist["target4/optimal_p"], label="optimal p", color="tab:blue")
+    axes[3].plot(iters, hist["target4/target_mean"], label="target mean", color="tab:green")
+    axes[3].plot(iters, hist["target4/p"], label="sampler p", color="tab:orange")
+    axes[3].set_title("Target Boltzmann p")
+    axes[3].set_xlabel("iteration")
+    axes[3].grid(alpha=0.3)
+    axes[3].legend()
 
     fig.tight_layout()
     fig.savefig(output_path.as_posix(), dpi=150)
@@ -295,6 +304,8 @@ def main() -> None:
         "target4/sinkhorn": [],
         "target4/ess": [],
         "target4/energy_w2": [],
+        "target4/target_mean": [],
+        "target4/optimal_p": [],
         "target4/p_updated": [],
         "target4/p_jumped": [],
         "target4/p_base": [],
@@ -335,6 +346,7 @@ def main() -> None:
                 n_spatial_dim=args.n_spatial_dim,
             )
         )
+        optimal_p, target_mean = optimal_p_from_target_mean(current_lambda, args.tau)
 
         hist["target4/p"].append(float(p))
         hist["target4/lambda"].append(float(current_lambda))
@@ -345,6 +357,8 @@ def main() -> None:
         hist["target4/sinkhorn"].append(sinkhorn)
         hist["target4/ess"].append(ess)
         hist["target4/energy_w2"].append(energy_w2)
+        hist["target4/target_mean"].append(target_mean)
+        hist["target4/optimal_p"].append(optimal_p)
         hist["model/num_components"].append(int(state.model_state.gmm_state.num_components))
         should_update_p = args.p_update_freq > 0 and ((step + 1) % args.p_update_freq == 0)
         hist["target4/p_updated"].append(float(should_update_p))
@@ -381,6 +395,7 @@ def main() -> None:
     final_sinkhorn = float(hist["target4/sinkhorn"][-1])
     final_ess = float(hist["target4/ess"][-1])
     final_energy_w2 = float(hist["target4/energy_w2"][-1])
+    final_optimal_p = float(hist["target4/optimal_p"][-1])
 
     save_metric_plot(hist, save_dir / "gmmvi_target4_metrics.png")
     if args.dim >= 2:
@@ -399,6 +414,7 @@ def main() -> None:
     print(f"final Sinkhorn: {final_sinkhorn:.6f}")
     print(f"final ESS: {final_ess:.6f}")
     print(f"final Energy W2: {final_energy_w2:.6f}")
+    print(f"final target optimal p: {final_optimal_p:.6f}")
     print(f"final num components: {hist['model/num_components'][-1]}")
 
     if args.show:

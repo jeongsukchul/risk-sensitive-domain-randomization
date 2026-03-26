@@ -81,6 +81,24 @@ def truncated_exponential_cdf(x, lam):
     return np.expm1(lam * x) / np.expm1(lam)
 
 
+def truncated_exponential_mean(lam):
+    lam = np.asarray(lam, dtype=np.float64)
+    out = np.empty_like(lam, dtype=np.float64)
+    small = np.abs(lam) <= 1e-6
+    out[small] = 0.5
+    ls = lam[~small]
+    out[~small] = np.exp(ls) / np.expm1(ls) - 1.0 / ls
+    if out.ndim == 0:
+        return float(out)
+    return out
+
+
+def optimal_p_from_target_mean(lam, tau):
+    target_mean = truncated_exponential_mean(lam)
+    optimal_p = 1.0 / (1.0 + np.exp(-(target_mean - 1.0) / tau))
+    return float(optimal_p), float(target_mean)
+
+
 def sample_truncated_exponential(key, lam, shape):
     u = jax.random.uniform(key, shape=shape)
     lam = jnp.asarray(lam)
@@ -283,6 +301,8 @@ def run_gbs_toy_target4(
             "target4/sinkhorn": [],
             "target4/ess": [],
             "target4/energy_w2": [],
+            "target4/target_mean": [],
+            "target4/optimal_p": [],
             "target4/p_updated": [],
             "target4/p_jumped": [],
             "target4/p_base": [],
@@ -339,6 +359,7 @@ def run_gbs_toy_target4(
                 n_spatial_dim=n_spatial_dim,
             )
         )
+        optimal_p, target_mean = optimal_p_from_target_mean(current_lambda, tau)
 
         hist["target4/p"].append(float(p))
         hist["target4/lambda"].append(float(current_lambda))
@@ -349,6 +370,8 @@ def run_gbs_toy_target4(
         hist["target4/sinkhorn"].append(sinkhorn)
         hist["target4/ess"].append(ess)
         hist["target4/energy_w2"].append(energy_w2)
+        hist["target4/target_mean"].append(target_mean)
+        hist["target4/optimal_p"].append(optimal_p)
         should_update_p = p_update_freq > 0 and ((t + 1) % p_update_freq == 0)
         hist["target4/p_updated"].append(float(should_update_p))
         hist["target4/p_jumped"].append(0.0)

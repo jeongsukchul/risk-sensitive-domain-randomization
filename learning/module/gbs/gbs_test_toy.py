@@ -46,7 +46,7 @@ def plot_target4_contour(ax, lam: float, n: int = 200, gamma: float = 0.45) -> N
 
 def save_metric_plot(hist: dict[str, list[float]], output_path: Path) -> None:
     iters = np.arange(len(hist["target4/p"]))
-    fig, axes = plt.subplots(1, 4, figsize=(16, 4))
+    fig, axes = plt.subplots(1, 5, figsize=(20, 4))
 
     axes[0].plot(iters, hist["target4/p"], label="p", color="tab:blue")
     axes[0].plot(iters, hist["target4/p_base"], label="base p", color="tab:pink")
@@ -90,6 +90,13 @@ def save_metric_plot(hist: dict[str, list[float]], output_path: Path) -> None:
     axes[3].set_xlabel("iteration")
     axes[3].grid(alpha=0.3)
     axes[3].legend()
+    axes[4].plot(iters, hist["target4/optimal_p"], label="optimal p", color="tab:blue")
+    axes[4].plot(iters, hist["target4/target_mean"], label="target mean", color="tab:green")
+    axes[4].plot(iters, hist["target4/p"], label="sampler p", color="tab:orange")
+    axes[4].set_title("Target Boltzmann p")
+    axes[4].set_xlabel("iteration")
+    axes[4].grid(alpha=0.3)
+    axes[4].legend()
     fig.tight_layout()
     fig.savefig(output_path.as_posix(), dpi=150)
     plt.close(fig)
@@ -132,7 +139,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--p_jump_prob",
         type=float,
-        default=0.1,
+        default=0.01,
         help="Probability that a scheduled p update jumps to Uniform[0, 1].",
     )
     parser.add_argument("--metric_num_bins", type=int, default=128)
@@ -195,6 +202,7 @@ def main() -> None:
     final_sinkhorn = float(hist["target4/sinkhorn"][-1])
     final_ess = float(hist["target4/ess"][-1])
     final_energy_w2 = float(hist["target4/energy_w2"][-1])
+    final_optimal_p = float(hist["target4/optimal_p"][-1])
 
     save_metric_plot(hist, save_dir / "target4_metrics.png")
     if args.dim >= 2:
@@ -214,6 +222,7 @@ def main() -> None:
     print(f"final Sinkhorn: {final_sinkhorn:.6f}")
     print(f"final ESS: {final_ess:.6f}")
     print(f"final Energy W2: {final_energy_w2:.6f}")
+    print(f"final target optimal p: {final_optimal_p:.6f}")
 
     if args.show:
         metrics = plt.imread((save_dir / "target4_metrics.png").as_posix())
