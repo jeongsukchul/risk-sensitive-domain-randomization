@@ -51,7 +51,7 @@ def save_metric_plot(hist: dict[str, list[float]], output_path: Path) -> None:
     axes[0].plot(iters, hist["target4/p"], label="p", color="tab:blue")
     axes[0].plot(iters, hist["target4/p_base"], label="base p", color="tab:pink")
     axes[0].plot(iters, hist["target4/p_ema"], label="ema p", color="tab:cyan")
-    axes[0].plot(iters, hist["target4/lambda"], label="lambda", color="tab:orange")
+    # axes[0].plot(iters, hist["target4/lambda"], label="lambda", color="tab:orange")
     axes[0].plot(iters, hist["target4/sample_mean"], label="sample mean", color="tab:green")
     axes[0].set_title("Target4 dynamics")
     axes[0].set_xlabel("iteration")
