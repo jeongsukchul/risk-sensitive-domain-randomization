@@ -46,7 +46,7 @@ def plot_target4_contour(ax, lam: float, n: int = 200, gamma: float = 0.45) -> N
 
 def save_metric_plot(hist: dict[str, list[float]], output_path: Path) -> None:
     iters = np.arange(len(hist["target4/p"]))
-    fig, axes = plt.subplots(1, 3, figsize=(16, 4))
+    fig, axes = plt.subplots(1, 4, figsize=(16, 4))
 
     axes[0].plot(iters, hist["target4/p"], label="p", color="tab:blue")
     axes[0].plot(iters, hist["target4/p_base"], label="base p", color="tab:pink")
@@ -70,23 +70,26 @@ def save_metric_plot(hist: dict[str, list[float]], output_path: Path) -> None:
         label="reverse KL = KL(empirical || target)",
         color="tab:purple",
     )
-    axes[1].plot(iters, hist["target4/wasserstein"], label="Wasserstein", color="tab:brown")
-    axes[1].plot(iters, hist["target4/sinkhorn"], label="Sinkhorn", color="tab:cyan")
+    # axes[1].plot(iters, hist["target4/wasserstein"], label="Wasserstein", color="tab:brown")
 
     axes[1].set_title("Target4 distances")
     axes[1].set_xlabel("iteration")
     axes[1].grid(alpha=0.3)
     axes[1].legend()
 
-    axes[2].plot(iters, hist["target4/ess"], label="ESS", color="tab:olive")
-    axes[2].plot(iters, hist["target4/energy_w2"], label="Energy W2", color="tab:brown")
-    axes[2].plot(iters, hist["target4/p_updated"], label="p updated", color="tab:gray")
-    axes[2].plot(iters, hist["target4/p_jumped"], label="p jumped", color="tab:red")
-    axes[2].set_title("Target4 ESS / Energy W2")
+    # axes[2].plot(iters, hist["target4/ess"], label="ESS", color="tab:olive")
+    axes[2].plot(iters, hist["target4/sinkhorn"], label="Sinkhorn", color="tab:cyan")
+    # axes[2].plot(iters, hist["target4/p_updated"], label="p updated", color="tab:gray")
+    # axes[2].plot(iters, hist["target4/p_jumped"], label="p jumped", color="tab:red")
+    axes[2].set_title("Target4 Sinkhorn")
     axes[2].set_xlabel("iteration")
     axes[2].grid(alpha=0.3)
     axes[2].legend()
-
+    axes[3].plot(iters, hist["target4/energy_w2"], label="Energy W2", color="tab:brown")
+    axes[3].set_title("Target4 Energy W2")
+    axes[3].set_xlabel("iteration")
+    axes[3].grid(alpha=0.3)
+    axes[3].legend()
     fig.tight_layout()
     fig.savefig(output_path.as_posix(), dpi=150)
     plt.close(fig)

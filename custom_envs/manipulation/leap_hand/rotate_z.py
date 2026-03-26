@@ -59,7 +59,7 @@ def default_config() -> config_dict.ConfigDict:
       impl='jax',
       naconmax=30 * 8192,
       naccdmax=30 * 8192,
-      njmax=128,
+      njmax=160,
   )
 
 
