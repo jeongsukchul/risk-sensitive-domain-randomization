@@ -75,8 +75,7 @@ def make_samplerppo_networks(
     observation_size: types.ObservationSize,
     action_size: int,
     dynamics_param_size : int,
-    num_envs :int,
-    batch_size : int,
+    sampler_batch_size,
     init_key : jax.random.PRNGKey,
     preprocess_observations_fn: types.PreprocessObservationFn = types.identity_observation_preprocessor,
     policy_hidden_layer_sizes: Sequence[int] = (32,) * 4,
@@ -109,10 +108,8 @@ def make_samplerppo_networks(
       activation=activation,
       obs_key=value_obs_key,
   )
-  print("num envs", num_envs)
-  print('batch size', batch_size)
   init_gmmvi_state, gmm_network = create_gmm_network_and_state(dynamics_param_size, \
-                                                               num_envs, batch_size, init_key,\
+                                                               sampler_batch_size, sampler_batch_size, init_key,\
                                                                prior_scale=.1,
                                                                 bound_info=bound_info)
   dr_low, dr_high = bound_info
