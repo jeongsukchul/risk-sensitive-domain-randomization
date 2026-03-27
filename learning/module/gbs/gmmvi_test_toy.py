@@ -53,6 +53,12 @@ def plot_target4_contour(ax, lam: float, n: int = 200, gamma: float = 0.45) -> N
 
 
 def save_metric_plot(hist: dict[str, list[float]], output_path: Path) -> None:
+    def hide_initial_point(values: list[float]) -> np.ndarray:
+        masked = np.asarray(values, dtype=np.float64).copy()
+        if masked.size:
+            masked[0] = np.nan
+        return masked
+
     iters = np.arange(len(hist["target4/p"]))
     fig, axes = plt.subplots(1, 4, figsize=(20, 4))
 
@@ -68,35 +74,70 @@ def save_metric_plot(hist: dict[str, list[float]], output_path: Path) -> None:
 
     axes[1].plot(
         iters,
-        hist["target4/forward_kl"],
+        hide_initial_point(hist["target4/forward_kl"]),
         label="forward KL = KL(target || empirical)",
         color="tab:red",
     )
     axes[1].plot(
         iters,
-        hist["target4/reverse_kl"],
+        hide_initial_point(hist["target4/reverse_kl"]),
         label="reverse KL = KL(empirical || target)",
         color="tab:purple",
     )
-    axes[1].plot(iters, hist["target4/wasserstein"], label="Wasserstein", color="tab:brown")
-    axes[1].plot(iters, hist["target4/sinkhorn"], label="Sinkhorn", color="tab:cyan")
+    axes[1].plot(
+        iters,
+        hide_initial_point(hist["target4/wasserstein"]),
+        label="Wasserstein",
+        color="tab:brown",
+    )
+    axes[1].plot(
+        iters,
+        hide_initial_point(hist["target4/sinkhorn"]),
+        label="Sinkhorn",
+        color="tab:cyan",
+    )
     axes[1].set_title("Target4 distances")
     axes[1].set_xlabel("iteration")
     axes[1].grid(alpha=0.3)
     axes[1].legend()
 
-    axes[2].plot(iters, hist["target4/ess"], label="ESS", color="tab:olive")
-    axes[2].plot(iters, hist["target4/energy_w2"], label="Energy W2", color="tab:brown")
-    axes[2].plot(iters, hist["target4/p_updated"], label="p updated", color="tab:gray")
-    axes[2].plot(iters, hist["target4/p_jumped"], label="p jumped", color="tab:red")
+    axes[2].plot(iters, hide_initial_point(hist["target4/ess"]), label="ESS", color="tab:olive")
+    axes[2].plot(
+        iters,
+        hide_initial_point(hist["target4/energy_w2"]),
+        label="Energy W2",
+        color="tab:brown",
+    )
+    axes[2].plot(
+        iters,
+        hide_initial_point(hist["target4/p_updated"]),
+        label="p updated",
+        color="tab:gray",
+    )
+    axes[2].plot(
+        iters,
+        hide_initial_point(hist["target4/p_jumped"]),
+        label="p jumped",
+        color="tab:red",
+    )
     axes[2].set_title("Target4 ESS / Energy W2")
     axes[2].set_xlabel("iteration")
     axes[2].grid(alpha=0.3)
     axes[2].legend()
 
-    axes[3].plot(iters, hist["target4/optimal_p"], label="optimal p", color="tab:blue")
-    axes[3].plot(iters, hist["target4/target_mean"], label="target mean", color="tab:green")
-    axes[3].plot(iters, hist["target4/p"], label="sampler p", color="tab:orange")
+    axes[3].plot(
+        iters,
+        hide_initial_point(hist["target4/optimal_p"]),
+        label="optimal p",
+        color="tab:blue",
+    )
+    axes[3].plot(
+        iters,
+        hide_initial_point(hist["target4/target_mean"]),
+        label="target mean",
+        color="tab:green",
+    )
+    axes[3].plot(iters, hide_initial_point(hist["target4/p"]), label="sampler p", color="tab:orange")
     axes[3].set_title("Target Boltzmann p")
     axes[3].set_xlabel("iteration")
     axes[3].grid(alpha=0.3)

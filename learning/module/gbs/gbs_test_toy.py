@@ -45,6 +45,12 @@ def plot_target4_contour(ax, lam: float, n: int = 200, gamma: float = 0.45) -> N
 
 
 def save_metric_plot(hist: dict[str, list[float]], output_path: Path) -> None:
+    def hide_initial_point(values: list[float]) -> np.ndarray:
+        masked = np.asarray(values, dtype=np.float64).copy()
+        if masked.size:
+            masked[0] = np.nan
+        return masked
+
     iters = np.arange(len(hist["target4/p"]))
     fig, axes = plt.subplots(1, 5, figsize=(20, 4))
 
@@ -60,13 +66,13 @@ def save_metric_plot(hist: dict[str, list[float]], output_path: Path) -> None:
 
     axes[1].plot(
         iters,
-        hist["target4/forward_kl"],
+        hide_initial_point(hist["target4/forward_kl"]),
         label="forward KL = KL(target || empirical)",
         color="tab:red",
     )
     axes[1].plot(
         iters,
-        hist["target4/reverse_kl"],
+        hide_initial_point(hist["target4/reverse_kl"]),
         label="reverse KL = KL(empirical || target)",
         color="tab:purple",
     )
@@ -78,14 +84,24 @@ def save_metric_plot(hist: dict[str, list[float]], output_path: Path) -> None:
     axes[1].legend()
 
     # axes[2].plot(iters, hist["target4/ess"], label="ESS", color="tab:olive")
-    axes[2].plot(iters, hist["target4/sinkhorn"], label="Sinkhorn", color="tab:cyan")
+    axes[2].plot(
+        iters,
+        hide_initial_point(hist["target4/sinkhorn"]),
+        label="Sinkhorn",
+        color="tab:cyan",
+    )
     # axes[2].plot(iters, hist["target4/p_updated"], label="p updated", color="tab:gray")
     # axes[2].plot(iters, hist["target4/p_jumped"], label="p jumped", color="tab:red")
     axes[2].set_title("Target4 Sinkhorn")
     axes[2].set_xlabel("iteration")
     axes[2].grid(alpha=0.3)
     axes[2].legend()
-    axes[3].plot(iters, hist["target4/energy_w2"], label="Energy W2", color="tab:brown")
+    axes[3].plot(
+        iters,
+        hide_initial_point(hist["target4/energy_w2"]),
+        label="Energy W2",
+        color="tab:brown",
+    )
     axes[3].set_title("Target4 Energy W2")
     axes[3].set_xlabel("iteration")
     axes[3].grid(alpha=0.3)
@@ -116,7 +132,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="GBS toy experiment with dynamic target4.")
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--dim", type=int, default=2, help="Dimension d in lambda = beta * p / d.")
-    parser.add_argument("--iters", type=int, default=4000)
+    parser.add_argument("--iters", type=int, default=400)
     parser.add_argument("--batch_size", type=int, default=128)
     parser.add_argument("--num_steps", type=int, default=100)
     parser.add_argument("--lr", type=float, default=1e-3)
@@ -133,7 +149,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--p_ema_alpha",
         type=float,
-        default=0.9,
+        default=0.99,
         help="EMA coefficient on previous p during scheduled updates.",
     )
     parser.add_argument(
