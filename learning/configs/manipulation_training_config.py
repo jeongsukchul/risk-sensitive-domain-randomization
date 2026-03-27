@@ -115,7 +115,7 @@ def manipulation_ppo_config(
         value_obs_key="privileged_state",
     )
   elif env_name == "PandaRobotiqPushCube":
-    rl_config.num_timesteps = 5_000_000_000
+    rl_config.num_timesteps = 6_000_000_000
     rl_config.num_evals = 10
     rl_config.unroll_length = 100
     rl_config.num_minibatches = 32
