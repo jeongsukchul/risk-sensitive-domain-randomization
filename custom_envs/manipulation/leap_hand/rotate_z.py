@@ -60,6 +60,8 @@ def default_config() -> config_dict.ConfigDict:
       naconmax=30 * 8192,
       naccdmax=30 * 8192,
       njmax=160,
+      scale_for_sampler = 20,
+
   )
 
 
@@ -97,6 +99,7 @@ class CubeRotateZAxis(leap_hand_base.LeapHandEnv):
         config_overrides=config_overrides,
     )
     self._post_init()
+    self.scale_for_sampler = self._config.scale_for_sampler
 
   def _post_init(self) -> None:
     self._hand_qids = mjx_env.get_qpos_ids(self.mj_model, consts.JOINT_NAMES)

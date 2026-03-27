@@ -304,6 +304,7 @@ def train_ppo(cfg:dict, randomization_fn, env, eval_env=None):
         gamma = train_gamma,
         beta = cfg.beta,
         sampler_update_freq =cfg.sampler_update_freq,
+        sample_ratio=getattr(cfg, "sample_ratio", 8),
         n_sampler_iters = cfg.n_sampler_iters,
         sampler_visualization=getattr(cfg, "sampler_visualization", False),
         dr_config_task=cfg.task,

@@ -95,7 +95,7 @@ def default_config():
       naconmax=32 * 8192,
       naccdmax=32 * 8192,
       njmax=256,
-      scale_for_sampler = 50,
+      scale_for_sampler = 100,
   )
 
 

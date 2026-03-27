@@ -61,7 +61,7 @@ def manipulation_ppo_config(
     rl_config.discounting = 0.97
     rl_config.learning_rate = 3e-4
     rl_config.entropy_cost = 1e-2
-    rl_config.num_envs = 1024
+    rl_config.num_envs = 8196
     rl_config.batch_size = 512
     rl_config.network_factory = config_dict.create(
         policy_hidden_layer_sizes=(256, 256, 256, 256),

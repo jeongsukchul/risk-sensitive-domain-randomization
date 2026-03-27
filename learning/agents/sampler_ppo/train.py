@@ -292,6 +292,7 @@ def train(
     sampler_visualization: bool = False,
     dr_config_task: Optional[str] = None,
     sampler_update_freq=10,
+    sample_ratio: int = 8,
     gamma = 0.5,
     beta = 1.0,
     sampler_choice : str = "NODR", #(NODR, UDR, AutoDR, DORAEMON, FLOW_NS, FLOW_REALNVP, GMM, GBS)
@@ -356,6 +357,11 @@ def train(
       local_devices_to_use,
   )
   device_count = local_devices_to_use * process_count
+  if sample_ratio < 1:
+    raise ValueError(f"sample_ratio must be >= 1, got {sample_ratio}")
+  if not float(sample_ratio).is_integer():
+    raise ValueError(f"sample_ratio must be an integer, got {sample_ratio}")
+  sample_ratio = int(sample_ratio)
 
   def make_2d_dynamics_grid(num_points: int):
     # Exact rectangular grid: dim_x * dim_y == num_points.
@@ -409,6 +415,13 @@ def train(
   del global_key
 
   assert num_envs % device_count == 0
+  local_num_envs = num_envs // device_count
+  if local_num_envs % sample_ratio != 0:
+    raise ValueError(
+        "sample_ratio must divide the per-device env batch size: "
+        f"{local_num_envs} % {sample_ratio} != 0"
+    )
+  sampler_batch_size = local_num_envs // sample_ratio
   import copy
   env = copy.deepcopy(environment)
   nominal_dynamics_params_full = jnp.asarray(env.nominal_params)
@@ -576,7 +589,7 @@ def train(
           gbs_init_std=gbs_init_std,
       )
   )
-  gbs_batch_size = num_envs // jax.process_count() // local_devices_to_use
+  gbs_batch_size = sampler_batch_size
 
   if sampler_choice == "GBS":
     gbs_key_fwd, gbs_key_bwd = jax.random.split(gmm_key)
@@ -750,6 +763,21 @@ def train(
         axis=(0, 1),
     )
     return state, data, reset_happened
+
+  def _expand_dynamics_params_for_rollout(
+      dynamics_params: Optional[jnp.ndarray],
+  ) -> Optional[jnp.ndarray]:
+    if dynamics_params is None or sample_ratio == 1:
+      return dynamics_params
+    return jnp.repeat(dynamics_params, sample_ratio, axis=0)
+
+  def _reduce_sample_ratio(x: jnp.ndarray) -> jnp.ndarray:
+    if sample_ratio == 1:
+      return x
+    return jnp.reshape(
+        x, (sampler_batch_size, sample_ratio) + x.shape[1:]
+    ).mean(axis=1)
+
   def training_step(
       carry: Tuple[TrainingState, envs.State, PRNGKey], unused_t
   ) -> Tuple[Tuple[TrainingState, envs.State, PRNGKey], Metrics]:
@@ -758,20 +786,40 @@ def train(
     rewards = None
     gbs_sampler_key = param_key
     if sampler_choice=="NODR":
-      dynamics_params = jnp.ones((num_envs// jax.process_count(), len(dr_range_low))) * nominal_dynamics_params[None, :]
+      sampled_dynamics_params = (
+          jnp.ones((sampler_batch_size, len(dr_range_low)))
+          * nominal_dynamics_params[None, :]
+      )
     elif sampler_choice=="UDR" or sampler_choice=="EPOpt":
-        dynamics_params = jax.random.uniform(param_key, shape=(num_envs //jax.process_count(), len(dr_range_low)), minval=dr_range_low, maxval=dr_range_high)
-        # dynamics_params = state.info["dr_params"] * (1 - state.done[..., None]) + dynamics_params * state.done[..., None]
+        sampled_dynamics_params = jax.random.uniform(
+            param_key,
+            shape=(sampler_batch_size, len(dr_range_low)),
+            minval=dr_range_low,
+            maxval=dr_range_high,
+        )
+        # sampled_dynamics_params = state.info["dr_params"] * (1 - state.done[..., None]) + sampled_dynamics_params * state.done[..., None]
     elif sampler_choice=="AutoDR":
-        dynamics_params = get_adr_sample(training_state.autodr_state, 
-                                num_envs// jax.process_count(),  param_key)
+        sampled_dynamics_params = get_adr_sample(
+            training_state.autodr_state,
+            sampler_batch_size,
+            param_key,
+        )
     elif sampler_choice == "DORAEMON":
         a, b = _unpack_beta(training_state.doraemon_state.x_opt, len(dr_range_low), min_bound, max_bound)
-        dynamics_params = sample_beta_on_box(param_key, a, b, dr_range_low, dr_range_high, num_envs //jax.process_count())
+        sampled_dynamics_params = sample_beta_on_box(
+            param_key,
+            a,
+            b,
+            dr_range_low,
+            dr_range_high,
+            sampler_batch_size,
+        )
     elif "FLOW" in sampler_choice:
       flow_model = nnx.merge(samplerppo_network.flow_network, training_state.flow_state)
-      dynamics_params, logp = flow_model.sample((num_envs // jax.process_count() // local_devices_to_use,),\
-                                                    rng=param_key)    
+      sampled_dynamics_params, logp = flow_model.sample(
+          (sampler_batch_size,),
+          rng=param_key,
+      )
         
     elif sampler_choice == "GBS":
       fwd_state, bwd_state = training_state.flow_state
@@ -788,17 +836,23 @@ def train(
           gbs_sde_ctrl_dropout,
           gbs_center,
       )
-      dynamics_params = (
+      sampled_dynamics_params = (
           gbs_to_box(dynamics_params_latent)
           if gbs_use_tanh_bijection
           else dynamics_params_latent
       )
 
     elif sampler_choice == "GMM":
-        dynamics_params, mapping = samplerppo_network.gmm_network.model.sample(\
-          training_state.gmm_training_state.model_state.gmm_state, param_key, num_envs //jax.process_count())
+        sampled_dynamics_params, mapping = samplerppo_network.gmm_network.model.sample(
+          training_state.gmm_training_state.model_state.gmm_state,
+          param_key,
+          sampler_batch_size,
+        )
     else:
       raise ValueError("No Sampler Available")
+    rollout_dynamics_params = _expand_dynamics_params_for_rollout(
+        sampled_dynamics_params
+    )
     prev_dynamics_params = state.info.get('dr_params', None)
     # #for debugging
     # dynamics_params = (dr_range_low + dr_range_high)/2 +\
@@ -806,21 +860,23 @@ def train(
     #     * (dr_range_high - dr_range_low)/100
     # dynamics_params = jnp.clip(dynamics_params, dr_range_low, dr_range_high)
 
-    state, data, reset_happened = get_experience(training_state, state, dynamics_params,\
+    state, data, reset_happened = get_experience(training_state, state, rollout_dynamics_params,\
             key_generate_unroll, unroll_length, batch_size * num_minibatches // num_envs if sampler_choice!="EPOpt" else int(batch_size * num_minibatches/epsilon //num_envs) ,)
     if (
         dr_spec is None
-        and dynamics_params is not None
+        and rollout_dynamics_params is not None
         and prev_dynamics_params is not None
         and reset_param_size > 0
     ):
       model_params = prev_dynamics_params[..., :-reset_param_size]
       reset_params = jnp.where(
           reset_happened[..., None],
-          dynamics_params[..., -reset_param_size:],
+          rollout_dynamics_params[..., -reset_param_size:],
           prev_dynamics_params[..., -reset_param_size:],
       )
-      dynamics_params = jnp.concatenate([model_params, reset_params], axis=-1)
+      rollout_dynamics_params = jnp.concatenate(
+          [model_params, reset_params], axis=-1
+      )
     # obs_for_approx = jax.tree_util.tree_map(lambda x: x.reshape(-1, *x.shape[2:]), data.observation)
     # value_approx = samplerppo_network.value_network.apply(training_state.normalizer_params, training_state.params.value, obs_for_approx)
     # value_approx =value_approx.mean(0) / 2 / episode_length
@@ -884,6 +940,12 @@ def train(
         episode_returns=episode_returns,
         episode_lengths=rollout_episode_lengths,
     )
+    mean_partial_episode_return = _reduce_sample_ratio(
+        mean_partial_episode_return
+    )
+    mean_partial_episode_reward_rate = _reduce_sample_ratio(
+        mean_partial_episode_reward_rate
+    )
     print("mean_partial_episode_reward_rate", mean_partial_episode_reward_rate)
     values = mean_partial_episode_reward_rate if sampler_choice!="EPOpt" else 0
     cumulated_values += values
@@ -936,7 +998,7 @@ def train(
         fs, fos, prev_sample_carry, prev_logp_carry = carry
         (loss, fs_n, fos_n), (metric, current_sample, current_logq) = flow_update_fn(
             samplerppo_network.flow_network, fs, fos,
-            dynamics_params,
+            sampled_dynamics_params,
             prev_sample_carry,
             
             prev_logp_carry,
@@ -960,15 +1022,25 @@ def train(
       )
       return ((fwd_state_new, bwd_state_new), 1.)
     def update_adr(autodr_state, returns):
-      return (autodr_update_fn(autodr_state, dynamics_params, returns, key_update), 1.)
+      return (
+          autodr_update_fn(
+              autodr_state, sampled_dynamics_params, returns, key_update
+          ),
+          1.,
+      )
     def update_doraemon(doraemon_state, returns):
-      return (doraemon_update_fn(doraemon_state, dynamics_params, returns), 1.)
+      return (
+          doraemon_update_fn(
+              doraemon_state, sampled_dynamics_params, returns
+          ),
+          1.,
+      )
 
     def update_gmm(gts):
       target_lnpdf = _beta * cumulated_values/sampler_update_freq
       new_sample_db_state = samplerppo_network.gmm_network.sample_selector.save_samples(gts.model_state, \
-                    gts.sample_db_state, dynamics_params, target_lnpdf, \
-                      jnp.zeros_like(dynamics_params), mapping)
+                    gts.sample_db_state, sampled_dynamics_params, target_lnpdf, \
+                      jnp.zeros_like(sampled_dynamics_params), mapping)
       new_gmm_training_state = gts._replace(sample_db_state=new_sample_db_state)
       new_gmm_training_state = gmm_update_fn(new_gmm_training_state, key_update)
 
@@ -1061,7 +1133,7 @@ def train(
   ) -> Tuple[TrainingState, envs.State, Metrics]:
     (training_state, state, _, _), loss_metrics = jax.lax.scan(
         training_step,
-        (training_state, state, jnp.zeros(num_envs//jax.process_count()), key),
+        (training_state, state, jnp.zeros(sampler_batch_size), key),
         (),
         length=num_training_steps_per_epoch,
     )
