@@ -30,7 +30,6 @@ def configure_jax_runtime(
 
     os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "3")
     os.environ.setdefault("GLOG_minloglevel", "2")
-
     enable_triton = _env_flag_enabled(
         "RSDR_ENABLE_TRITON_GEMM",
         default=default_enable_triton_gemm,

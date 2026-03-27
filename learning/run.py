@@ -25,6 +25,7 @@ from agents.td3 import train as td3
 from etils import epath
 from flax.training import orbax_utils
 import jax
+jax.config.update("jax_default_matmul_precision", "highest")
 from mujoco import mjx
 import numpy as np
 from orbax import checkpoint as ocp

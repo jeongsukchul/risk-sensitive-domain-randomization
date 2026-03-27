@@ -153,7 +153,7 @@ def manipulation_ppo_config(
     )
   elif env_name == "LeapCubeReorient":
     rl_config.num_timesteps = 400_000_000
-    rl_config.num_evals = 20
+    rl_config.num_evals = 10
     rl_config.num_minibatches = 32
     rl_config.unroll_length = 40
     rl_config.num_updates_per_batch = 4
