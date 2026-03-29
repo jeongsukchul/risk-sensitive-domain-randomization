@@ -1400,8 +1400,8 @@ def train(
       fig, ax = plt.subplots()
       ax = plot_adr_density_2d(
                 adr_state=_unpmap(training_state.autodr_state),
-                domain_low=low,
-                domain_high=high,
+                domain_low=dr_range_low,
+                domain_high=dr_range_high,
                 key=sample_key,
                 dim_x=0,
                 dim_y=1,
@@ -1429,9 +1429,9 @@ def train(
       # )
       a, b = _unpack_beta(_unpmap(training_state.doraemon_state.x_opt), len(dr_range_low), min_bound, max_bound)
       
-      dynamics_params_doraemon = sample_beta_on_box(sample_key, a, b, low, high, num_envs //jax.process_count())
+      dynamics_params_doraemon = sample_beta_on_box(sample_key, a, b, dr_range_low, dr_range_high, num_envs //jax.process_count())
       ax = plot_beta_density_2d(
-                _unpmap(training_state.doraemon_state), low, high, len(low), 0.8, 110.,
+                _unpmap(training_state.doraemon_state), dr_range_low, dr_range_high, len(dr_range_low), 0.8, 110.,
                 title=f"Doraemon Result [step={int(current_step)}]",
                 contexts=dynamics_params_doraemon, success_threshold=success_threshold,
                 ax=ax,
@@ -1649,8 +1649,8 @@ def train(
           num_samples_bench = num_eval_envs
           if sampler_choice=="DORAEMON":
             a, b = _unpack_beta(_unpmap(training_state.doraemon_state.x_opt), len(dr_range_low), min_bound, max_bound)
-            samples = sample_beta_on_box(metric_key, a, b, low, high, num_samples_bench)
-            logq = _log_prob_beta_on_box(a, b, low, high, samples)
+            samples = sample_beta_on_box(metric_key, a, b, dr_range_low, dr_range_high, num_samples_bench)
+            logq = _log_prob_beta_on_box(a, b, dr_range_low, dr_range_high, samples)
           elif "FLOW" in sampler_choice:
             flow_model = nnx.merge(samplerppo_network.flow_network, _unpmap(training_state.flow_state))
             samples, logq = flow_model.sample( (num_samples_bench,), metric_key)
@@ -1769,8 +1769,8 @@ def train(
           fig, ax = plt.subplots()
           ax = plot_adr_density_2d(
                     adr_state=_unpmap(training_state.autodr_state),
-                    domain_low=low,
-                    domain_high=high,
+                    domain_low=dr_range_low,
+                    domain_high=dr_range_high,
                     key=sample_key,
                     dim_x=0,
                     dim_y=1,
@@ -1799,9 +1799,9 @@ def train(
           # )
           a, b = _unpack_beta(_unpmap(training_state.doraemon_state.x_opt), len(dr_range_low), min_bound, max_bound)
           
-          dynamics_params_doraemon = sample_beta_on_box(sample_key, a, b, low, high, num_envs //jax.process_count())
+          dynamics_params_doraemon = sample_beta_on_box(sample_key, a, b, dr_range_low, dr_range_high, num_envs //jax.process_count())
           ax = plot_beta_density_2d(
-                    _unpmap(training_state.doraemon_state), low, high, len(low), 0.8, 110.,
+                    _unpmap(training_state.doraemon_state), dr_range_low, dr_range_high, len(dr_range_low), 0.8, 110.,
                     title=f"Doraemon Result [step={int(current_step)}]",
                     contexts=dynamics_params_doraemon, success_threshold=success_threshold,
                     ax=ax,

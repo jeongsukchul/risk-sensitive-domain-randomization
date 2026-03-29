@@ -20,6 +20,7 @@ from learning.module.gbs.gbs_trainer import make_gbs_model
 from learning.module.gbs.sinkhorn_metrics import (
     energy_wasserstein_1d,
     effective_sample_size_from_log_weights,
+    interatomic_wasserstein_1d,
     sinkhorn_distance,
 )
 
@@ -301,6 +302,7 @@ def run_gbs_toy_target4(
             "target4/sinkhorn": [],
             "target4/ess": [],
             "target4/energy_w2": [],
+            "target4/interatomic_w2": [],
             "target4/target_mean": [],
             "target4/optimal_p": [],
             "target4/p_updated": [],
@@ -355,6 +357,13 @@ def run_gbs_toy_target4(
             energy_wasserstein_1d(
                 xT[:n_sink],
                 sinkhorn_target[:n_sink],
+                current_lambda,
+            )
+        )
+        interatomic_w2 = float(
+            interatomic_wasserstein_1d(
+                xT[:n_sink],
+                sinkhorn_target[:n_sink],
                 n_particles=n_particles,
                 n_spatial_dim=n_spatial_dim,
             )
@@ -370,6 +379,7 @@ def run_gbs_toy_target4(
         hist["target4/sinkhorn"].append(sinkhorn)
         hist["target4/ess"].append(ess)
         hist["target4/energy_w2"].append(energy_w2)
+        hist["target4/interatomic_w2"].append(interatomic_w2)
         hist["target4/target_mean"].append(target_mean)
         hist["target4/optimal_p"].append(optimal_p)
         should_update_p = p_update_freq > 0 and ((t + 1) % p_update_freq == 0)

@@ -26,6 +26,7 @@ from learning.module.gbs.target4_notebook_utils import (
 from learning.module.gbs.sinkhorn_metrics import (
     energy_wasserstein_1d,
     effective_sample_size_from_log_weights,
+    interatomic_wasserstein_1d,
     sinkhorn_distance,
 )
 
@@ -50,6 +51,36 @@ def plot_target4_contour(ax, lam: float, n: int = 200, gamma: float = 0.45) -> N
     ax.set_xlim(0.0, 1.0)
     ax.set_ylim(0.0, 1.0)
     ax.set_aspect("equal")
+
+
+def format_run_hparams(args: argparse.Namespace) -> str:
+    return (
+        f"seed={args.seed}, dim={args.dim}, iters={args.iters}, envs={args.num_envs}, "
+        f"batch={args.batch_size}, "
+        f"beta={args.beta:g}, tau={args.tau:g}, p_freq={args.p_update_freq}, "
+        f"ema={args.p_ema_alpha:g}"
+    )
+
+
+def build_run_tag(args: argparse.Namespace) -> str:
+    def sanitize(value: object) -> str:
+        return str(value).replace("-", "m").replace(".", "p")
+
+    parts = [
+        f"seed{sanitize(args.seed)}",
+        f"d{sanitize(args.dim)}",
+        f"T{sanitize(args.iters)}",
+        f"envs{sanitize(args.num_envs)}",
+        f"bs{sanitize(args.batch_size)}",
+        f"eval{sanitize(args.n_eval_samples)}",
+        f"prior{sanitize(args.prior_scale)}",
+        f"beta{sanitize(args.beta)}",
+        f"tau{sanitize(args.tau)}",
+        f"pf{sanitize(args.p_update_freq)}",
+        f"ema{sanitize(args.p_ema_alpha)}",
+        f"jump{sanitize(args.p_jump_prob)}",
+    ]
+    return "_".join(parts)
 
 
 def save_metric_plot(hist: dict[str, list[float]], output_path: Path) -> None:
@@ -139,7 +170,7 @@ def save_final_sample_plot(samples: np.ndarray, lam: float, output_path: Path) -
     fig, ax = plt.subplots(1, 1, figsize=(5, 5))
     plot_target4_contour(ax, lam=lam)
     ax.scatter(samples[:, 0], samples[:, 1], s=2, alpha=0.2, c="r")
-    ax.set_title(f"Final samples vs target4 (lambda={lam:.4f})")
+    ax.set_title(f"GMMVI final samples vs target4 (lambda={lam:.4f})")
     fig.tight_layout()
     fig.savefig(output_path.as_posix(), dpi=150)
     plt.close(fig)
@@ -253,14 +284,14 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="GMMVI toy experiment with dynamic target4.")
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--dim", type=int, default=2, help="Dimension d in lambda = beta * p / d.")
-    parser.add_argument("--iters", type=int, default=2000)
-    parser.add_argument("--num_envs", type=int, default=512)
-    parser.add_argument("--batch_size", type=int, default=512)
+    parser.add_argument("--iters", type=int, default=400)
+    parser.add_argument("--num_envs", type=int, default=1024)
+    parser.add_argument("--batch_size", type=int, default=1024)
     parser.add_argument("--n_eval_samples", type=int, default=4096)
     parser.add_argument("--prior_scale", type=float, default=0.5)
     parser.add_argument("--beta", type=float, default=10.0)
-    parser.add_argument("--tau", type=float, default=0.10)
-    parser.add_argument("--initial_p", type=float, default=None)
+    parser.add_argument("--tau", type=float, default=1.)
+    parser.add_argument("--initial_p", type=float, default=0.8)
     parser.add_argument(
         "--p_update_freq",
         type=int,
@@ -270,7 +301,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--p_ema_alpha",
         type=float,
-        default=0.9,
+        default=0.99,
         help="EMA coefficient on previous p during scheduled updates.",
     )
     parser.add_argument(
@@ -292,6 +323,7 @@ def main() -> None:
     args = parse_args()
     save_dir = Path(args.save_dir)
     save_dir.mkdir(parents=True, exist_ok=True)
+    run_tag = build_run_tag(args)
 
     low = jnp.zeros(args.dim)
     high = jnp.ones(args.dim)
@@ -332,6 +364,7 @@ def main() -> None:
         "target4/sinkhorn": [],
         "target4/ess": [],
         "target4/energy_w2": [],
+        "target4/interatomic_w2": [],
         "target4/target_mean": [],
         "target4/optimal_p": [],
         "target4/p_updated": [],
@@ -370,6 +403,13 @@ def main() -> None:
             energy_wasserstein_1d(
                 samples_jax[:n_sink],
                 sinkhorn_target[:n_sink],
+                current_lambda,
+            )
+        )
+        interatomic_w2 = float(
+            interatomic_wasserstein_1d(
+                samples_jax[:n_sink],
+                sinkhorn_target[:n_sink],
                 n_particles=args.n_particles,
                 n_spatial_dim=args.n_spatial_dim,
             )
@@ -385,6 +425,7 @@ def main() -> None:
         hist["target4/sinkhorn"].append(sinkhorn)
         hist["target4/ess"].append(ess)
         hist["target4/energy_w2"].append(energy_w2)
+        hist["target4/interatomic_w2"].append(interatomic_w2)
         hist["target4/target_mean"].append(target_mean)
         hist["target4/optimal_p"].append(optimal_p)
         hist["model/num_components"].append(int(state.model_state.gmm_state.num_components))
@@ -409,9 +450,13 @@ def main() -> None:
 
     key, k_final = jax.random.split(key)
     x_final = np.asarray(sample_model(state, k_final, 2**14))
-    np.save((save_dir / "gmmvi_samples.npy").as_posix(), x_final)
+    samples_path = save_dir / f"gmmvi_samples_{run_tag}.npy"
+    history_path = save_dir / f"gmmvi_target4_history_{run_tag}.npz"
+    metrics_path = save_dir / f"gmmvi_target4_metrics_{run_tag}.png"
+    final_samples_path = save_dir / f"gmmvi_target4_final_samples_{run_tag}.png"
+    np.save(samples_path.as_posix(), x_final)
     np.savez(
-        (save_dir / "gmmvi_target4_history.npz").as_posix(),
+        history_path.as_posix(),
         **{k: np.asarray(v, dtype=np.float64) for k, v in hist.items()},
     )
 
@@ -425,9 +470,9 @@ def main() -> None:
     final_energy_w2 = float(hist["target4/energy_w2"][-1])
     final_optimal_p = float(hist["target4/optimal_p"][-1])
 
-    save_metric_plot(hist, save_dir / "gmmvi_target4_metrics.png")
+    save_metric_plot(hist, metrics_path)
     if args.dim >= 2:
-        save_final_sample_plot(x_final, final_lambda, save_dir / "gmmvi_target4_final_samples.png")
+        save_final_sample_plot(x_final, final_lambda, final_samples_path)
 
     print(f"Saved outputs to: {save_dir}")
     print(f"dimension d: {args.dim}")
@@ -446,7 +491,7 @@ def main() -> None:
     print(f"final num components: {hist['model/num_components'][-1]}")
 
     if args.show:
-        metrics = plt.imread((save_dir / "gmmvi_target4_metrics.png").as_posix())
+        metrics = plt.imread(metrics_path.as_posix())
         plt.figure(figsize=(12, 4))
         plt.imshow(metrics)
         plt.axis("off")
