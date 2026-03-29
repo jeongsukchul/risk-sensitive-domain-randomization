@@ -11,6 +11,7 @@ import numpy as np
 from learning.module.gbs.sinkhorn_metrics import (
     energy_wasserstein_1d,
     effective_sample_size_from_log_weights,
+    interatomic_wasserstein_1d,
     sinkhorn_distance,
 )
 from learning.module.gbs.target4_notebook_utils import (
@@ -81,14 +82,20 @@ def _target_metrics(
         "ess": float(ess),
     }
 
+    energy_w2 = energy_wasserstein_1d(
+        jnp.asarray(samples[:n_sink]),
+        ref,
+        lam,
+    )
+    metrics["energy_w2"] = float(energy_w2)
     if n_particles is not None and n_particles > 1:
-        energy_w2 = energy_wasserstein_1d(
+        interatomic_w2 = interatomic_wasserstein_1d(
             jnp.asarray(samples[:n_sink]),
             ref,
             n_particles=n_particles,
             n_spatial_dim=n_spatial_dim,
         )
-        metrics["energy_w2"] = float(energy_w2)
+        metrics["interatomic_w2"] = float(interatomic_w2)
 
     optimal_p, target_mean = optimal_p_from_target_mean(lam, tau=0.10)
     metrics["target_mean"] = float(target_mean)

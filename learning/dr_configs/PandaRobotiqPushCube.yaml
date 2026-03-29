@@ -1,8 +1,8 @@
 task: PandaRobotiqPushCube
 
 parameters:
-  - {name: finger_friction, group: dynamics, low: 0.3, high: 6., learnable: true}
-  - {name: object_friction, group: dynamics, low: 0.3, high: 6., learnable: true}
+  - {name: finger_friction, group: dynamics, low: 0.3, high: 8., learnable: true}
+  - {name: object_friction, group: dynamics, low: 0.3, high: 8., learnable: true}
   - {name: object_mass_scale, group: dynamics, low: 0.3, high: 10., learnable: true}
   - {name: object_ipos_x, group: dynamics, low: -0.01, high: 0.01, learnable: true}
   - {name: object_ipos_y, group: dynamics, low: -0.01, high: 0.01, learnable: true}

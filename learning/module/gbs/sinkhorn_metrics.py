@@ -138,8 +138,15 @@ def emd2_1d_uniform(x: jax.Array, y: jax.Array) -> jax.Array:
     return jnp.mean((x - y) ** 2)
 
 
+@jax.jit
+def target4_energy_values(samples: jax.Array, lam: jax.Array) -> jax.Array:
+    samples = jnp.asarray(samples, dtype=jnp.float32)
+    lam = jnp.asarray(lam, dtype=jnp.float32)
+    return lam * jnp.sum(samples, axis=-1)
+
+
 @functools.partial(jax.jit, static_argnames=("n_particles", "n_spatial_dim"))
-def energy_wasserstein_1d(
+def interatomic_wasserstein_1d(
     samples: jax.Array,
     ref_samples: jax.Array,
     n_particles: int,
@@ -148,3 +155,14 @@ def energy_wasserstein_1d(
     gen_dist = interatomic_dist(samples, n_particles=n_particles, n_spatial_dim=n_spatial_dim)
     ref_dist = interatomic_dist(ref_samples, n_particles=n_particles, n_spatial_dim=n_spatial_dim)
     return emd2_1d_uniform(gen_dist, ref_dist)
+
+
+@jax.jit
+def energy_wasserstein_1d(
+    samples: jax.Array,
+    ref_samples: jax.Array,
+    lam: jax.Array,
+) -> jax.Array:
+    gen_energy = target4_energy_values(samples, lam)
+    ref_energy = target4_energy_values(ref_samples, lam)
+    return emd2_1d_uniform(gen_energy, ref_energy)
