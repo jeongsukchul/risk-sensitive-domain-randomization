@@ -130,6 +130,12 @@ def _apply_fixed_dynamics_params(eval_env, randomizer_eval, dynamics_params):
         eval_env.unwrapped._mjx_model = new_model
     return eval_env
 
+
+def _identity_domain_randomizer(model, dr_range, params=None, rng=None):
+    del dr_range, params, rng
+    in_axes = jax.tree_util.tree_map(lambda _: None, model)
+    return model, in_axes
+
 def _extract_single_trajectory(trajectory, batch_index, batch_size):
     def _select_leaf(x):
         if not hasattr(x, "shape"):
@@ -145,33 +151,31 @@ def _extract_single_trajectory(trajectory, batch_index, batch_size):
     ]
 
 
-def _stack_render_data(trajectory):
-    render_leaves = [
-        {
-            "qpos": state.data.qpos,
-            "qvel": state.data.qvel,
-            "mocap_pos": state.data.mocap_pos,
-            "mocap_quat": state.data.mocap_quat,
-            "xfrc_applied": state.data.xfrc_applied,
-        }
-        for state in trajectory
-    ]
-    return jax.tree_util.tree_map(lambda *xs: jnp.stack(xs, axis=0), *render_leaves)
+def _extract_render_data(state):
+    data = state.data
+    return {
+        "qpos": data.qpos,
+        "qvel": data.qvel,
+        "mocap_pos": data.mocap_pos,
+        "mocap_quat": data.mocap_quat,
+        "xfrc_applied": data.xfrc_applied,
+    }
 
 
-def _build_render_rollouts_from_batched_trajectory(trajectory):
-    host_data = jax.device_get(_stack_render_data(trajectory))
-    time_steps, batch_size = host_data["qpos"].shape[:2]
+def _build_render_rollouts_from_host_data(render_steps):
+    time_steps = len(render_steps)
+    batch_size = render_steps[0]["qpos"].shape[0]
     rollouts = []
     for batch_index in range(batch_size):
         rollout = []
         for t in range(time_steps):
+            step_data = render_steps[t]
             render_data = SimpleNamespace(
-                qpos=np.asarray(host_data["qpos"][t, batch_index]),
-                qvel=np.asarray(host_data["qvel"][t, batch_index]),
-                mocap_pos=np.asarray(host_data["mocap_pos"][t, batch_index]),
-                mocap_quat=np.asarray(host_data["mocap_quat"][t, batch_index]),
-                xfrc_applied=np.asarray(host_data["xfrc_applied"][t, batch_index]),
+                qpos=np.asarray(step_data["qpos"][batch_index]),
+                qvel=np.asarray(step_data["qvel"][batch_index]),
+                mocap_pos=np.asarray(step_data["mocap_pos"][batch_index]),
+                mocap_quat=np.asarray(step_data["mocap_quat"][batch_index]),
+                xfrc_applied=np.asarray(step_data["xfrc_applied"][batch_index]),
             )
             rollout.append(SimpleNamespace(data=render_data))
         rollouts.append(rollout)
@@ -250,7 +254,7 @@ def train_ppo(cfg:dict, randomization_fn, env, eval_env=None):
         #     wandb_name+=f".adv_wrapper={cfg.adv_wrapper}"#dr_train_ratio={cfg.dr_train_ratio}"
     else:
         wandb_name = f"{cfg.task}.{cfg.policy}.{cfg.seed}.asym={cfg.asymmetric_critic}.final_rand={cfg.final_randomization}"
-    if cfg.custom_wrapper:
+    if cfg.custom_wrapper and cfg.randomization:
         randomizer = registry.get_domain_randomizer_eval(cfg.task)
     else:
         randomizer = randomization_fn
@@ -389,7 +393,7 @@ def train_td3(cfg:dict, randomization_fn, env, eval_env=None):
         #     wandb_name+=f".adv_wrapper={cfg.adv_wrapper}"#dr_train_ratio={cfg.dr_train_ratio}"
     else:
         wandb_name = f"{cfg.task}.{cfg.policy}.{cfg.seed}.asym={cfg.asymmetric_critic}.final_rand={cfg.final_randomization}"
-    if cfg.custom_wrapper:
+    if cfg.custom_wrapper and cfg.randomization:
         randomizer = registry.get_domain_randomizer_eval(cfg.task)
     else:
         randomizer = randomization_fn
@@ -590,9 +594,17 @@ def train(cfg: dict):
     
     env = registry.load(cfg.task, config=env_cfg)
 
+    use_reset_only_randomization = (
+        (not cfg.randomization)
+        and getattr(env, "reset_param_size", 0) > 0
+        and getattr(env_cfg, "reset_randomization_in_domain_randomization", False)
+    )
+
     if cfg.randomization:
         randomizer = registry.get_domain_randomizer(cfg.task)
         randomization_fn = randomizer
+    elif use_reset_only_randomization:
+        randomization_fn = _identity_domain_randomizer
     else:
         randomization_fn = None 
 
@@ -692,7 +704,7 @@ def train(cfg: dict):
                 reset_rng, rng = jax.random.split(rng)
                 reset_keys = jax.random.split(reset_rng, len(percentile_levels))
                 state = jit_batched_reset(reset_keys)
-                batched_trajectory = [state]
+                render_steps = [jax.device_get(_extract_render_data(state))]
                 reward_batch = np.array(
                     jax.device_get(state.reward), dtype=np.float32, copy=True
                 )
@@ -704,12 +716,10 @@ def train(cfg: dict):
                     reward_batch += np.array(
                         jax.device_get(state.reward), dtype=np.float32, copy=True
                     )
-                    batched_trajectory.append(state)
+                    render_steps.append(jax.device_get(_extract_render_data(state)))
 
                 reward_list = reward_batch.tolist()
-                batched_rollouts = _build_render_rollouts_from_batched_trajectory(
-                    batched_trajectory
-                )
+                batched_rollouts = _build_render_rollouts_from_host_data(render_steps)
                 for rollout in batched_rollouts:
                     frames_i = eval_env.render(rollout, camera=CAMERAS[cfg.task])
                     rollout_frames.append(frames_i)
