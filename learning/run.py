@@ -145,6 +145,39 @@ def _extract_single_trajectory(trajectory, batch_index, batch_size):
     ]
 
 
+def _stack_render_data(trajectory):
+    render_leaves = [
+        {
+            "qpos": state.data.qpos,
+            "qvel": state.data.qvel,
+            "mocap_pos": state.data.mocap_pos,
+            "mocap_quat": state.data.mocap_quat,
+            "xfrc_applied": state.data.xfrc_applied,
+        }
+        for state in trajectory
+    ]
+    return jax.tree_util.tree_map(lambda *xs: jnp.stack(xs, axis=0), *render_leaves)
+
+
+def _build_render_rollouts_from_batched_trajectory(trajectory):
+    host_data = jax.device_get(_stack_render_data(trajectory))
+    time_steps, batch_size = host_data["qpos"].shape[:2]
+    rollouts = []
+    for batch_index in range(batch_size):
+        rollout = []
+        for t in range(time_steps):
+            render_data = SimpleNamespace(
+                qpos=np.asarray(host_data["qpos"][t, batch_index]),
+                qvel=np.asarray(host_data["qvel"][t, batch_index]),
+                mocap_pos=np.asarray(host_data["mocap_pos"][t, batch_index]),
+                mocap_quat=np.asarray(host_data["mocap_quat"][t, batch_index]),
+                xfrc_applied=np.asarray(host_data["xfrc_applied"][t, batch_index]),
+            )
+            rollout.append(SimpleNamespace(data=render_data))
+        rollouts.append(rollout)
+    return rollouts
+
+
 def _build_wandb_config(cfg):
     config = OmegaConf.to_container(cfg, resolve=True)
     if isinstance(config, dict):
@@ -155,11 +188,11 @@ def _build_wandb_config(cfg):
 def _snapshot_render_state(state):
     data = state.data
     render_data = SimpleNamespace(
-        qpos=np.asarray(jax.device_get(data.qpos)),
-        qvel=np.asarray(jax.device_get(data.qvel)),
-        mocap_pos=np.asarray(jax.device_get(data.mocap_pos)),
-        mocap_quat=np.asarray(jax.device_get(data.mocap_quat)),
-        xfrc_applied=np.asarray(jax.device_get(data.xfrc_applied)),
+        qpos=np.asarray(data.qpos),
+        qvel=np.asarray(data.qvel),
+        mocap_pos=np.asarray(data.mocap_pos),
+        mocap_quat=np.asarray(data.mocap_quat),
+        xfrc_applied=np.asarray(data.xfrc_applied),
     )
     return SimpleNamespace(data=render_data)
 
@@ -333,7 +366,7 @@ def train_ppo(cfg:dict, randomization_fn, env, eval_env=None):
         gbs_sigma_const=getattr(cfg, "gbs_sigma_const", 1.0),
         gbs_vp_diff_coeff_sq_min=getattr(cfg, "gbs_vp_diff_coeff_sq_min", 0.1),
         gbs_vp_diff_coeff_sq_max=getattr(cfg, "gbs_vp_diff_coeff_sq_max", 10.0),
-        gbs_vp_scale_diff_coeff=getattr(cfg, "gbs_vp_scale_diff_coeff", 1.0),
+        gbs_vp_scale_diff_coeff=getattr(cfg, "gbs_vp_scale_diff_coeff", .7),
         gbs_terminal_t=getattr(cfg, "gbs_terminal_t", 1.0),
         gbs_include_base_drift=getattr(cfg, "gbs_include_base_drift", True),
     )
@@ -659,6 +692,7 @@ def train(cfg: dict):
                 reset_rng, rng = jax.random.split(rng)
                 reset_keys = jax.random.split(reset_rng, len(percentile_levels))
                 state = jit_batched_reset(reset_keys)
+                batched_trajectory = [state]
                 reward_batch = np.array(
                     jax.device_get(state.reward), dtype=np.float32, copy=True
                 )
@@ -670,28 +704,13 @@ def train(cfg: dict):
                     reward_batch += np.array(
                         jax.device_get(state.reward), dtype=np.float32, copy=True
                     )
+                    batched_trajectory.append(state)
 
                 reward_list = reward_batch.tolist()
-
-                for dyn_params in percentile_params:
-                    percentile_env = registry.load(cfg.task, config=env_cfg)
-                    percentile_env = _apply_fixed_dynamics_params(
-                        percentile_env,
-                        randomizer_eval,
-                        dyn_params,
-                    )
-                    jit_reset = jax.jit(percentile_env.reset)
-                    jit_step = jax.jit(percentile_env.step)
-                    reset_rng, rng = jax.random.split(rng)
-                    state = jit_reset(reset_rng)
-                    rollout = [_snapshot_render_state(state)]
-
-                    for _ in range(env_cfg.episode_length):
-                        act_rng, rng = jax.random.split(rng)
-                        action, _ = jit_policy_fn(state.obs, act_rng)
-                        state = jit_step(state, action)
-                        rollout.append(_snapshot_render_state(state))
-
+                batched_rollouts = _build_render_rollouts_from_batched_trajectory(
+                    batched_trajectory
+                )
+                for rollout in batched_rollouts:
                     frames_i = eval_env.render(rollout, camera=CAMERAS[cfg.task])
                     rollout_frames.append(frames_i)
             else:
