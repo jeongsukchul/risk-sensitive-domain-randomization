@@ -1,8 +1,8 @@
 task: LeapCubeReorient
 
 parameters:
-  - {name: fingertip_friction, group: dynamics, low: 0.5, high: 2.0, learnable: true}
-  - {name: cube_mass_scale, group: dynamics, low: 0.5, high: 2., learnable: true}
+  - {name: fingertip_friction, group: dynamics, low: 0.4, high: 3.0, learnable: true}
+  - {name: cube_mass_scale, group: dynamics, low: 0.4, high: 3., learnable: true}
   - {name: cube_ipos_x, group: dynamics, low: -0.005, high: 0.005, learnable: true}
   - {name: cube_ipos_y, group: dynamics, low: -0.005, high: 0.005, learnable: true}
   - {name: cube_ipos_z, group: dynamics, low: -0.005, high: 0.005, learnable: true}
@@ -71,38 +71,38 @@ parameters:
   - {name: hand_mass_scale_14, group: dynamics, low: 0.7, high: 1.3, learnable: true}
   - {name: hand_mass_scale_15, group: dynamics, low: 0.7, high: 1.3, learnable: true}
   - {name: hand_mass_scale_16, group: dynamics, low: 0.7, high: 1.3, learnable: true}
-  - {name: kp_scale_00, group: dynamics, low: 0.8, high: 1.2, learnable: true}
-  - {name: kp_scale_01, group: dynamics, low: 0.8, high: 1.2, learnable: true}
-  - {name: kp_scale_02, group: dynamics, low: 0.8, high: 1.2, learnable: true}
-  - {name: kp_scale_03, group: dynamics, low: 0.8, high: 1.2, learnable: true}
-  - {name: kp_scale_04, group: dynamics, low: 0.8, high: 1.2, learnable: true}
-  - {name: kp_scale_05, group: dynamics, low: 0.8, high: 1.2, learnable: true}
-  - {name: kp_scale_06, group: dynamics, low: 0.8, high: 1.2, learnable: true}
-  - {name: kp_scale_07, group: dynamics, low: 0.8, high: 1.2, learnable: true}
-  - {name: kp_scale_08, group: dynamics, low: 0.8, high: 1.2, learnable: true}
-  - {name: kp_scale_09, group: dynamics, low: 0.8, high: 1.2, learnable: true}
-  - {name: kp_scale_10, group: dynamics, low: 0.8, high: 1.2, learnable: true}
-  - {name: kp_scale_11, group: dynamics, low: 0.8, high: 1.2, learnable: true}
-  - {name: kp_scale_12, group: dynamics, low: 0.8, high: 1.2, learnable: true}
-  - {name: kp_scale_13, group: dynamics, low: 0.8, high: 1.2, learnable: true}
-  - {name: kp_scale_14, group: dynamics, low: 0.8, high: 1.2, learnable: true}
-  - {name: kp_scale_15, group: dynamics, low: 0.8, high: 1.2, learnable: true}
-  - {name: kd_scale_00, group: dynamics, low: 0.8, high: 1.2, learnable: true}
-  - {name: kd_scale_01, group: dynamics, low: 0.8, high: 1.2, learnable: true}
-  - {name: kd_scale_02, group: dynamics, low: 0.8, high: 1.2, learnable: true}
-  - {name: kd_scale_03, group: dynamics, low: 0.8, high: 1.2, learnable: true}
-  - {name: kd_scale_04, group: dynamics, low: 0.8, high: 1.2, learnable: true}
-  - {name: kd_scale_05, group: dynamics, low: 0.8, high: 1.2, learnable: true}
-  - {name: kd_scale_06, group: dynamics, low: 0.8, high: 1.2, learnable: true}
-  - {name: kd_scale_07, group: dynamics, low: 0.8, high: 1.2, learnable: true}
-  - {name: kd_scale_08, group: dynamics, low: 0.8, high: 1.2, learnable: true}
-  - {name: kd_scale_09, group: dynamics, low: 0.8, high: 1.2, learnable: true}
-  - {name: kd_scale_10, group: dynamics, low: 0.8, high: 1.2, learnable: true}
-  - {name: kd_scale_11, group: dynamics, low: 0.8, high: 1.2, learnable: true}
-  - {name: kd_scale_12, group: dynamics, low: 0.8, high: 1.2, learnable: true}
-  - {name: kd_scale_13, group: dynamics, low: 0.8, high: 1.2, learnable: true}
-  - {name: kd_scale_14, group: dynamics, low: 0.8, high: 1.2, learnable: true}
-  - {name: kd_scale_15, group: dynamics, low: 0.8, high: 1.2, learnable: true}
+  - {name: kp_scale_00, group: dynamics, low: 0.7, high: 1.3, learnable: true}
+  - {name: kp_scale_01, group: dynamics, low: 0.7, high: 1.3, learnable: true}
+  - {name: kp_scale_02, group: dynamics, low: 0.7, high: 1.3, learnable: true}
+  - {name: kp_scale_03, group: dynamics, low: 0.7, high: 1.3, learnable: true}
+  - {name: kp_scale_04, group: dynamics, low: 0.7, high: 1.3, learnable: true}
+  - {name: kp_scale_05, group: dynamics, low: 0.7, high: 1.3, learnable: true}
+  - {name: kp_scale_06, group: dynamics, low: 0.7, high: 1.3, learnable: true}
+  - {name: kp_scale_07, group: dynamics, low: 0.7, high: 1.3, learnable: true}
+  - {name: kp_scale_08, group: dynamics, low: 0.7, high: 1.3, learnable: true}
+  - {name: kp_scale_09, group: dynamics, low: 0.7, high: 1.3, learnable: true}
+  - {name: kp_scale_10, group: dynamics, low: 0.7, high: 1.3, learnable: true}
+  - {name: kp_scale_11, group: dynamics, low: 0.7, high: 1.3, learnable: true}
+  - {name: kp_scale_12, group: dynamics, low: 0.7, high: 1.3, learnable: true}
+  - {name: kp_scale_13, group: dynamics, low: 0.7, high: 1.3, learnable: true}
+  - {name: kp_scale_14, group: dynamics, low: 0.7, high: 1.3, learnable: true}
+  - {name: kp_scale_15, group: dynamics, low: 0.7, high: 1.3, learnable: true}
+  - {name: kd_scale_00, group: dynamics, low: 0.7, high: 1.3, learnable: true}
+  - {name: kd_scale_01, group: dynamics, low: 0.7, high: 1.3, learnable: true}
+  - {name: kd_scale_02, group: dynamics, low: 0.7, high: 1.3, learnable: true}
+  - {name: kd_scale_03, group: dynamics, low: 0.7, high: 1.3, learnable: true}
+  - {name: kd_scale_04, group: dynamics, low: 0.7, high: 1.3, learnable: true}
+  - {name: kd_scale_05, group: dynamics, low: 0.7, high: 1.3, learnable: true}
+  - {name: kd_scale_06, group: dynamics, low: 0.7, high: 1.3, learnable: true}
+  - {name: kd_scale_07, group: dynamics, low: 0.7, high: 1.3, learnable: true}
+  - {name: kd_scale_08, group: dynamics, low: 0.7, high: 1.3, learnable: true}
+  - {name: kd_scale_09, group: dynamics, low: 0.7, high: 1.3, learnable: true}
+  - {name: kd_scale_10, group: dynamics, low: 0.7, high: 1.3, learnable: true}
+  - {name: kd_scale_11, group: dynamics, low: 0.7, high: 1.3, learnable: true}
+  - {name: kd_scale_12, group: dynamics, low: 0.7, high: 1.3, learnable: true}
+  - {name: kd_scale_13, group: dynamics, low: 0.7, high: 1.3, learnable: true}
+  - {name: kd_scale_14, group: dynamics, low: 0.7, high: 1.3, learnable: true}
+  - {name: kd_scale_15, group: dynamics, low: 0.7, high: 1.3, learnable: true}
   - {name: goal_quat_u0, group: reset, low: 0.000001, high: 0.999999, learnable: true}
   - {name: goal_quat_u1, group: reset, low: 0.000001, high: 0.999999, learnable: true}
   - {name: goal_quat_u2, group: reset, low: 0.000001, high: 0.999999, learnable: true}

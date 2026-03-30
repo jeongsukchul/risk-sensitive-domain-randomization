@@ -134,7 +134,7 @@ def manipulation_ppo_config(
         value_obs_key="privileged_state",
     )
   elif env_name == "LeapCubeRotateZAxis":
-    rl_config.num_timesteps = 100_000_000
+    rl_config.num_timesteps = 150_000_000
     rl_config.num_evals = 10
     rl_config.num_minibatches = 32
     rl_config.unroll_length = 40
@@ -152,7 +152,7 @@ def manipulation_ppo_config(
         value_obs_key="privileged_state",
     )
   elif env_name == "LeapCubeReorient":
-    rl_config.num_timesteps = 400_000_000
+    rl_config.num_timesteps = 500_000_000
     rl_config.num_evals = 10
     rl_config.num_minibatches = 32
     rl_config.unroll_length = 40
