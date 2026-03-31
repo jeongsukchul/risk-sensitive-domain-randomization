@@ -1,11 +1,11 @@
 task: LeapCubeRotateZAxis
 
 parameters:
-  - {name: fingertip_friction, group: dynamics, low: 0.5, high: 1.5, learnable: true}
-  - {name: cube_mass_scale, group: dynamics, low: 0.5, high: 2., learnable: true}
-  - {name: cube_ipos_x, group: dynamics, low: -0.005, high: 0.005, learnable: true}
-  - {name: cube_ipos_y, group: dynamics, low: -0.005, high: 0.005, learnable: true}
-  - {name: cube_ipos_z, group: dynamics, low: -0.005, high: 0.005, learnable: true}
+  - {name: fingertip_friction, group: dynamics, low: 0.5, high: 3., learnable: true}
+  - {name: cube_mass_scale, group: dynamics, low: 0.5, high: 3., learnable: true}
+  - {name: cube_ipos_x, group: dynamics, low: -0.01, high: 0.01, learnable: true}
+  - {name: cube_ipos_y, group: dynamics, low: -0.01, high: 0.01, learnable: true}
+  - {name: cube_ipos_z, group: dynamics, low: -0.01, high: 0.01, learnable: true}
   - {name: qpos0_jitter_00, group: dynamics, low: -0.05, high: 0.05, learnable: false}
   - {name: qpos0_jitter_01, group: dynamics, low: -0.05, high: 0.05, learnable: false}
   - {name: qpos0_jitter_02, group: dynamics, low: -0.05, high: 0.05, learnable: false}
