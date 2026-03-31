@@ -368,6 +368,218 @@ def rnd_time_reversal_lv_no_target(
     return x0, xT, rnd_running
 
 
+def _sample_subtraj_indices(
+    key: jax.Array,
+    num_steps: int,
+    subtraj_prob: float,
+    fix_terminal: bool,
+    subtraj_steps: int | None,
+) -> tuple[jax.Array, jax.Array]:
+    key_use, key_init, key_end = jax.random.split(jax.random.fold_in(key, 17), 3)
+    use_subtraj = jax.random.uniform(key_use) < jnp.asarray(subtraj_prob, dtype=jnp.float32)
+    idx_init = jax.random.randint(key_init, (), 0, num_steps)
+
+    if fix_terminal:
+        idx_end = jnp.asarray(num_steps, dtype=jnp.int32)
+    elif subtraj_steps is not None:
+        idx_end = jnp.minimum(
+            idx_init + jnp.asarray(subtraj_steps, dtype=jnp.int32),
+            jnp.asarray(num_steps, dtype=jnp.int32),
+        )
+    else:
+        idx_end = jax.random.randint(key_end, (), idx_init + 1, num_steps + 1)
+
+    idx_init = jnp.where(use_subtraj, idx_init, 0)
+    idx_end = jnp.where(use_subtraj, idx_end, num_steps)
+    return idx_init, idx_end
+
+
+def sample_uniform_domain(
+    key: jax.Array,
+    batch_size: int,
+    domain_low: jax.Array,
+    domain_high: jax.Array,
+) -> jax.Array:
+    domain_low = jnp.asarray(domain_low)
+    domain_high = jnp.asarray(domain_high)
+    u = jax.random.uniform(
+        key,
+        shape=(batch_size, domain_low.shape[0]),
+        minval=0.0,
+        maxval=1.0,
+        dtype=domain_low.dtype,
+    )
+    return domain_low + (domain_high - domain_low) * u
+
+
+def box_to_tanh_latent(
+    x: jax.Array,
+    low: jax.Array,
+    high: jax.Array,
+    eps: float = 1e-6,
+) -> jax.Array:
+    low = jnp.asarray(low)
+    high = jnp.asarray(high)
+    scaled = 2.0 * (x - low) / (high - low) - 1.0
+    scaled = jnp.clip(scaled, -1.0 + eps, 1.0 - eps)
+    return jnp.arctanh(scaled)
+
+
+def _potential_log_prob(
+    apply_fn,
+    params,
+    x: jax.Array,
+    t: jax.Array,
+) -> jax.Array:
+    time_array = jnp.ones((x.shape[0], 1), dtype=x.dtype) * t
+    zeros = jnp.zeros_like(x)
+    return apply_fn(
+        params,
+        x,
+        time_array,
+        zeros,
+        return_potential=True,
+    )
+
+
+def _lv_rollout_segment(
+    key: jax.Array,
+    model_state,
+    fwd_params,
+    x_init: jax.Array,
+    step_start: jax.Array,
+    step_end: jax.Array,
+    num_steps: int,
+    process: VP | Langevin,
+    stop_grad: bool = True,
+    sde_ctrl_noise: float | None = None,
+    sde_ctrl_dropout: float | None = None,
+    process_center: jax.Array | None = None,
+):
+    fwd_state, _ = model_state
+    dt = jnp.asarray(process.terminal_t, dtype=jnp.float32) / jnp.asarray(
+        num_steps, dtype=jnp.float32
+    )
+    center = (
+        jnp.asarray(0.0, dtype=jnp.float32)
+        if process_center is None
+        else jnp.asarray(process_center, dtype=jnp.float32)
+    )
+
+    def step_fn(carry, step_i):
+        x, rnd, key = carry
+        step = step_i.astype(jnp.float32)
+        t = step * dt
+
+        x_in = jax.lax.stop_gradient(x) if stop_grad else x
+        diff = process.diff_coeff_t(t)
+        base_drift = (
+            process.drift_coeff_t(t) * (x_in - center)
+            if getattr(process, "include_base_drift", False)
+            else 0.0
+        )
+
+        u = fwd_state.apply_fn(
+            fwd_params,
+            x_in,
+            t * jnp.ones((x.shape[0], 1), dtype=x.dtype),
+            jnp.zeros_like(x_in),
+        )
+        generative_ctrl = u
+        sde_ctrl = jax.lax.stop_gradient(generative_ctrl) if stop_grad else generative_ctrl
+        sde_ctrl = _apply_sde_ctrl_perturbation(
+            key=key,
+            generative_ctrl=sde_ctrl,
+            drift=base_drift,
+            diff=diff,
+            sde_ctrl_noise=sde_ctrl_noise,
+            sde_ctrl_dropout=sde_ctrl_dropout,
+        )
+
+        running = (
+            jnp.sum(generative_ctrl * (sde_ctrl - 0.5 * generative_ctrl), axis=-1) * dt
+        )
+
+        key, k_eps = jax.random.split(key)
+        eps = jax.random.normal(k_eps, shape=x.shape)
+        db = eps * jnp.sqrt(dt)
+        x_next = x + (base_drift + diff * sde_ctrl) * dt + diff * db
+
+        ito = jnp.sum(u * db, axis=-1)
+        rnd_next = rnd + running + ito
+
+        active = (step_i >= step_start) & (step_i < step_end)
+        x_out = jnp.where(active, x_next, x)
+        rnd_out = jnp.where(active, rnd_next, rnd)
+
+        return (x_out, rnd_out, key), None
+
+    (x_end, rnd_running, key_end), _ = jax.lax.scan(
+        step_fn,
+        (x_init, jnp.zeros((x_init.shape[0],), dtype=x_init.dtype), key),
+        jnp.arange(num_steps, dtype=jnp.int32),
+    )
+    return x_end, rnd_running, key_end
+
+
+def rnd_time_reversal_lv_subtraj_no_target(
+    key: jax.Array,
+    model_state,
+    fwd_params,
+    batch_size: int,
+    prior_sampler,
+    num_steps: int,
+    process: VP | Langevin,
+    stop_grad: bool = True,
+    fix_terminal: bool = False,
+    subtraj_steps: int | None = None,
+    domain_low: jax.Array | None = None,
+    domain_high: jax.Array | None = None,
+    use_tanh_bijection: bool = False,
+    sde_ctrl_noise: float | None = None,
+    sde_ctrl_dropout: float | None = None,
+    process_center: jax.Array | None = None,
+):
+    """Random subtrajectory LV rollout.
+
+    The segment starts from a uniformly sampled point in the current domain,
+    mirroring the torch `SubtrajBridge` logic.
+    """
+    del prior_sampler
+    if domain_low is None or domain_high is None:
+        raise ValueError("Subtrajectory rollout requires domain_low and domain_high.")
+    idx_init, idx_end = _sample_subtraj_indices(
+        key=key,
+        num_steps=num_steps,
+        subtraj_prob=1.0,
+        fix_terminal=fix_terminal,
+        subtraj_steps=subtraj_steps,
+    )
+    key_start, key_rollout = jax.random.split(key)
+    x_start_box = sample_uniform_domain(key_start, batch_size, domain_low, domain_high)
+    x_start = jax.lax.cond(
+        use_tanh_bijection,
+        lambda x: box_to_tanh_latent(x, domain_low, domain_high),
+        lambda x: x,
+        x_start_box,
+    )
+    x_end, rnd_running, _ = _lv_rollout_segment(
+        key=key_rollout,
+        model_state=model_state,
+        fwd_params=fwd_params,
+        x_init=x_start,
+        step_start=idx_init,
+        step_end=idx_end,
+        num_steps=num_steps,
+        process=process,
+        stop_grad=stop_grad,
+        sde_ctrl_noise=sde_ctrl_noise,
+        sde_ctrl_dropout=sde_ctrl_dropout,
+        process_center=process_center,
+    )
+    return x_start, x_end, rnd_running, idx_init, idx_end
+
+
 def lv_loss_from_rnd(
     rnd: jax.Array,
     xT: jax.Array | None = None,
@@ -387,6 +599,61 @@ def lv_loss_from_rnd(
     if xT is not None:
         aux["train/xT_mean_norm"] = jnp.mean(jnp.linalg.norm(xT, axis=-1))
     return loss, aux, rnd
+
+
+def lv_subtraj_loss(
+    *,
+    fwd_state,
+    fwd_params,
+    x_start: jax.Array,
+    x_end: jax.Array,
+    rnd_running: jax.Array,
+    idx_init: jax.Array,
+    idx_end: jax.Array,
+    num_steps: int,
+    prior_log_prob,
+    target_lp_vals: jax.Array,
+    max_rnd: float | None = None,
+):
+    dt = jnp.asarray(1.0 / num_steps, dtype=jnp.float32)
+    t_init = idx_init.astype(jnp.float32) * dt
+    t_end = idx_end.astype(jnp.float32) * dt
+
+    init_lp = _potential_log_prob(fwd_state.apply_fn, fwd_params, x_start, t_init)
+    init_lp = jax.lax.stop_gradient(init_lp)
+    end_lp = _potential_log_prob(fwd_state.apply_fn, fwd_params, x_end, t_end)
+
+    initial_term = jnp.where(idx_init == 0, prior_log_prob(x_start), init_lp)
+    terminal_term = jnp.where(idx_end == num_steps, target_lp_vals, end_lp)
+    rnd_total = initial_term + rnd_running - terminal_term
+
+    loss, aux, rnd = lv_loss_from_rnd(rnd_total, xT=x_end, max_rnd=max_rnd)
+    seg_scale = (idx_end - idx_init).astype(jnp.float32) / jnp.asarray(
+        num_steps, dtype=jnp.float32
+    )
+    loss = loss * seg_scale
+    aux.update(
+        {
+            "train/subtraj_scale": seg_scale,
+            "train/subtraj_idx_init": idx_init.astype(jnp.float32),
+            "train/subtraj_idx_end": idx_end.astype(jnp.float32),
+        }
+    )
+    return loss, aux, rnd
+
+
+def add_subtraj_aux_defaults(
+    aux: dict,
+    *,
+    idx_init: jax.Array | float = 0.0,
+    idx_end: jax.Array | float = 0.0,
+    scale: jax.Array | float = 0.0,
+) -> dict:
+    aux = dict(aux)
+    aux.setdefault("train/subtraj_scale", jnp.asarray(scale, dtype=jnp.float32))
+    aux.setdefault("train/subtraj_idx_init", jnp.asarray(idx_init, dtype=jnp.float32))
+    aux.setdefault("train/subtraj_idx_end", jnp.asarray(idx_end, dtype=jnp.float32))
+    return aux
 
 def lv_loss_from_values(
     x0,                 # [B,D]

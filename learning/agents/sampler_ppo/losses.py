@@ -28,7 +28,15 @@ import jax.numpy as jnp
 import distrax
 from learning.module import networks
 from learning.module.gmmvi.network import GMMTrainingState
-from learning.module.gbs.gbs_loss import VP, Langevin, rnd_time_reversal_lv_no_target, lv_loss_from_rnd
+from learning.module.gbs.gbs_loss import (
+    add_subtraj_aux_defaults,
+    VP,
+    Langevin,
+    lv_loss_from_rnd,
+    lv_subtraj_loss,
+    rnd_time_reversal_lv_no_target,
+    rnd_time_reversal_lv_subtraj_no_target,
+)
 
 
 @flax.struct.dataclass
@@ -116,14 +124,26 @@ def make_gbs_train_step_jit(
     gbs_prior_sampler: Callable[[jax.Array], jax.Array],
     gbs_num_steps: int,
     gbs_process: Any,
+    gbs_loss_mode: str,
+    gbs_model_type: str,
+    gbs_subtraj_prob: float,
+    gbs_fix_terminal: bool,
+    gbs_subtraj_steps: int | None,
     gbs_sde_ctrl_noise: float,
     gbs_sde_ctrl_dropout: float,
     gbs_center: jax.Array,
+    gbs_domain_low: jax.Array,
+    gbs_domain_high: jax.Array,
     gbs_use_tanh_bijection: bool,
     gbs_logabsdet: Callable[[jax.Array], jax.Array],
     gbs_prior: Any,
     gbs_max_rnd: float,
 ):
+  if gbs_fix_terminal and gbs_subtraj_steps is not None:
+    raise ValueError("Cannot set gbs_subtraj_steps when gbs_fix_terminal=True.")
+  if gbs_loss_mode == "tr_lv_subtraj" and gbs_model_type != "potential":
+    raise ValueError("gbs_loss_mode='tr_lv_subtraj' requires gbs_model_type='potential'.")
+
   @jax.jit
   def gbs_train_step_jit(
       key,
@@ -132,24 +152,95 @@ def make_gbs_train_step_jit(
       target_lnpdf,
   ):
     def loss_from_params(fwd_params, bwd_params):
-      x0, xT, rnd_running = rnd_time_reversal_lv_no_target(
-          key,
-          (fwd_state, bwd_state),
-          fwd_params,
-          gbs_batch_size,
-          gbs_prior_sampler,
-          gbs_num_steps,
-          gbs_process,
-          True,
-          gbs_sde_ctrl_noise,
-          gbs_sde_ctrl_dropout,
-          gbs_center,
-      )
       target_lp_vals = target_lnpdf
-      if gbs_use_tanh_bijection:
-        target_lp_vals = target_lp_vals + gbs_logabsdet(xT)
-      rnd_total = gbs_prior.log_prob(x0) + rnd_running - target_lp_vals
-      loss, aux, _ = lv_loss_from_rnd(rnd_total, xT=xT, max_rnd=gbs_max_rnd)
+      if gbs_loss_mode == "tr_lv_subtraj":
+        use_subtraj = jax.random.uniform(jax.random.fold_in(key, 23)) < gbs_subtraj_prob
+
+        def _subtraj_branch(_):
+          x_start, xT, rnd_running, idx_init, idx_end = (
+            rnd_time_reversal_lv_subtraj_no_target(
+                key,
+                (fwd_state, bwd_state),
+                fwd_params,
+                gbs_batch_size,
+                gbs_prior_sampler,
+                gbs_num_steps,
+                gbs_process,
+                True,
+                gbs_fix_terminal,
+                gbs_subtraj_steps,
+                gbs_domain_low,
+                gbs_domain_high,
+                gbs_use_tanh_bijection,
+                gbs_sde_ctrl_noise,
+                gbs_sde_ctrl_dropout,
+                gbs_center,
+            )
+          )
+          target_lp_vals_sub = target_lp_vals
+          if gbs_use_tanh_bijection:
+            target_lp_vals_sub = target_lp_vals_sub + gbs_logabsdet(xT)
+          loss, aux, _ = lv_subtraj_loss(
+              fwd_state=fwd_state,
+              fwd_params=fwd_params,
+              x_start=x_start,
+              x_end=xT,
+              rnd_running=rnd_running,
+              idx_init=idx_init,
+              idx_end=idx_end,
+              num_steps=gbs_num_steps,
+              prior_log_prob=gbs_prior.log_prob,
+              target_lp_vals=target_lp_vals_sub,
+              max_rnd=gbs_max_rnd,
+          )
+          return loss, aux
+
+        def _full_branch(_):
+          x0, xT, rnd_running = rnd_time_reversal_lv_no_target(
+              key,
+              (fwd_state, bwd_state),
+              fwd_params,
+              gbs_batch_size,
+              gbs_prior_sampler,
+              gbs_num_steps,
+              gbs_process,
+              True,
+              gbs_sde_ctrl_noise,
+              gbs_sde_ctrl_dropout,
+              gbs_center,
+          )
+          target_lp_vals_full = target_lp_vals
+          if gbs_use_tanh_bijection:
+            target_lp_vals_full = target_lp_vals_full + gbs_logabsdet(xT)
+          rnd_total = gbs_prior.log_prob(x0) + rnd_running - target_lp_vals_full
+          loss, aux, _ = lv_loss_from_rnd(rnd_total, xT=xT, max_rnd=gbs_max_rnd)
+          aux = add_subtraj_aux_defaults(
+              aux,
+              idx_init=0.0,
+              idx_end=float(gbs_num_steps),
+              scale=1.0,
+          )
+          return loss, aux
+
+        loss, aux = jax.lax.cond(use_subtraj, _subtraj_branch, _full_branch, operand=None)
+      else:
+        x0, xT, rnd_running = rnd_time_reversal_lv_no_target(
+            key,
+            (fwd_state, bwd_state),
+            fwd_params,
+            gbs_batch_size,
+            gbs_prior_sampler,
+            gbs_num_steps,
+            gbs_process,
+            True,
+            gbs_sde_ctrl_noise,
+            gbs_sde_ctrl_dropout,
+            gbs_center,
+        )
+        if gbs_use_tanh_bijection:
+          target_lp_vals = target_lp_vals + gbs_logabsdet(xT)
+        rnd_total = gbs_prior.log_prob(x0) + rnd_running - target_lp_vals
+        loss, aux, _ = lv_loss_from_rnd(rnd_total, xT=xT, max_rnd=gbs_max_rnd)
       return loss, aux
 
     (grads, aux) = jax.grad(loss_from_params, (0, 1), has_aux=True)(

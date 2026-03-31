@@ -21,9 +21,12 @@ from matplotlib.ticker import MaxNLocator
 # IMPORTANT: gbs_loss must provide a sampler that does NOT need target logprob inside.
 # I assume you expose: rnd_no_target(...) -> (x0, xT, log_ratio)
 from .gbs_loss import (
+    add_subtraj_aux_defaults,
     VP,
+    lv_subtraj_loss,
     rnd_no_target,
     rnd_time_reversal_lv_no_target,
+    rnd_time_reversal_lv_subtraj_no_target,
     lv_loss_from_rnd,
 )
 
@@ -80,7 +83,9 @@ class PISGRADNet(nn.Module):
         cos_embed_cond = jnp.cos((self.timestep_coeff * timesteps) + self.timestep_phase)
         return jnp.concatenate([sin_embed_cond, cos_embed_cond], axis=-1)
 
-    def __call__(self, input_array, time_array, lgv_term):
+    def __call__(self, input_array, time_array, lgv_term, return_potential: bool = False):
+        if return_potential:
+            raise ValueError("PISGRADNet does not expose a scalar potential.")
         time_array_emb = self.get_fourier_features(time_array)
         if len(input_array.shape) == 1:
             time_array_emb = time_array_emb[0]
@@ -151,17 +156,34 @@ class PotentialPISGRADNet(nn.Module):
         out = self.potential_net(extended_input)
         return jnp.squeeze(out, axis=-1)
 
-    def __call__(self, input_array, time_array, lgv_term):
-        del lgv_term
+    def potential(self, input_array, time_array):
         time_array_emb = self.get_fourier_features(time_array)
         t_net = self.time_coder_state(time_array_emb)
 
         if len(input_array.shape) == 1:
             if time_array_emb.ndim > 1:
                 t_net = t_net[0]
+            return self._potential_single(input_array, t_net)
+
+        pot_fn = jax.vmap(self._potential_single, in_axes=(0, 0))
+        return pot_fn(input_array, t_net)
+
+    def __call__(self, input_array, time_array, lgv_term, return_potential: bool = False):
+        del lgv_term
+        potential = self.potential(input_array, time_array)
+        if return_potential:
+            return jnp.clip(potential, -self.outer_clip, self.outer_clip)
+
+        if len(input_array.shape) == 1:
             grad_fn = jax.grad(self._potential_single, argnums=0)
+            time_array_emb = self.get_fourier_features(time_array)
+            t_net = self.time_coder_state(time_array_emb)
+            if time_array_emb.ndim > 1:
+                t_net = t_net[0]
             out = grad_fn(input_array, t_net)
         else:
+            time_array_emb = self.get_fourier_features(time_array)
+            t_net = self.time_coder_state(time_array_emb)
             grad_fn = jax.vmap(jax.grad(self._potential_single, argnums=0), in_axes=(0, 0))
             out = grad_fn(input_array, t_net)
 
@@ -402,7 +424,23 @@ def gbs_trainer(cfg, target, target_log_prob):
     bwd_state = train_state.TrainState.create(apply_fn=bwd_model.apply, params=bwd_params, tx=optimizer)
 
     # 1) JIT sampler without target
-    loss_mode = getattr(alg_cfg, "loss_mode", "tr_lv")  # "dis" or "tr_lv"
+    loss_mode = getattr(alg_cfg, "loss_mode", "tr_lv")  # "dis", "tr_lv", or "tr_lv_subtraj"
+    subtraj_prob = float(getattr(alg_cfg, "subtraj_prob", 0.5))
+    fix_terminal = bool(getattr(alg_cfg, "fix_terminal", False))
+    subtraj_steps = getattr(alg_cfg, "subtraj_steps", None)
+    if subtraj_steps is not None:
+        subtraj_steps = int(subtraj_steps)
+    if fix_terminal and subtraj_steps is not None:
+        raise ValueError("Cannot set subtraj_steps when fix_terminal=True.")
+    if loss_mode == "tr_lv_subtraj" and model_type != "potential":
+        raise ValueError("loss_mode='tr_lv_subtraj' requires model_type='potential'.")
+    subtraj_domain = getattr(target, "domain", None)
+    if loss_mode == "tr_lv_subtraj" and subtraj_domain is None:
+        raise ValueError("loss_mode='tr_lv_subtraj' requires target.domain.")
+    if subtraj_domain is not None:
+        subtraj_domain = jnp.asarray(subtraj_domain)
+        domain_low = subtraj_domain[:, 0]
+        domain_high = subtraj_domain[:, 1]
     noise_schedule = getattr(
         alg_cfg,
         "noise_schedule",
@@ -474,7 +512,7 @@ def gbs_trainer(cfg, target, target_log_prob):
             jax.grad(loss_wrapped, (2, 3), has_aux=True),
             static_argnums=(4, 5, 6, 7),  # keep callables static
         )
-    else:
+    elif loss_mode == "tr_lv":
         def loss_wrapped(
             key,
             model_state,
@@ -507,6 +545,88 @@ def gbs_trainer(cfg, target, target_log_prob):
             jax.grad(loss_wrapped, (2, 3), has_aux=True),
             static_argnums=(4, 5, 6, 7),
         )
+    else:
+        def loss_wrapped(
+            key,
+            model_state,
+            fwd_params,
+            bwd_params,
+            batch_size,
+            prior_sampler,
+            num_steps,
+            process,
+            target_lp_vals,
+        ):
+            del bwd_params
+            use_subtraj = jax.random.uniform(jax.random.fold_in(key, 23)) < subtraj_prob
+
+            def _subtraj_branch(_):
+                x_start, x_end, rnd_running, idx_init, idx_end = (
+                    rnd_time_reversal_lv_subtraj_no_target(
+                        key,
+                        model_state,
+                        fwd_params,
+                        batch_size,
+                        prior_sampler,
+                        num_steps,
+                        process,
+                        True,
+                        fix_terminal,
+                        subtraj_steps,
+                        domain_low,
+                        domain_high,
+                        False,
+                        sde_ctrl_noise,
+                        sde_ctrl_dropout,
+                        process_center,
+                    )
+                )
+                loss, aux, _ = lv_subtraj_loss(
+                    fwd_state=model_state[0],
+                    fwd_params=fwd_params,
+                    x_start=x_start,
+                    x_end=x_end,
+                    rnd_running=rnd_running,
+                    idx_init=idx_init,
+                    idx_end=idx_end,
+                    num_steps=num_steps,
+                    prior_log_prob=prior_log_prob,
+                    target_lp_vals=target_lp_vals,
+                    max_rnd=max_rnd,
+                )
+                return loss, aux
+
+            def _full_branch(_):
+                x0, xT, rnd_running = rnd_time_reversal_lv_no_target(
+                    key,
+                    model_state,
+                    fwd_params,
+                    batch_size,
+                    prior_sampler,
+                    num_steps,
+                    process,
+                    True,
+                    sde_ctrl_noise,
+                    sde_ctrl_dropout,
+                    process_center,
+                )
+                rnd_total = prior_log_prob(x0) + rnd_running - target_lp_vals
+                loss, aux, _ = lv_loss_from_rnd(rnd_total, xT=xT, max_rnd=max_rnd)
+                aux = add_subtraj_aux_defaults(
+                    aux,
+                    idx_init=0.0,
+                    idx_end=float(num_steps),
+                    scale=1.0,
+                )
+                return loss, aux
+
+            loss, aux = jax.lax.cond(use_subtraj, _subtraj_branch, _full_branch, operand=None)
+            return loss, aux
+
+        loss_grad = jax.jit(
+            jax.grad(loss_wrapped, (2, 3), has_aux=True),
+            static_argnums=(4, 5, 6, 7),
+        )
 
     timer = 0.0
     if loss_mode == "dis":
@@ -518,12 +638,22 @@ def gbs_trainer(cfg, target, target_log_prob):
             "train/xT_mean_norm",
             "train/n_filtered",
         ]
+    elif loss_mode == "tr_lv":
+        history_keys = [
+            "train/rnd_mean",
+            "train/rnd_var",
+            "train/xT_mean_norm",
+            "train/n_filtered",
+        ]
     else:
         history_keys = [
             "train/rnd_mean",
             "train/rnd_var",
             "train/xT_mean_norm",
             "train/n_filtered",
+            "train/subtraj_scale",
+            "train/subtraj_idx_init",
+            "train/subtraj_idx_end",
         ]
     history = {k: [] for k in history_keys}
     for step in range(alg_cfg.iters):
@@ -547,8 +677,22 @@ def gbs_trainer(cfg, target, target_log_prob):
                 True,  # stop_grad=True
                 process_center,
             )
-        else:
+        elif loss_mode == "tr_lv":
             x0, xT, rnd_running = rnd_jit(
+                key,
+                model_state,
+                fwd_state.params,
+                alg_cfg.batch_size,
+                prior_sampler,
+                alg_cfg.num_steps,
+                noise_schedule,
+                True,
+                sde_ctrl_noise,
+                sde_ctrl_dropout,
+                process_center,
+            )
+        else:
+            x0, xT, rnd_running = rnd_time_reversal_lv_no_target(
                 key,
                 model_state,
                 fwd_state.params,

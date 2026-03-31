@@ -59,11 +59,11 @@ def build_run_tag(args: argparse.Namespace) -> str:
     parts = [
         f"seed{sanitize(args.seed)}",
         f"d{sanitize(args.dim)}",
-        f"T{sanitize(args.iters)}",
-        f"bs{sanitize(args.batch_size)}",
-        f"ns{sanitize(args.num_steps)}",
-        f"lr{sanitize(args.lr)}",
-        f"std{sanitize(args.init_std)}",
+        # f"T{sanitize(args.iters)}",
+        # f"bs{sanitize(args.batch_size)}",
+        # f"ns{sanitize(args.num_steps)}",
+        # f"lr{sanitize(args.lr)}",
+        # f"std{sanitize(args.init_std)}",
         f"beta{sanitize(args.beta)}",
         f"tau{sanitize(args.tau)}",
         f"pf{sanitize(args.p_update_freq)}",
@@ -193,7 +193,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--sinkhorn_num_samples", type=int, default=2000)
     parser.add_argument("--n_particles", type=int, default=None)
     parser.add_argument("--n_spatial_dim", type=int, default=1)
-    parser.add_argument("--loss_mode", choices=["tr_lv", "dis"], default="tr_lv")
+    parser.add_argument("--loss_mode", choices=["tr_lv", "tr_lv_subtraj", "dis"], default="tr_lv")
     parser.add_argument("--model_type", choices=["pisgrad", "potential"], default="pisgrad")
     parser.add_argument("--model_num_layers", type=int, default=2)
     parser.add_argument("--model_num_hid", type=int, default=64)

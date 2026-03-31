@@ -10,11 +10,14 @@ from flax.training import train_state
 from tqdm import trange
 
 from learning.module.gbs.gbs_loss import (
+    add_subtraj_aux_defaults,
     VP,
+    lv_loss_from_rnd,
+    lv_loss_from_values,
+    lv_subtraj_loss,
     rnd_no_target,
     rnd_time_reversal_lv_no_target,
-    lv_loss_from_values,
-    lv_loss_from_rnd,
+    rnd_time_reversal_lv_subtraj_no_target,
 )
 from learning.module.gbs.gbs_trainer import make_gbs_model
 from learning.module.gbs.sinkhorn_metrics import (
@@ -260,6 +263,89 @@ def run_gbs_toy_target4(
 
         loss_grad = jax.jit(jax.grad(loss_wrapped, (2, 3), has_aux=True))
         hist = {k: [] for k in ["train/rnd_mean", "train/rnd_var", "train/xT_mean_norm"]}
+    elif loss_mode == "tr_lv_subtraj":
+        if model_type != "potential":
+            raise ValueError("loss_mode='tr_lv_subtraj' requires model_type='potential'.")
+        rnd_jit = jax.jit(rnd_time_reversal_lv_no_target, static_argnums=(3, 4, 5, 6, 7))
+
+        def loss_wrapped(key, model_state, fwd_params, bwd_params, lam):
+            del bwd_params
+            use_subtraj = jax.random.uniform(jax.random.fold_in(key, 23)) < 0.5
+
+            def _subtraj_branch(_):
+                x_start, xT, rnd_running, idx_init, idx_end = (
+                    rnd_time_reversal_lv_subtraj_no_target(
+                        key,
+                        model_state,
+                        fwd_params,
+                        batch_size,
+                        prior_sampler,
+                        num_steps,
+                        proc,
+                        True,
+                        False,
+                        None,
+                        low,
+                        high,
+                        True,
+                        None,
+                        None,
+                        process_center,
+                    )
+                )
+                target_lp_vals = jnp.asarray(target4_logprob_latent(xT, lam)).reshape(-1)
+                loss, aux, _ = lv_subtraj_loss(
+                    fwd_state=model_state[0],
+                    fwd_params=fwd_params,
+                    x_start=x_start,
+                    x_end=xT,
+                    rnd_running=rnd_running,
+                    idx_init=idx_init,
+                    idx_end=idx_end,
+                    num_steps=num_steps,
+                    prior_log_prob=prior_log_prob,
+                    target_lp_vals=target_lp_vals,
+                )
+                return loss, aux
+
+            def _full_branch(_):
+                x0, xT, rnd_running = rnd_time_reversal_lv_no_target(
+                    key,
+                    model_state,
+                    fwd_params,
+                    batch_size,
+                    prior_sampler,
+                    num_steps,
+                    proc,
+                    True,
+                    process_center=process_center,
+                )
+                target_lp_vals = jnp.asarray(target4_logprob_latent(xT, lam)).reshape(-1)
+                rnd_total = prior_log_prob(x0) + rnd_running - target_lp_vals
+                loss, aux, _ = lv_loss_from_rnd(rnd_total, xT=xT)
+                aux = add_subtraj_aux_defaults(
+                    aux,
+                    idx_init=0.0,
+                    idx_end=float(num_steps),
+                    scale=1.0,
+                )
+                return loss, aux
+
+            loss, aux = jax.lax.cond(use_subtraj, _subtraj_branch, _full_branch, operand=None)
+            return loss, aux
+
+        loss_grad = jax.jit(jax.grad(loss_wrapped, (2, 3), has_aux=True))
+        hist = {
+            k: []
+            for k in [
+                "train/rnd_mean",
+                "train/rnd_var",
+                "train/xT_mean_norm",
+                "train/subtraj_scale",
+                "train/subtraj_idx_init",
+                "train/subtraj_idx_end",
+            ]
+        }
     elif loss_mode == "dis":
         rnd_jit = jax.jit(rnd_no_target, static_argnums=(4, 5, 6, 7, 8))
 
@@ -320,6 +406,12 @@ def run_gbs_toy_target4(
         model_state = (fwd_state, bwd_state)
 
         if loss_mode == "tr_lv":
+            x0, xT_latent, _rnd_running = rnd_jit(
+                k_step, model_state, fwd_state.params,
+                batch_size, prior_sampler, num_steps, proc, True,
+                process_center=process_center,
+            )
+        elif loss_mode == "tr_lv_subtraj":
             x0, xT_latent, _rnd_running = rnd_jit(
                 k_step, model_state, fwd_state.params,
                 batch_size, prior_sampler, num_steps, proc, True,

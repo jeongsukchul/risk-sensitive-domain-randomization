@@ -237,7 +237,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--gbs_num_steps", type=int, default=100)
     parser.add_argument("--gbs_lr", type=float, default=1e-3)
     parser.add_argument("--gbs_init_std", type=float, default=0.5)
-    parser.add_argument("--gbs_loss_mode", choices=["tr_lv", "dis"], default="tr_lv")
+    parser.add_argument("--gbs_loss_mode", choices=["tr_lv", "tr_lv_subtraj", "dis"], default="tr_lv")
     parser.add_argument("--gbs_model_type", choices=["pisgrad", "potential"], default="pisgrad")
     parser.add_argument("--gbs_model_num_layers", type=int, default=2)
     parser.add_argument("--gbs_model_num_hid", type=int, default=64)
@@ -328,7 +328,7 @@ def main() -> None:
     gmmvi_tag = build_gmmvi_run_tag(gmmvi_tag_args)
 
     output_path = args.output_dir / (
-        f"target4_online_compare_p_sinkhorn_energy__gbs_{gbs_tag}__gmmvi_{gmmvi_tag}.png"
+        f"target4_online_compare_p_sinkhorn_energy__gbs_{gbs_tag}.png"#__gmmvi_{gmmvi_tag}.png"
     )
     title = (
         f"Target4 online comparison | dim={args.dim}, iters={args.iters}, "
