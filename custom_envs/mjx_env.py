@@ -15,6 +15,7 @@
 """Core classes for MuJoCo Playground."""
 
 import abc
+import os
 import subprocess
 import sys
 from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple, Union
@@ -329,7 +330,27 @@ def render_array(
     hfield_data: Optional[jax.Array] = None,
 ):
   """Renders a trajectory as an array of images."""
-  renderer = mujoco.Renderer(mj_model, height=height, width=width)
+  gl_context = None
+  should_force_headless = not os.environ.get("DISPLAY") and os.environ.get(
+      "MUJOCO_GL"
+  ) in (None, "", "egl")
+
+  if should_force_headless:
+    import mujoco.egl
+
+    gl_context = mujoco.egl.GLContext(width, height)
+    gl_context.make_current()
+
+  try:
+    renderer = mujoco.Renderer(mj_model, height=height, width=width)
+  except mujoco.FatalError:
+    if gl_context is not None:
+      raise
+    import mujoco.egl
+
+    gl_context = mujoco.egl.GLContext(width, height)
+    gl_context.make_current()
+    renderer = mujoco.Renderer(mj_model, height=height, width=width)
   camera = camera if camera is not None else -1
 
   if hfield_data is not None:
@@ -347,19 +368,22 @@ def render_array(
       modify_scn_fn(renderer.scene)
     return renderer.render()
 
-  if isinstance(trajectory, list):
-    out = []
-    for i, state in enumerate(tqdm.tqdm(trajectory)):
-      if modify_scene_fns is not None:
-        modify_scene_fn = modify_scene_fns[i]
-      else:
-        modify_scene_fn = None
-      out.append(get_image(state, modify_scene_fn))
-  else:
-    out = get_image(trajectory)
-
-  renderer.close()
-  return out
+  try:
+    if isinstance(trajectory, list):
+      out = []
+      for i, state in enumerate(tqdm.tqdm(trajectory)):
+        if modify_scene_fns is not None:
+          modify_scene_fn = modify_scene_fns[i]
+        else:
+          modify_scene_fn = None
+        out.append(get_image(state, modify_scene_fn))
+    else:
+      out = get_image(trajectory)
+    return out
+  finally:
+    renderer.close()
+    if gl_context is not None:
+      gl_context.free()
 
 
 def get_sensor_data(

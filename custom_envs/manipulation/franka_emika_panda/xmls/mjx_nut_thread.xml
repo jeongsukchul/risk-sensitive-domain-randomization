@@ -1,0 +1,145 @@
+<mujoco model="panda nut thread">
+  <include file="mjx_scene.xml"/>
+
+  <asset>
+    <material name="nut_brass" rgba="0.79 0.59 0.22 1"/>
+    <material name="peg_steel" rgba="0.35 0.38 0.43 1"/>
+    <material name="goal_marker" rgba="0.85 0.15 0.15 0.25"/>
+  </asset>
+
+  <worldbody>
+    <body name="nut" pos="0.46 0.0 0.024">
+      <freejoint/>
+      <geom
+        name="nut_left"
+        type="box"
+        pos="-0.0555 0 0"
+        size="0.0165 0.072 0.024"
+        friction="1 0.03 0.003"
+        condim="4"
+        solref="0.01 1"
+        rgba="0.79 0.59 0.22 1"
+        material="nut_brass"/>
+      <geom
+        name="nut_right"
+        type="box"
+        pos="0.0555 0 0"
+        size="0.0165 0.072 0.024"
+        friction="1 0.03 0.003"
+        condim="4"
+        solref="0.01 1"
+        rgba="0.79 0.59 0.22 1"
+        material="nut_brass"/>
+      <geom
+        name="nut_top"
+        type="box"
+        pos="0 0.0555 0"
+        size="0.0555 0.0165 0.024"
+        friction="1 0.03 0.003"
+        condim="4"
+        solref="0.01 1"
+        rgba="0.79 0.59 0.22 1"
+        material="nut_brass"/>
+      <geom
+        name="nut_bottom"
+        type="box"
+        pos="0 -0.0555 0"
+        size="0.0555 0.0165 0.024"
+        friction="1 0.03 0.003"
+        condim="4"
+        solref="0.01 1"
+        rgba="0.79 0.59 0.22 1"
+        material="nut_brass"/>
+      <geom
+        name="nut_handle"
+        type="box"
+        pos="0.099 0 0"
+        size="0.033 0.024 0.024"
+        friction="1 0.03 0.003"
+        condim="4"
+        solref="0.01 1"
+        rgba="0.79 0.59 0.22 1"
+        material="nut_brass"/>
+      <site name="nut_center" pos="0 0 0" size="0.012" rgba="1 0 0 1"/>
+      <site name="nut_handle_site" pos="0.099 0 0" size="0.012" rgba="0 1 0 1"/>
+    </body>
+
+    <body name="peg" pos="0.62 0.0 0.0">
+      <joint name="peg_x" type="slide" axis="1 0 0" limited="true" range="-0.08 0.04"/>
+      <joint name="peg_y" type="slide" axis="0 1 0" limited="true" range="-0.12 0.12"/>
+      <geom
+        name="peg_base"
+        type="box"
+        pos="0 0 0.018"
+        size="0.09 0.09 0.018"
+        contype="1"
+        conaffinity="1"
+        rgba="0.25 0.27 0.32 1"
+        material="peg_steel"/>
+      <geom
+        name="peg"
+        type="box"
+        pos="0 0 0.114"
+        size="0.024 0.024 0.114"
+        friction="1 0.03 0.003"
+        condim="4"
+        solref="0.01 1"
+        contype="1"
+        conaffinity="1"
+        rgba="0.35 0.38 0.43 1"
+        material="peg_steel"/>
+      <site name="peg_site" pos="0 0 0.024" size="0.012" rgba="0 0 1 1"/>
+      <site name="peg_top_site" pos="0 0 0.228" size="0.012" rgba="0 0 1 1"/>
+      <site name="peg_hover_site" pos="0 0 0.18" size="0.012" rgba="0 0 1 1"/>
+    </body>
+
+    <body mocap="true" name="mocap_target">
+      <geom
+        type="box"
+        pos="0 0 0.114"
+        size="0.039 0.039 0.114"
+        rgba="0.85 0.15 0.15 0.25"
+        material="goal_marker"
+        contype="0"
+        conaffinity="0"/>
+    </body>
+  </worldbody>
+
+  <sensor>
+    <contact
+      name="left_finger_pad_floor_found"
+      geom1="left_finger_pad"
+      geom2="floor"
+      reduce="mindist"
+      num="1"
+      data="found"/>
+    <contact
+      name="right_finger_pad_floor_found"
+      geom1="right_finger_pad"
+      geom2="floor"
+      reduce="mindist"
+      num="1"
+      data="found"/>
+    <contact
+      name="hand_capsule_floor_found"
+      geom1="hand_capsule"
+      geom2="floor"
+      reduce="mindist"
+      num="1"
+      data="found"/>
+    <contact
+      name="nut_handle_hand_found"
+      geom1="nut_handle"
+      geom2="hand_capsule"
+      reduce="mindist"
+      num="1"
+      data="found"/>
+  </sensor>
+
+  <keyframe>
+    <key
+      name="home"
+      qpos="0 0.3 0 -1.57079 0 2.0 -0.7853 0.04 0.04 0.46 0.0 0.024 1 0 0 0 0 0"
+      ctrl="0 0.3 0 -1.57079 0 2.0 -0.7853 0.04"/>
+  </keyframe>
+</mujoco>

@@ -26,6 +26,7 @@ mjx_env.ensure_menagerie_exists()  # Ensure menagerie exists before importing en
 from custom_envs.manipulation.aloha import handover as aloha_handover
 from custom_envs.manipulation.aloha import single_peg_insertion as aloha_peg
 from custom_envs.manipulation.franka_emika_panda import open_cabinet as panda_open_cabinet
+from custom_envs.manipulation.franka_emika_panda import nut_thread as panda_nut_thread
 from custom_envs.manipulation.franka_emika_panda import pick as panda_pick
 from custom_envs.manipulation.franka_emika_panda import pick_cartesian as panda_pick_cartesian
 from custom_envs.manipulation.franka_emika_panda import stack as panda_stack
@@ -41,6 +42,7 @@ _envs = {
     "PandaPickCubeOrientation": panda_pick.PandaPickCubeOrientation,
     "PandaPickCubeCartesian": panda_pick_cartesian.PandaPickCubeCartesian,
     "PandaStackCube": panda_stack.PandaStackCube,
+    "PandaNutThread": panda_nut_thread.PandaNutThread,
     "PandaOpenCabinet": panda_open_cabinet.PandaOpenCabinet,
     "PandaRobotiqPushCube": robotiq_push_cube.PandaRobotiqPushCube,
     "LeapCubeReorient": leap_cube_reorient.CubeReorient,
@@ -55,6 +57,7 @@ _cfgs = {
     "PandaPickCubeOrientation": panda_pick.default_config,
     "PandaPickCubeCartesian": panda_pick_cartesian.default_config,
     "PandaStackCube": panda_stack.default_config,
+    "PandaNutThread": panda_nut_thread.default_config,
     "PandaOpenCabinet": panda_open_cabinet.default_config,
     "PandaRobotiqPushCube": robotiq_push_cube.default_config,
     "LeapCubeReorient": leap_cube_reorient.default_config,
@@ -67,6 +70,7 @@ _randomizer = {
     "AlohaPegInsertion": aloha_peg.domain_randomize,
     "LeapCubeRotateZAxis": leap_rotate_z.domain_randomize,
     "LeapCubeReorient": leap_cube_reorient.domain_randomize,
+    "PandaNutThread": panda_nut_thread.domain_randomize,
     "PandaOpenCabinet": panda_open_cabinet.domain_randomize,
     "PandaPickCube": panda_pick.domain_randomize,
     "PandaPickCubeOrientation": panda_pick.domain_randomize,
@@ -80,6 +84,7 @@ _randomizer_eval = {
     "AlohaSinglePegInsertion": aloha_peg.domain_randomize_eval,
     "AlohaPegInsertion": aloha_peg.domain_randomize_eval,
     "LeapCubeReorient": leap_cube_reorient.domain_randomize_eval,
+    "PandaNutThread": panda_nut_thread.domain_randomize_eval,
     "PandaOpenCabinet": panda_open_cabinet.domain_randomize_eval,
     "PandaPickCube": panda_pick.domain_randomize_eval,
     "PandaPickCubeOrientation": panda_pick.domain_randomize_eval,
