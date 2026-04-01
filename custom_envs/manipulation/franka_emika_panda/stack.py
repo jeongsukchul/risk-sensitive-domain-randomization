@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # ==============================================================================
-"""Stack a red cube onto a green cube with the Franka Panda."""
+"""Stack three cubes into a tower with the Franka Panda."""
 
 import functools
 from typing import Any, Dict, Optional, Union
@@ -29,7 +29,7 @@ from custom_envs import mjx_env
 from custom_envs.manipulation.franka_emika_panda import panda
 from mujoco_playground._src.mjx_env import State  # pylint: disable=g-importing-member
 
-_MODEL_PARAM_SIZE = 30
+_MODEL_PARAM_SIZE = 31
 _CUBE_HALF_SIZE = 0.02
 _RELEASE_DISTANCE = 0.04
 _RELEASE_OPEN_SUM = 0.06
@@ -49,6 +49,7 @@ _REF_MODEL = mujoco.MjModel.from_xml_string(
 _LEFT_FINGER_GEOM = _REF_MODEL.geom("left_finger_pad").id
 _RIGHT_FINGER_GEOM = _REF_MODEL.geom("right_finger_pad").id
 _BOX_BODY = _REF_MODEL.body("box").id
+_MIDDLE_BODY = _REF_MODEL.body("cubeC").id
 _SUPPORT_BODY = _REF_MODEL.body("cubeB").id
 _LINK_IDS = np.arange(11) + 1
 _ARM_QIDS = np.arange(7)
@@ -80,7 +81,7 @@ def default_config() -> config_dict.ConfigDict:
 
 
 class PandaStackCube(panda.PandaBase):
-  """Stack the red cube on top of the green cube."""
+  """Stack three cubes into a tower with the red cube on top."""
 
   def __init__(
       self,
@@ -91,14 +92,25 @@ class PandaStackCube(panda.PandaBase):
     self._post_init(obj_name="box", keyframe="home")
 
     self._support_body = self._mj_model.body("cubeB").id
+    self._middle_body = self._mj_model.body("cubeC").id
     self._support_qposadr = self._mj_model.jnt_qposadr[
         self._mj_model.body("cubeB").jntadr[0]
+    ]
+    self._middle_qposadr = self._mj_model.jnt_qposadr[
+        self._mj_model.body("cubeC").jntadr[0]
     ]
     self._box_dofadr = self._mj_model.jnt_dofadr[
         self._mj_model.body("box").jntadr[0]
     ]
+    self._middle_dofadr = self._mj_model.jnt_dofadr[
+        self._mj_model.body("cubeC").jntadr[0]
+    ]
     self._support_init_pos = jp.array(
         self._init_q[self._support_qposadr : self._support_qposadr + 3],
+        dtype=jp.float32,
+    )
+    self._middle_init_pos = jp.array(
+        self._init_q[self._middle_qposadr : self._middle_qposadr + 3],
         dtype=jp.float32,
     )
     self._floor_hand_found_sensor = [
@@ -107,8 +119,8 @@ class PandaStackCube(panda.PandaBase):
     ]
 
   def reset(self, rng: jax.Array) -> State:
-    rng, rng_anchor, rng_radius, rng_angle, rng_yaw_a, rng_yaw_b = (
-        jax.random.split(rng, 6)
+    rng, rng_anchor, rng_radius, rng_angle, rng_yaw_a, rng_yaw_b, rng_yaw_c = (
+        jax.random.split(rng, 7)
     )
 
     anchor = jax.random.uniform(
@@ -121,18 +133,29 @@ class PandaStackCube(panda.PandaBase):
     angle = jax.random.uniform(rng_angle, (), minval=-jp.pi, maxval=jp.pi)
     offset = radius * jp.array([jp.cos(angle), jp.sin(angle)])
 
+    offset_mid = 0.6 * radius * jp.array(
+        [jp.cos(angle + 2 * jp.pi / 3), jp.sin(angle + 2 * jp.pi / 3)]
+    )
+
     box_xy = self._init_obj_pos[:2] + anchor + 0.5 * offset
+    middle_xy = self._middle_init_pos[:2] + anchor + offset_mid
     support_xy = self._support_init_pos[:2] + anchor - 0.5 * offset
     box_xy = jp.clip(box_xy, jp.array([0.35, -0.20]), jp.array([0.65, 0.20]))
+    middle_xy = jp.clip(middle_xy, jp.array([0.35, -0.20]), jp.array([0.65, 0.20]))
     support_xy = jp.clip(
         support_xy, jp.array([0.35, -0.20]), jp.array([0.65, 0.20])
     )
 
     box_pos = jp.array([box_xy[0], box_xy[1], _CUBE_HALF_SIZE])
+    middle_pos = jp.array([middle_xy[0], middle_xy[1], _CUBE_HALF_SIZE])
     support_pos = jp.array([support_xy[0], support_xy[1], _CUBE_HALF_SIZE])
     box_quat = math.axis_angle_to_quat(
         jp.array([0.0, 0.0, 1.0]),
         jax.random.uniform(rng_yaw_a, (), minval=-jp.pi, maxval=jp.pi),
+    )
+    middle_quat = math.axis_angle_to_quat(
+        jp.array([0.0, 0.0, 1.0]),
+        jax.random.uniform(rng_yaw_c, (), minval=-jp.pi, maxval=jp.pi),
     )
     support_quat = math.axis_angle_to_quat(
         jp.array([0.0, 0.0, 1.0]),
@@ -143,6 +166,12 @@ class PandaStackCube(panda.PandaBase):
     init_q = init_q.at[self._obj_qposadr : self._obj_qposadr + 3].set(box_pos)
     init_q = init_q.at[self._obj_qposadr + 3 : self._obj_qposadr + 7].set(
         box_quat
+    )
+    init_q = init_q.at[self._middle_qposadr : self._middle_qposadr + 3].set(
+        middle_pos
+    )
+    init_q = init_q.at[self._middle_qposadr + 3 : self._middle_qposadr + 7].set(
+        middle_quat
     )
     init_q = init_q.at[self._support_qposadr : self._support_qposadr + 3].set(
         support_pos
@@ -165,7 +194,9 @@ class PandaStackCube(panda.PandaBase):
     metrics = {
         "out_of_bounds": jp.array(0.0, dtype=float),
         "is_box_grasped": jp.array(0.0, dtype=float),
-        "is_box_on_support": jp.array(0.0, dtype=float),
+        "is_middle_on_support": jp.array(0.0, dtype=float),
+        "is_box_on_middle": jp.array(0.0, dtype=float),
+        "is_middle_static": jp.array(0.0, dtype=float),
         "is_box_static": jp.array(0.0, dtype=float),
         "success": jp.array(0.0, dtype=float),
         **{k: jp.array(0.0, dtype=float) for k in self._config.reward_config.scales},
@@ -194,10 +225,13 @@ class PandaStackCube(panda.PandaBase):
     )
 
     box_pos = data.xpos[self._obj_body]
+    middle_pos = data.xpos[self._middle_body]
     support_pos = data.xpos[self._support_body]
     out_of_bounds = jp.any(jp.abs(box_pos) > 1.0)
+    out_of_bounds |= jp.any(jp.abs(middle_pos) > 1.0)
     out_of_bounds |= jp.any(jp.abs(support_pos) > 1.0)
     out_of_bounds |= box_pos[2] < 0.0
+    out_of_bounds |= middle_pos[2] < 0.0
     out_of_bounds |= support_pos[2] < 0.0
     done = out_of_bounds | jp.isnan(data.qpos).any() | jp.isnan(data.qvel).any()
     done = done.astype(float)
@@ -208,9 +242,10 @@ class PandaStackCube(panda.PandaBase):
 
   def _get_reward_terms(self, data: mjx.Data) -> Dict[str, jax.Array]:
     box_pos = data.xpos[self._obj_body]
+    middle_pos = data.xpos[self._middle_body]
     support_pos = data.xpos[self._support_body]
     gripper_pos = data.site_xpos[self._gripper_site]
-    goal_pos = self._goal_pos(support_pos)
+    goal_pos = self._goal_pos(middle_pos)
 
     box_to_gripper = jp.linalg.norm(box_pos - gripper_pos)
     box_to_goal = jp.linalg.norm(box_pos - goal_pos)
@@ -230,25 +265,30 @@ class PandaStackCube(panda.PandaBase):
         )
     )
 
-    is_box_on_support = self._is_box_on_support(box_pos, support_pos).astype(float)
+    is_middle_on_support = self._is_cube_stacked(middle_pos, support_pos).astype(float)
+    is_box_on_middle = self._is_cube_stacked(box_pos, middle_pos).astype(float)
     is_box_static = self._is_box_static(data).astype(float)
+    is_middle_static = self._is_middle_static(data).astype(float)
     is_box_grasped = self._is_box_grasped(data, box_pos, gripper_pos).astype(float)
-    release = is_box_on_support * (1.0 - is_box_grasped)
-    static = is_box_on_support * is_box_static
-    success = (is_box_on_support * is_box_static * (1.0 - is_box_grasped)).astype(
-        float
-    )
+    tower_aligned = is_middle_on_support * is_box_on_middle
+    release = tower_aligned * (1.0 - is_box_grasped)
+    static = tower_aligned * is_middle_static * is_box_static
+    success = (
+        tower_aligned * is_middle_static * is_box_static * (1.0 - is_box_grasped)
+    ).astype(float)
 
     return {
         "gripper_box": gripper_box,
-        "box_goal": box_goal * jp.maximum(is_box_grasped, is_box_on_support),
+        "box_goal": box_goal * jp.maximum(is_box_grasped, tower_aligned),
         "release": release,
         "static": static,
         "no_floor_collision": no_floor_collision,
         "robot_target_qpos": robot_target_qpos,
         "success": success,
         "is_box_grasped": is_box_grasped,
-        "is_box_on_support": is_box_on_support,
+        "is_middle_on_support": is_middle_on_support,
+        "is_box_on_middle": is_box_on_middle,
+        "is_middle_static": is_middle_static,
         "is_box_static": is_box_static,
     }
 
@@ -257,8 +297,9 @@ class PandaStackCube(panda.PandaBase):
     gripper_pos = data.site_xpos[self._gripper_site]
     gripper_mat = data.site_xmat[self._gripper_site].ravel()
     box_pos = data.xpos[self._obj_body]
+    middle_pos = data.xpos[self._middle_body]
     support_pos = data.xpos[self._support_body]
-    goal_pos = self._goal_pos(support_pos)
+    goal_pos = self._goal_pos(middle_pos)
 
     state = jp.concatenate([
         data.qpos,
@@ -266,10 +307,14 @@ class PandaStackCube(panda.PandaBase):
         gripper_pos,
         gripper_mat[3:],
         data.xmat[self._obj_body].ravel()[3:],
+        data.xmat[self._middle_body].ravel()[3:],
         data.xmat[self._support_body].ravel()[3:],
         box_pos - gripper_pos,
+        middle_pos - gripper_pos,
         support_pos - gripper_pos,
         goal_pos - box_pos,
+        middle_pos - box_pos,
+        support_pos - middle_pos,
         support_pos - box_pos,
         data.ctrl - data.qpos[self._robot_qposadr[:-1]],
     ])
@@ -279,6 +324,7 @@ class PandaStackCube(panda.PandaBase):
         data.actuator_force,
         self.mjx_model.geom_friction[self._left_finger_geom, 0:1],
         self.mjx_model.body_mass[self._obj_body : self._obj_body + 1],
+        self.mjx_model.body_mass[self._middle_body : self._middle_body + 1],
         self.mjx_model.body_mass[self._support_body : self._support_body + 1],
         self.mjx_model.actuator_gainprm[:, 0],
         self.mjx_model.dof_damping[:9],
@@ -290,11 +336,11 @@ class PandaStackCube(panda.PandaBase):
         "privileged_state": privileged_state,
     }
 
-  def _goal_pos(self, support_pos: jax.Array) -> jax.Array:
-    return support_pos + jp.array([0.0, 0.0, 2 * _CUBE_HALF_SIZE])
+  def _goal_pos(self, base_pos: jax.Array) -> jax.Array:
+    return base_pos + jp.array([0.0, 0.0, 2 * _CUBE_HALF_SIZE])
 
   def _update_target_marker(self, data: mjx.Data) -> mjx.Data:
-    goal_pos = self._goal_pos(data.xpos[self._support_body])
+    goal_pos = self._goal_pos(data.xpos[self._middle_body])
     return data.replace(
         mocap_pos=data.mocap_pos.at[self._mocap_target, :].set(goal_pos),
         mocap_quat=data.mocap_quat.at[self._mocap_target, :].set(
@@ -302,10 +348,10 @@ class PandaStackCube(panda.PandaBase):
         ),
     )
 
-  def _is_box_on_support(
-      self, box_pos: jax.Array, support_pos: jax.Array
+  def _is_cube_stacked(
+      self, upper_pos: jax.Array, lower_pos: jax.Array
   ) -> jax.Array:
-    offset = box_pos - support_pos
+    offset = upper_pos - lower_pos
     xy_ok = jp.linalg.norm(offset[:2]) <= jp.sqrt(2.0) * _CUBE_HALF_SIZE + 0.005
     z_ok = jp.abs(offset[2] - 2 * _CUBE_HALF_SIZE) <= 0.005
     return xy_ok & z_ok
@@ -314,6 +360,12 @@ class PandaStackCube(panda.PandaBase):
     box_qvel = data.qvel[self._box_dofadr : self._box_dofadr + 6]
     lin_vel = jp.linalg.norm(box_qvel[:3])
     ang_vel = jp.linalg.norm(box_qvel[3:])
+    return (lin_vel <= _STATIC_LIN_THRESH) & (ang_vel <= _STATIC_ANG_THRESH)
+
+  def _is_middle_static(self, data: mjx.Data) -> jax.Array:
+    middle_qvel = data.qvel[self._middle_dofadr : self._middle_dofadr + 6]
+    lin_vel = jp.linalg.norm(middle_qvel[:3])
+    ang_vel = jp.linalg.norm(middle_qvel[3:])
     return (lin_vel <= _STATIC_LIN_THRESH) & (ang_vel <= _STATIC_ANG_THRESH)
 
   def _is_box_grasped(
@@ -338,6 +390,8 @@ class PandaStackCube(panda.PandaBase):
     high.append(jp.array([8.0]))
     low.append(jp.array([0.1]))
     high.append(jp.array([8.0]))
+    low.append(jp.array([0.1]))
+    high.append(jp.array([8.0]))
     low.append(jp.full((11,), 0.8))
     high.append(jp.full((11,), 1.2))
     low.append(jp.full((9,), 0.8))
@@ -355,6 +409,10 @@ def _apply_domain_randomization(model: mjx.Model, params: jax.Array):
 
   body_mass = model.body_mass.at[_BOX_BODY].set(
       model.body_mass[_BOX_BODY] * params[idx]
+  )
+  idx += 1
+  body_mass = body_mass.at[_MIDDLE_BODY].set(
+      model.body_mass[_MIDDLE_BODY] * params[idx]
   )
   idx += 1
   body_mass = body_mass.at[_SUPPORT_BODY].set(
