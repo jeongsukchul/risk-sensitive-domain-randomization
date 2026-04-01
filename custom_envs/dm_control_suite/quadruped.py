@@ -36,6 +36,8 @@ _FLOOR_GEOM_ID = 0
 _TORSO_BODY_ID = 1
 _TOE_GEOM_IDS = jp.array([7, 11, 15, 19])
 _JOINT_DOF_IDS = jp.array([6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21])
+_FRICTION_DIM = 3
+_DAMPING_DIM = 16
 
 _ACTUATOR_NAME_TO_ID = {
     "yaw_front_left": 0,
@@ -267,20 +269,32 @@ class Quadruped(mjx_env.MjxEnv):
 
   @property
   def nominal_params(self) -> jp.ndarray:
-    return jp.array([0.0, 0.0, 0.0, 1.0, 1.0, 1.0])
+    return jp.ones(1 + _FRICTION_DIM + _DAMPING_DIM + 3)
 
   @property
   def dr_range(self) -> tuple[jp.ndarray, jp.ndarray]:
-    low = jp.array([-250.0, -0.4, -5.0, 0.7, 0.7, 0.7])
-    high = jp.array([750.0, 0.8, 5.0, 1.3, 1.3, 1.3])
+    low = jp.concatenate([
+        jp.array([0.7]),
+        jp.full((_FRICTION_DIM,), 0.5),
+        jp.full((_DAMPING_DIM,), 0.5),
+        jp.full((3,), 0.7),
+    ])
+    high = jp.concatenate([
+        jp.array([1.3]),
+        jp.full((_FRICTION_DIM,), 1.5),
+        jp.full((_DAMPING_DIM,), 1.5),
+        jp.full((3,), 1.3),
+    ])
     return low, high
 
   @property
   def dr_label(self) -> tuple[str, ...]:
     return (
-        "torso mass delta",
-        "contact friction delta",
-        "joint damping delta",
+        "torso mass scale",
+        "friction slide scale",
+        "friction torsion scale",
+        "friction rolling scale",
+        *(f"joint damping scale {i}" for i in range(_DAMPING_DIM)),
         "lift gear scale",
         "yaw gear scale",
         "extend gear scale",
@@ -288,19 +302,27 @@ class Quadruped(mjx_env.MjxEnv):
 
 
 def _apply_domain_params(model: mjx.Model, params: jax.Array):
-  torso_delta, friction_delta, damping_delta, gear_lift, gear_yaw, gear_extend = params
+  idx = 0
+  torso_scale = params[idx]
+  idx += 1
+  friction_scale = params[idx : idx + _FRICTION_DIM]
+  idx += _FRICTION_DIM
+  damping_scale = params[idx : idx + _DAMPING_DIM]
+  idx += _DAMPING_DIM
+  gear_lift, gear_yaw, gear_extend = params[idx : idx + 3]
+  idx += 3
+  assert idx == params.shape[0]
 
   geom_friction = model.geom_friction
-  geom_friction = geom_friction.at[_FLOOR_GEOM_ID, 0].add(friction_delta)
-  geom_friction = geom_friction.at[_TOE_GEOM_IDS, 0].add(friction_delta)
+  geom_friction = geom_friction.at[_FLOOR_GEOM_ID].multiply(friction_scale)
+  geom_friction = geom_friction.at[_TOE_GEOM_IDS].multiply(friction_scale)
   geom_friction = jp.clip(geom_friction, a_min=1e-3)
 
-  torso_scale = (torso_delta + 1000.0) / 1000.0
   body_mass = model.body_mass.at[_TORSO_BODY_ID].multiply(torso_scale)
   body_inertia = model.body_inertia.at[_TORSO_BODY_ID].multiply(torso_scale**3)
 
   dof_damping = model.dof_damping
-  dof_damping = dof_damping.at[_JOINT_DOF_IDS].add(damping_delta)
+  dof_damping = dof_damping.at[_JOINT_DOF_IDS].multiply(damping_scale)
   dof_damping = jp.clip(dof_damping, a_min=1e-4)
 
   actuator_gear = model.actuator_gear
