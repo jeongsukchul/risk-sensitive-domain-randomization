@@ -60,8 +60,8 @@ def default_config() -> config_dict.ConfigDict:
           )
       ),
       impl="jax",
-      nconmax=48 * 2048,
-      njmax=192,
+      nconmax=96 * 2048,
+      njmax=400,
   )
 
 
@@ -105,8 +105,8 @@ class PandaNutThread(panda.PandaBase):
     peg_xy = jax.random.uniform(
         rng_peg_xy,
         (2,),
-        minval=jp.array([0.56, -0.10]),
-        maxval=jp.array([0.64, 0.10]),
+        minval=jp.array([0.54, -0.18]),
+        maxval=jp.array([0.64, -0.06]),
     )
     peg_offset = peg_xy - self._peg_base_xy
     nut_quat = math.axis_angle_to_quat(

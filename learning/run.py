@@ -99,6 +99,7 @@ CAMERAS = {
     "PandaPickCube" : None,
     "PandaPickCubeOrientation" : None,
     "PandaStackCube" : None,
+    "PandaNutThread" : None,
     "PandaOpenCabinet" : None,
 }
 

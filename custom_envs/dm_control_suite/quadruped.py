@@ -274,16 +274,16 @@ class Quadruped(mjx_env.MjxEnv):
   @property
   def dr_range(self) -> tuple[jp.ndarray, jp.ndarray]:
     low = jp.concatenate([
-        jp.array([0.7]),
+        jp.array([0.3]),
         jp.full((_FRICTION_DIM,), 0.5),
-        jp.full((_DAMPING_DIM,), 0.5),
-        jp.full((3,), 0.7),
+        jp.full((_DAMPING_DIM,), 0.9),
+        jp.full((3,), 0.9),
     ])
     high = jp.concatenate([
-        jp.array([1.3]),
-        jp.full((_FRICTION_DIM,), 1.5),
-        jp.full((_DAMPING_DIM,), 1.5),
-        jp.full((3,), 1.3),
+        jp.array([10.]),
+        jp.full((_FRICTION_DIM,), 3.),
+        jp.full((_DAMPING_DIM,), 1.1),
+        jp.full((3,), 1.1),
     ])
     return low, high
 

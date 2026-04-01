@@ -188,6 +188,8 @@ class PandaStackCube(panda.PandaBase):
     data = self._update_target_marker(data)
 
     raw_rewards = self._get_reward_terms(data)
+    data = self._release_gripper_if_stacked(data, raw_rewards["is_box_on_support"])
+    raw_rewards = self._get_reward_terms(data)
     reward_value = jp.clip(
         sum(
             raw_rewards[key] * self._config.reward_config.scales[key]
@@ -211,6 +213,15 @@ class PandaStackCube(panda.PandaBase):
     state.metrics.update(**raw_rewards, out_of_bounds=out_of_bounds.astype(float))
     obs = self._get_obs(data, state.info)
     return State(data, obs, reward_value, done, state.metrics, state.info)
+
+  def _release_gripper_if_stacked(
+      self, data: mjx.Data, is_box_on_support: jax.Array
+  ) -> mjx.Data:
+    # Force the gripper command open once the cube is placed on the support.
+    release_ctrl = data.ctrl.at[-1].set(
+        jp.where(is_box_on_support > 0, self._uppers[-1], data.ctrl[-1])
+    )
+    return data.replace(ctrl=release_ctrl)
 
   def _reset_arm_if_success(
       self, data: mjx.Data, success: jax.Array
