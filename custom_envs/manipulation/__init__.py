@@ -20,6 +20,9 @@ from ml_collections import config_dict
 from mujoco import mjx
 
 from custom_envs import mjx_env
+
+mjx_env.ensure_menagerie_exists()  # Ensure menagerie exists before importing env modules.
+
 from custom_envs.manipulation.aloha import handover as aloha_handover
 from custom_envs.manipulation.aloha import single_peg_insertion as aloha_peg
 from custom_envs.manipulation.franka_emika_panda import open_cabinet as panda_open_cabinet
@@ -29,9 +32,6 @@ from custom_envs.manipulation.franka_emika_panda import stack as panda_stack
 from custom_envs.manipulation.franka_emika_panda_robotiq import push_cube as robotiq_push_cube
 from custom_envs.manipulation.leap_hand import reorient as leap_cube_reorient
 from custom_envs.manipulation.leap_hand import rotate_z as leap_rotate_z
-
-
-mjx_env.ensure_menagerie_exists()  # Ensure menagerie exists when module is imported.
 
 _envs = {
     "AlohaHandOver": aloha_handover.HandOver,
