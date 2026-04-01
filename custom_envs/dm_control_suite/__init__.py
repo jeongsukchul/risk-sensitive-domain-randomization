@@ -31,6 +31,7 @@ from custom_envs.dm_control_suite import cheetah
 from custom_envs.dm_control_suite import fish
 from custom_envs.dm_control_suite import swimmer
 from custom_envs.dm_control_suite import hopper
+from custom_envs.dm_control_suite import quadruped
 # from mujoco_playground._src.dm_control_suite import humanoid
 from custom_envs.dm_control_suite import pendulum
 # from mujoco_playground._src.dm_control_suite import point_mass
@@ -64,6 +65,8 @@ _envs = {
     "HumanoidWalk": partial(humanoid.Humanoid, move_speed=humanoid.WALK_SPEED),
     "HumanoidRun": partial(humanoid.Humanoid, move_speed=humanoid.RUN_SPEED),
     "PendulumSwingup": pendulum.SwingUp,
+    "QuadrupedRun": partial(quadruped.Quadruped, desired_speed=quadruped.RUN_SPEED),
+    "QuadrupedWalk": partial(quadruped.Quadruped, desired_speed=quadruped.WALK_SPEED),
     # "PointMass": point_mass.PointMass,
     # "ReacherEasy": partial(reacher.Reacher, target_size=reacher.BIG_TARGET),
     # "ReacherHard": partial(reacher.Reacher, target_size=reacher.SMALL_TARGET),
@@ -93,6 +96,8 @@ _cfgs = {
     "HumanoidStand": humanoid.default_config,
     "HumanoidWalk": humanoid.default_config,
     "PendulumSwingup": pendulum.default_config,
+    "QuadrupedRun": quadruped.default_config,
+    "QuadrupedWalk": quadruped.default_config,
     # "PointMass": point_mass.default_config,
     # "ReacherEasy": reacher.default_config,
     # "ReacherHard": reacher.default_config,
@@ -117,6 +122,8 @@ _randomizer = {
   "HumanoidRun": humanoid.domain_randomize,
   "HumanoidStand": humanoid.domain_randomize,
   "HumanoidWalk": humanoid.domain_randomize,
+  "QuadrupedRun": quadruped.domain_randomize,
+  "QuadrupedWalk": quadruped.domain_randomize,
 }
 _randomizer_eval = {
 
@@ -132,6 +139,8 @@ _randomizer_eval = {
   "HumanoidRun": humanoid.domain_randomize_eval,
   "HumanoidStand": humanoid.domain_randomize_eval,
   "HumanoidWalk": humanoid.domain_randomize_eval,
+  "QuadrupedRun": quadruped.domain_randomize_eval,
+  "QuadrupedWalk": quadruped.domain_randomize_eval,
 }
 _randomizer_ood = {
   "CheetahRun" : cheetah.domain_randomize_ood,

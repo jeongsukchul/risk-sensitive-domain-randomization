@@ -1,0 +1,49 @@
+<mujoco model="panda stack cube">
+  <include file="mjx_scene.xml"/>
+
+  <worldbody>
+    <body name="box" pos="0.45 -0.04 0.02">
+      <freejoint/>
+      <geom
+        type="box"
+        name="box"
+        size="0.02 0.02 0.02"
+        condim="3"
+        friction="1 .03 .003"
+        rgba="0.85 0.15 0.15 1"
+        contype="2"
+        conaffinity="1"
+        solref="0.01 1"/>
+    </body>
+    <body name="cubeB" pos="0.55 0.04 0.02">
+      <freejoint/>
+      <geom
+        type="box"
+        name="cubeB"
+        size="0.02 0.02 0.02"
+        condim="3"
+        friction="1 .03 .003"
+        rgba="0.15 0.75 0.15 1"
+        contype="2"
+        conaffinity="1"
+        solref="0.01 1"/>
+    </body>
+    <body mocap="true" name="mocap_target">
+      <geom
+        type="box"
+        size="0.02 0.02 0.02"
+        rgba="1 0 0 0.2"
+        contype="0"
+        conaffinity="0"/>
+    </body>
+  </worldbody>
+
+  <include file="sensor.xml"/>
+
+  <keyframe>
+    <key
+      name="home"
+      qpos="0 0.3 0 -1.57079 0 2.0 -0.7853 0.04 0.04 0.45 -0.04 0.02 1 0 0 0 0.55 0.04 0.02 1 0 0 0"
+      ctrl="0 0.3 0 -1.57079 0 2.0 -0.7853 0.04"/>
+  </keyframe>
+</mujoco>

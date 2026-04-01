@@ -1,4 +1,6 @@
 import re
+import json
+import math
 from pathlib import Path
 
 import hydra
@@ -7,7 +9,10 @@ import os
 import numpy as np
 import pandas as pd
 import datetime
+import jax
+import jax.numpy as jnp
 from termcolor import colored
+from PIL import Image, ImageDraw
 
 CONSOLE_FORMAT = [
     ("iteration", "I", "int"),
@@ -76,6 +81,142 @@ def make_dir(dir_path):
     except OSError:
         pass
     return dir_path
+
+
+def load_percentile_dynamics_params(cfg=None, policy=None, work_dir=None, path=None):
+    """Load saved percentile dynamics params from a run's models directory."""
+    if path is None:
+        resolved_policy = policy or getattr(cfg, "policy", None)
+        resolved_work_dir = Path(work_dir or getattr(cfg, "work_dir", ""))
+        if resolved_policy is None or not str(resolved_work_dir):
+            raise ValueError("Either `path` or both `policy` and `work_dir`/`cfg.work_dir` must be provided.")
+        path = resolved_work_dir / "models" / f"{resolved_policy}_percentile_dynamics_params_latest.json"
+    else:
+        path = Path(path)
+
+    if not path.exists():
+        raise FileNotFoundError(f"Percentile dynamics params file not found: {path}")
+
+    with open(path, "r", encoding="utf-8") as f:
+        payload = json.load(f)
+
+    payload["percentile_levels"] = np.asarray(payload["percentile_levels"])
+    payload["dynamics_params_percentiles"] = np.asarray(payload["dynamics_params_percentiles"], dtype=np.float32)
+    if payload.get("reward_percentiles") is not None:
+        payload["reward_percentiles"] = np.asarray(payload["reward_percentiles"], dtype=np.float32)
+
+    return payload
+
+
+def _apply_fixed_dynamics_params(eval_env, randomizer_eval, dynamics_params):
+    if randomizer_eval is None:
+        return eval_env
+    new_model, _ = randomizer_eval(
+        model=eval_env.mjx_model,
+        dr_range=eval_env.dr_range,
+        params=jnp.asarray(dynamics_params),
+        rng=None,
+    )
+    eval_env._mjx_model = new_model
+    if hasattr(eval_env, "unwrapped"):
+        eval_env.unwrapped._mjx_model = new_model
+    return eval_env
+
+
+def _extract_single_trajectory(trajectory, batch_index, batch_size):
+    def _select_leaf(x):
+        if not hasattr(x, "shape"):
+            return x
+        if len(x.shape) == 0:
+            return x
+        if x.shape[0] == batch_size:
+            return x[batch_index]
+        return x
+
+    return [
+        jax.tree_util.tree_map(_select_leaf, state)
+        for state in trajectory
+    ]
+
+
+def _tile_frame_sequences(frame_sequences, grid_cols=4, bg_value=0, tile_labels=None):
+    if not frame_sequences:
+        return []
+    max_t = max(len(seq) for seq in frame_sequences)
+    n = len(frame_sequences)
+    grid_rows = math.ceil(n / grid_cols)
+    h = max(seq[0].shape[0] for seq in frame_sequences if len(seq) > 0)
+    w = max(seq[0].shape[1] for seq in frame_sequences if len(seq) > 0)
+    c = frame_sequences[0][0].shape[2]
+
+    tiled = []
+    for t in range(max_t):
+        canvas = np.full((grid_rows * h, grid_cols * w, c), bg_value, dtype=np.uint8)
+        for i, seq in enumerate(frame_sequences):
+            frame = seq[min(t, len(seq) - 1)]
+            fh, fw = frame.shape[:2]
+            r, col = divmod(i, grid_cols)
+            y0 = r * h + (h - fh) // 2
+            x0 = col * w + (w - fw) // 2
+            canvas[y0:y0 + fh, x0:x0 + fw] = frame
+            if tile_labels is not None and i < len(tile_labels):
+                pil_img = Image.fromarray(canvas)
+                draw = ImageDraw.Draw(pil_img)
+                label = str(tile_labels[i])
+                text_x = col * w + 8
+                text_y = r * h + 8
+                text_box_w = 10 + 8 * max(len(label), 1)
+                text_box_h = 24
+                draw.rectangle(
+                    [text_x - 4, text_y - 2, text_x - 4 + text_box_w, text_y - 2 + text_box_h],
+                    fill=(0, 0, 0),
+                )
+                draw.text((text_x, text_y), label, fill=(255, 255, 255))
+                canvas = np.array(pil_img, copy=True)
+        tiled.append(canvas)
+    return tiled
+
+
+def _save_percentile_dynamics_params(metrics, work_dir, policy, use_wandb):
+    if not isinstance(metrics, dict):
+        return
+
+    percentile_levels = metrics.get("final_eval/percentile_levels")
+    percentile_params = metrics.get("final_eval/dynamics_params_percentiles")
+    reward_percentiles = metrics.get("final_eval/reward_percentiles")
+
+    if percentile_levels is None or percentile_params is None:
+        return
+
+    save_dir = make_dir(work_dir / "models")
+    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    payload = {
+        "policy": policy,
+        "percentile_levels": np.asarray(percentile_levels).tolist(),
+        "dynamics_params_percentiles": np.asarray(percentile_params).tolist(),
+        "reward_percentiles": None if reward_percentiles is None else np.asarray(reward_percentiles).tolist(),
+    }
+
+    timestamped_path = os.path.join(
+        save_dir,
+        f"{policy}_percentile_dynamics_params_{timestamp}.json",
+    )
+    latest_path = os.path.join(
+        save_dir,
+        f"{policy}_percentile_dynamics_params_latest.json",
+    )
+
+    for path in (timestamped_path, latest_path):
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(payload, f, indent=2)
+
+    if use_wandb:
+        import wandb
+
+        wandb.save(timestamped_path)
+        wandb.save(latest_path)
+
+
 def cfg_to_group(cfg, return_list=False):
     """
     Return a wandb-safe group name for logging.

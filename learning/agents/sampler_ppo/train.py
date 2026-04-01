@@ -388,7 +388,8 @@ def train(
       )
   ).astype(int)
   num_training_steps = num_training_steps_per_epoch * num_evals_after_init
-  print("num_training steps", num_training_steps)
+  print("num training steps per epoch", num_training_steps_per_epoch)
+  print("num training steps", num_training_steps_per_epoch * num_evals_after_init)
   key = jax.random.PRNGKey(seed)
   global_key, local_key = jax.random.split(key)
   del key
@@ -409,6 +410,7 @@ def train(
   print("nominal params", nominal_dynamics_params)
   print("dr range", env.dr_range)
   print("sampler update freq", sampler_update_freq)
+  
   save_dir = make_dir(work_dir / "results" / sampler_choice)
   if hasattr(env,'dr_range') :
     low, high = env.dr_range
@@ -886,7 +888,7 @@ def train(
         length=num_updates_per_batch,
     )
     # if sampler_choice != "GMM":
-    values = jnp.maximum(rewards.mean(axis=(0,1)), 0) if sampler_choice!="EPOpt" else 0#+ bootstrap_value 
+    values = jnp.maximum(rewards, 0).mean(axis=(0,1)) if sampler_choice!="EPOpt" else 0#+ bootstrap_value
     cumulated_values += values
     # For Debuggin GMM
     # target = Funnel(dim=2, sample_bounds=[-30, 30])

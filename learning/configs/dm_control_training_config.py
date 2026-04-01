@@ -16,7 +16,7 @@
 
 from ml_collections import config_dict
 
-from mujoco_playground._src import dm_control_suite
+from custom_envs import dm_control_suite
 from module.termination_fn import get_termination_fn
 
 
@@ -120,10 +120,10 @@ def brax_sac_config(env_name: str) -> config_dict.ConfigDict:
       or env_name.startswith("Finger")
       or env_name.startswith("Hopper")
       or env_name
-      in ("CheetahRun", "HumanoidWalk", "PendulumSwingUp", "WalkerRun")
+      in ("CheetahRun", "HumanoidWalk", "PendulumSwingUp", "QuadrupedRun", "QuadrupedWalk", "WalkerRun")
   ):
     rl_config.num_timesteps = 30_000_000
-  if env_name in ("CheetahRun","WalkerRun", "PendulumSwingUp", "HumanoidWalk", "CartpoleSwingup"):
+  if env_name in ("CheetahRun", "QuadrupedRun", "QuadrupedWalk", "WalkerRun", "PendulumSwingUp", "HumanoidWalk", "CartpoleSwingup"):
     rl_config.network_factory = config_dict.create(
       q_network_layer_norm=True,
       policy_obs_key="state",
@@ -168,11 +168,11 @@ def brax_td3_config(env_name: str) -> config_dict.ConfigDict:
       or env_name.startswith("Finger")
       or env_name.startswith("Hopper")
       or env_name
-      in ("CheetahRun", "HumanoidWalk", "PendulumSwingUp", "WalkerRun")
+      in ("CheetahRun", "HumanoidWalk", "PendulumSwingUp", "QuadrupedRun", "QuadrupedWalk", "WalkerRun")
   ):
     std_min=0.1
     rl_config.num_timesteps = 30_000_000
-  if env_name in ("CheetahRun","WalkerRun", "PendulumSwingUp", "HumanoidWalk", "CartpoleSwingup","HopperHop"):
+  if env_name in ("CheetahRun", "QuadrupedRun", "QuadrupedWalk", "WalkerRun", "PendulumSwingUp", "HumanoidWalk", "CartpoleSwingup", "HopperHop"):
     rl_config.network_factory = config_dict.create(
       q_network_layer_norm=True,
       distributional_q = False,
@@ -226,10 +226,10 @@ def brax_rambo_config(env_name: str) -> config_dict.ConfigDict:
       or env_name.startswith("Finger")
       or env_name.startswith("Hopper")
       or env_name
-      in ("CheetahRun", "HumanoidWalk", "PendulumSwingUp", "WalkerRun")
+      in ("CheetahRun", "HumanoidWalk", "PendulumSwingUp", "QuadrupedRun", "QuadrupedWalk", "WalkerRun")
   ):
     rl_config.num_timesteps = 20_000_000
-  if env_name == "CheetahRun":
+  if env_name in ("CheetahRun", "QuadrupedRun", "QuadrupedWalk"):
     rl_config.network_factory = config_dict.create(
       q_network_layer_norm=True,
       policy_obs_key="state",

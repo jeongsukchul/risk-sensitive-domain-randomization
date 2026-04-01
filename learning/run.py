@@ -37,6 +37,10 @@ import hydra
 from custom_envs import registry, dm_control_suite, locomotion, manipulation
 from helper import parse_cfg
 from helper import make_dir
+from helper import _apply_fixed_dynamics_params
+from helper import _extract_single_trajectory
+from helper import _tile_frame_sequences
+from helper import _save_percentile_dynamics_params
 import pickle
 import shutil
 from learning.module.wrapper.wrapper import Wrapper
@@ -46,8 +50,6 @@ from utils import save_configs_to_wandb_and_local
 from learning.module.wrapper.wrapper import Wrapper
 import scipy
 import jax.numpy as jnp
-import math
-from PIL import Image, ImageDraw
 # # Ignore the info logs from brax
 # logging.set_verbosity(logging.WARNING)
 
@@ -77,6 +79,8 @@ CAMERAS = {
     "HumanoidWalk": "side",
     "HumanoidRun": "side",
     "PendulumSwingup": "fixed",
+    "QuadrupedRun": "global",
+    "QuadrupedWalk": "global",
     "PointMass": "cam0",
     "ReacherEasy": "fixed",
     "ReacherHard": "fixed",
@@ -92,11 +96,11 @@ CAMERAS = {
     "T1JoystickRoughTerrain" :"track",
     "LeapCubeRotateZAxis" :"side",
     "LeapCubeReorient" :"side",
-    "PandaPickCube" :"fixed",
-    "PandaPickCubeOrientation" :"fixed",
-    "PandaOpenCabinet" :"fixed",
+    "PandaPickCube" : None,
+    "PandaPickCubeOrientation" : None,
+    "PandaStackCube" : None,
+    "PandaOpenCabinet" : None,
 }
-camera_name = CAMERAS[env_name]
 
 def policy_params_fn(current_step, make_policy, params, ckpt_path: epath.Path):
   orbax_checkpointer = ocp.PyTreeCheckpointer()
@@ -113,72 +117,6 @@ def progress_fn(num_steps, metrics, use_wandb=True):
     for k,v in metrics.items():
         print(f" {k} :  {v}")
     print("-------------------------------------------------------------------")
-
-def _apply_fixed_dynamics_params(eval_env, randomizer_eval, dynamics_params):
-    if randomizer_eval is None:
-        return eval_env
-    new_model, _ = randomizer_eval(
-        model=eval_env.mjx_model,
-        dr_range=eval_env.dr_range,
-        params=jnp.asarray(dynamics_params),
-        rng=None,
-    )
-    eval_env._mjx_model = new_model
-    if hasattr(eval_env, "unwrapped"):
-        eval_env.unwrapped._mjx_model = new_model
-    return eval_env
-
-def _extract_single_trajectory(trajectory, batch_index, batch_size):
-    def _select_leaf(x):
-        if not hasattr(x, "shape"):
-            return x
-        if len(x.shape) == 0:
-            return x
-        if x.shape[0] == batch_size:
-            return x[batch_index]
-        return x
-    return [
-        jax.tree_util.tree_map(_select_leaf, state)
-        for state in trajectory
-    ]
-
-def _tile_frame_sequences(frame_sequences, grid_cols=4, bg_value=0, tile_labels=None):
-    if not frame_sequences:
-        return []
-    max_t = max(len(seq) for seq in frame_sequences)
-    n = len(frame_sequences)
-    grid_rows = math.ceil(n / grid_cols)
-    h = max(seq[0].shape[0] for seq in frame_sequences if len(seq) > 0)
-    w = max(seq[0].shape[1] for seq in frame_sequences if len(seq) > 0)
-    c = frame_sequences[0][0].shape[2]
-
-    tiled = []
-    for t in range(max_t):
-        canvas = np.full((grid_rows * h, grid_cols * w, c), bg_value, dtype=np.uint8)
-        for i, seq in enumerate(frame_sequences):
-            frame = seq[min(t, len(seq) - 1)]
-            fh, fw = frame.shape[:2]
-            r, col = divmod(i, grid_cols)
-            y0 = r * h + (h - fh) // 2
-            x0 = col * w + (w - fw) // 2
-            canvas[y0:y0+fh, x0:x0+fw] = frame
-            if tile_labels is not None and i < len(tile_labels):
-                pil_img = Image.fromarray(canvas)
-                draw = ImageDraw.Draw(pil_img)
-                label = str(tile_labels[i])
-                text_x = col * w + 8
-                text_y = r * h + 8
-                # Draw a simple black box and white text for readability.
-                text_box_w = 10 + 8 * max(len(label), 1)
-                text_box_h = 24
-                draw.rectangle(
-                    [text_x - 4, text_y - 2, text_x - 4 + text_box_w, text_y - 2 + text_box_h],
-                    fill=(0, 0, 0),
-                )
-                draw.text((text_x, text_y), label, fill=(255, 255, 255))
-                canvas = np.array(pil_img, copy=True)
-        tiled.append(canvas)
-    return tiled
 
 
 def train_ppo(cfg:dict, randomization_fn, env, eval_env=None):
@@ -544,6 +482,7 @@ def train(cfg: dict):
     latest_path = os.path.join(save_dir, f"{cfg.policy}_params_latest.pkl")
     with open(latest_path, "wb") as f:
         pickle.dump(params, f)
+    _save_percentile_dynamics_params(metrics, cfg.work_dir, cfg.policy, cfg.use_wandb)
 
     # Save config.yaml and randomization config to wandb and local directory
     save_configs_to_wandb_and_local(cfg, cfg.work_dir)
@@ -552,7 +491,7 @@ def train(cfg: dict):
     if cfg.save_video and cfg.use_wandb:
         policy_fn = make_inference_fn(params, deterministic=True)
         jit_policy_fn = jax.jit(policy_fn)
-        fps = 1.0 / env.sim_dt
+        fps = 1.0 / env.dt
 
         percentile_levels = metrics.get('final_eval/percentile_levels', None) if isinstance(metrics, dict) else None
         percentile_params = metrics.get('final_eval/dynamics_params_percentiles', None) if isinstance(metrics, dict) else None
@@ -614,7 +553,7 @@ def train(cfg: dict):
                         batch_index,
                         len(percentile_levels),
                     )
-                    frames_i = eval_env.render(rollout, camera=camera_name)
+                    frames_i = eval_env.render(rollout, camera=CAMERAS[cfg.task])
                     rollout_frames.append(frames_i)
             else:
                 reward_list = []
@@ -639,7 +578,7 @@ def train(cfg: dict):
                         rollout.append(jax.device_get(state))
                         episode_reward += float(state.reward)
 
-                    frames_i = percentile_env.render(rollout, camera=camera_name)
+                    frames_i = eval_env.render(rollout, camera=CAMERAS[cfg.task])
                     rollout_frames.append(frames_i)
                     reward_list.append(episode_reward)
 
@@ -692,7 +631,7 @@ def train(cfg: dict):
                 reward_list.append(float(current_episode_reward))
 
             reward_array = np.array(reward_list)
-            frames = eval_env.render(rollout, camera=camera_name)
+            frames = eval_env.render(rollout, camera=CAMERAS[cfg.task])
             video_path = cfg.work_dir / f"video_{cfg.policy}_{cfg.task}.mp4"
             os.makedirs(video_path.parent, exist_ok=True)
             imageio.mimsave(video_path, frames, fps=fps)

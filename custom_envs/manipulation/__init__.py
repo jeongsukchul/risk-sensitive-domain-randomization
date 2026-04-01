@@ -25,6 +25,7 @@ from custom_envs.manipulation.aloha import single_peg_insertion as aloha_peg
 from custom_envs.manipulation.franka_emika_panda import open_cabinet as panda_open_cabinet
 from custom_envs.manipulation.franka_emika_panda import pick as panda_pick
 from custom_envs.manipulation.franka_emika_panda import pick_cartesian as panda_pick_cartesian
+from custom_envs.manipulation.franka_emika_panda import stack as panda_stack
 from custom_envs.manipulation.franka_emika_panda_robotiq import push_cube as robotiq_push_cube
 from custom_envs.manipulation.leap_hand import reorient as leap_cube_reorient
 from custom_envs.manipulation.leap_hand import rotate_z as leap_rotate_z
@@ -39,6 +40,7 @@ _envs = {
     "PandaPickCube": panda_pick.PandaPickCube,
     "PandaPickCubeOrientation": panda_pick.PandaPickCubeOrientation,
     "PandaPickCubeCartesian": panda_pick_cartesian.PandaPickCubeCartesian,
+    "PandaStackCube": panda_stack.PandaStackCube,
     "PandaOpenCabinet": panda_open_cabinet.PandaOpenCabinet,
     "PandaRobotiqPushCube": robotiq_push_cube.PandaRobotiqPushCube,
     "LeapCubeReorient": leap_cube_reorient.CubeReorient,
@@ -52,6 +54,7 @@ _cfgs = {
     "PandaPickCube": panda_pick.default_config,
     "PandaPickCubeOrientation": panda_pick.default_config,
     "PandaPickCubeCartesian": panda_pick_cartesian.default_config,
+    "PandaStackCube": panda_stack.default_config,
     "PandaOpenCabinet": panda_open_cabinet.default_config,
     "PandaRobotiqPushCube": robotiq_push_cube.default_config,
     "LeapCubeReorient": leap_cube_reorient.default_config,
@@ -67,6 +70,7 @@ _randomizer = {
     "PandaOpenCabinet": panda_open_cabinet.domain_randomize,
     "PandaPickCube": panda_pick.domain_randomize,
     "PandaPickCubeOrientation": panda_pick.domain_randomize,
+    "PandaStackCube": panda_stack.domain_randomize,
     "PandaRobotiqPushCube": robotiq_push_cube.domain_randomize,
 }
 
@@ -79,6 +83,7 @@ _randomizer_eval = {
     "PandaOpenCabinet": panda_open_cabinet.domain_randomize_eval,
     "PandaPickCube": panda_pick.domain_randomize_eval,
     "PandaPickCubeOrientation": panda_pick.domain_randomize_eval,
+    "PandaStackCube": panda_stack.domain_randomize_eval,
     "PandaRobotiqPushCube": robotiq_push_cube.domain_randomize_eval,
 }
 
