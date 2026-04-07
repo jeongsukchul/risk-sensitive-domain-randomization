@@ -245,23 +245,21 @@ class PandaOpenCabinet(panda.PandaBase):
     }
   @property
   def nominal_params(self):
-     return jp.concatenate([jp.ones(38)])
+     return jp.concatenate([jp.ones(29)])
   @property
   def dr_range(self):
     """Defines the lower and upper bounds for randomization."""
     low, high = [], []
-    #38d
+    # 29d
     # 1. Gripper Friction (1 param): U(0.3, 1.5)
     low.append(jp.array([0.3])); high.append(jp.array([4.]))
     # 2. Cabinet Handle/Drawer Mass Scale (1 param): U(0.5, 2.0)
     low.append(jp.array([0.1])); high.append(jp.array([10.0]))
     # Franka Mass Scale (11 param)
     low.append(jp.full((11,), 0.8)); high.append(jp.full((11,), 1.2))
-    # 3. Robot Armature Scale (9 params): U(0.8, 1.2)
+    # 3. Joint Damping Scale (9 params): U(0.5, 2.0)
     low.append(jp.full((9,), 0.8)); high.append(jp.full((9,), 1.2))
-    # 4. Joint Damping Scale (9 params): U(0.5, 2.0)
-    low.append(jp.full((9,), 0.8)); high.append(jp.full((9,), 1.2))
-    # 5. Actuator Gain (KP) Scale (7 params): U(0.9, 1.1)
+    # 4. Actuator Gain (KP) Scale (7 params): U(0.9, 1.1)
     low.append(jp.full((7,), 0.9)); high.append(jp.full((7,), 1.1))
 
     return jp.concatenate(low), jp.concatenate(high)
@@ -292,11 +290,9 @@ def domain_randomize(model: mjx.Model, dr_range: tuple, params: jax.Array = None
         # 2. Mass
         mass = model.body_mass.at[handle_body].set(model.body_mass[handle_body] * p[idx]); idx += 1
         mass = mass.at[:11].set(model.body_mass[link_ids] * p[idx:idx+11]); idx += 11
-        # 3. Armature
-        armature = model.dof_armature.at[joint_qids].set(model.dof_armature[joint_qids] * p[idx:idx+9]); idx += 9
-        # 4. Damping
+        # 3. Damping
         damping = model.dof_damping.at[joint_qids].set(model.dof_damping[joint_qids] * p[idx:idx+9]); idx += 9
-        # 5. Gain/Bias (KP)
+        # 4. Gain/Bias (KP)
         kp_val = model.actuator_gainprm[arm_qids, 0] * p[idx:idx+7]
         gain = model.actuator_gainprm.at[arm_qids, 0].set(kp_val)
         bias = model.actuator_biasprm.at[arm_qids, 1].set(-kp_val); idx += 7
@@ -314,11 +310,9 @@ def domain_randomize(model: mjx.Model, dr_range: tuple, params: jax.Array = None
         # 2. Mass
         mass = model.body_mass.at[handle_body].set(model.body_mass[handle_body] * p[idx]); idx += 1
         mass = mass.at[:11].set(model.body_mass[link_ids] * p[idx:idx+11]); idx += 11
-        # 3. Armature
-        armature = model.dof_armature.at[joint_qids].set(model.dof_armature[joint_qids] * p[idx:idx+9]); idx += 9
-        # 4. Damping
+        # 3. Damping
         damping = model.dof_damping.at[joint_qids].set(model.dof_damping[joint_qids] * p[idx:idx+9]); idx += 9
-        # 5. Gain/Bias (KP)
+        # 4. Gain/Bias (KP)
         kp_val = model.actuator_gainprm[arm_qids, 0] * p[idx:idx+7]
         gain = model.actuator_gainprm.at[arm_qids, 0].set(kp_val)
         bias = model.actuator_biasprm.at[arm_qids, 1].set(-kp_val); idx += 7
@@ -365,15 +359,13 @@ def domain_randomize_eval(model: mjx.Model, dr_range: tuple, params: jax.Array =
         # 2. Mass
         mass = model.body_mass.at[handle_body].set(model.body_mass[handle_body] * p[idx]); idx += 1
         mass = mass.at[:11].set(model.body_mass[link_ids] * p[idx:idx+11]); idx += 11
-        # 3. Armature
-        armature = model.dof_armature.at[joint_qids].set(model.dof_armature[joint_qids] * p[idx:idx+9]); idx += 9
-        # 4. Damping
+        # 3. Damping
         damping = model.dof_damping.at[joint_qids].set(model.dof_damping[joint_qids] * p[idx:idx+9]); idx += 9
-        # 5. Gain/Bias (KP)
+        # 4. Gain/Bias (KP)
         kp_val = model.actuator_gainprm[arm_qids, 0] * p[idx:idx+7]
         gain = model.actuator_gainprm.at[arm_qids, 0].set(kp_val)
         bias = model.actuator_biasprm.at[arm_qids, 1].set(-kp_val); idx += 7
-        
+        armature = model.dof_armature
         assert idx ==len(dr_low)
         return friction, mass, armature, damping, gain, bias
 
@@ -385,15 +377,13 @@ def domain_randomize_eval(model: mjx.Model, dr_range: tuple, params: jax.Array =
         # 2. Mass
         mass = model.body_mass.at[handle_body].set(model.body_mass[handle_body] * p[idx]); idx += 1
         mass = mass.at[:11].set(model.body_mass[link_ids] * p[idx:idx+11]); idx += 11
-        # 3. Armature
-        armature = model.dof_armature.at[joint_qids].set(model.dof_armature[joint_qids] * p[idx:idx+9]); idx += 9
-        # 4. Damping
+        # 3. Damping
         damping = model.dof_damping.at[joint_qids].set(model.dof_damping[joint_qids] * p[idx:idx+9]); idx += 9
-        # 5. Gain/Bias (KP)
+        # 4. Gain/Bias (KP)
         kp_val = model.actuator_gainprm[arm_qids, 0] * p[idx:idx+7]
         gain = model.actuator_gainprm.at[arm_qids, 0].set(kp_val)
         bias = model.actuator_biasprm.at[arm_qids, 1].set(-kp_val); idx += 7
-        
+        armature = model.dof_armature
         assert idx ==len(dr_low)
         return friction, mass, armature, damping, gain, bias
     friction, mass, armature, damping, gain, bias = rand_dynamics(rng) if rng is not None else shift_dynamics(params) 

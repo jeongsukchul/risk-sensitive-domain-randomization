@@ -13,7 +13,7 @@ exp_name : test
 checkpoint: ???
 impl : warp #or jax
 eval_with_training_env : false #added
-num_evals : 20
+num_evals : ???
 
 #policy
 policy : ppo
@@ -55,6 +55,8 @@ use_scheduling : False
 # misc
 save_video: true
 save_agent: true
+rscope_envs: 16
+rscope: false
 seed: 42
 
 # convenience

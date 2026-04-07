@@ -17,8 +17,9 @@ from mujoco_playground._src.mjx_env import State  # pylint: disable=g-importing-
 
 _MODEL_PARAM_SIZE = 29
 _NUT_HALF_HEIGHT = 0.024
-_SUCCESS_XY = 0.0375
+_SUCCESS_XY = 0.005
 _SUCCESS_Z = 0.036
+_SUCCESS_ROT = 0.35
 _RELEASE_DISTANCE = 0.15
 _RELEASE_OPEN_SUM = 0.055
 
@@ -49,14 +50,15 @@ def default_config() -> config_dict.ConfigDict:
       action_scale=0.04,
       reward_config=config_dict.create(
           scales=config_dict.create(
-              gripper_nut=1.5,
-              nut_lift=1.0,
-              nut_align=2.0,
-              nut_thread=4.0,
-              release=1.0,
-              no_floor_collision=0.1,
-              robot_target_qpos=0.1,
-              success=2.0,
+              gripper_nut=1.5 /4,
+              nut_lift=1.0 /4,
+              nut_align=2.0 /4,
+              nut_orientation=1.0 /4,
+              nut_thread=6.0 /4,
+              release=2.0 /4,
+              no_floor_collision=0.1/4,
+              robot_target_qpos=0.1/4,
+              success=8.0/4,
           )
       ),
       impl="jax",
@@ -82,9 +84,9 @@ class PandaNutThread(panda.PandaBase):
     self._peg_top_site = self._mj_model.site("peg_top_site").id
     self._peg_hover_site = self._mj_model.site("peg_hover_site").id
     self._peg_body = self._mj_model.body("peg").id
-    self._peg_qposadr = self._mj_model.jnt_qposadr[
-        self._mj_model.joint("peg_x").id
-    ]
+    # self._peg_qposadr = self._mj_model.jnt_qposadr[
+    #     self._mj_model.joint("peg_x").id
+    # ]
     self._nut_dofadr = self._mj_model.jnt_dofadr[
         self._mj_model.body("nut").jntadr[0]
     ]
@@ -93,11 +95,6 @@ class PandaNutThread(panda.PandaBase):
         for geom in ["left_finger_pad", "right_finger_pad", "hand_capsule"]
     ]
     self._peg_base_xy = jp.array(self._mj_model.body("peg").pos[:2], dtype=jp.float32)
-    self._goal_z = jp.array(self._mj_model.site("peg_site").pos[2], dtype=jp.float32)
-    self._hover_z = jp.array(
-        self._mj_model.site("peg_hover_site").pos[2], dtype=jp.float32
-    )
-
   def reset(self, rng: jax.Array) -> State:
     rng, rng_peg_xy, rng_yaw = jax.random.split(rng, 3)
 
@@ -105,8 +102,8 @@ class PandaNutThread(panda.PandaBase):
     peg_xy = jax.random.uniform(
         rng_peg_xy,
         (2,),
-        minval=jp.array([0.54, -0.18]),
-        maxval=jp.array([0.64, -0.06]),
+        minval=jp.array([0.56, -0.10]),
+        maxval=jp.array([0.64, 0.10]),
     )
     peg_offset = peg_xy - self._peg_base_xy
     nut_quat = math.axis_angle_to_quat(
@@ -117,7 +114,7 @@ class PandaNutThread(panda.PandaBase):
     init_q = jp.array(self._init_q)
     init_q = init_q.at[self._obj_qposadr : self._obj_qposadr + 3].set(nut_pos)
     init_q = init_q.at[self._obj_qposadr + 3 : self._obj_qposadr + 7].set(nut_quat)
-    init_q = init_q.at[self._peg_qposadr : self._peg_qposadr + 2].set(peg_offset)
+    # init_q = init_q.at[self._peg_qposadr : self._peg_qposadr + 2].set(peg_offset)
 
     data = mjx_env.make_data(
         self._mj_model,
@@ -175,25 +172,36 @@ class PandaNutThread(panda.PandaBase):
     peg_pos = data.site_xpos[self._peg_site]
     peg_hover = data.site_xpos[self._peg_hover_site]
     gripper_pos = data.site_xpos[self._gripper_site]
+    nut_mat = data.xmat[self._obj_body]
+    peg_mat = data.xmat[self._peg_body]
 
     handle_dist = jp.linalg.norm(nut_handle - gripper_pos)
     xy_err = jp.linalg.norm((nut_pos - peg_pos)[:2])
     thread_z_err = jp.abs(nut_pos[2] - peg_pos[2])
     hover_err = jp.linalg.norm(nut_pos - peg_hover)
+    rot_err = jp.linalg.norm(nut_mat[:, :2] - peg_mat[:, :2])
 
     gripper_nut = 1.0 - jp.tanh(8.0 * handle_dist)
     nut_lift = 1.0 - jp.tanh(12.0 * jp.abs(nut_pos[2] - peg_hover[2]))
-    nut_align = 1.0 - jp.tanh(10.0 * (1.5 * xy_err + 0.25 * hover_err))
-    nut_thread = 1.0 - jp.tanh(18.0 * (2.5 * xy_err + thread_z_err))
+    nut_align = 1.0 - jp.tanh(10.0 * (1.5 * xy_err + 0.25 * hover_err + 0.2 * rot_err))
+    nut_orientation = 1.0 - jp.tanh(3.0 * rot_err)
+    nut_thread = 1.0 - jp.tanh(20.0 * (3.0 * xy_err + thread_z_err + 0.2 * rot_err))
 
     is_nut_grasped = self._is_nut_grasped(data, nut_pos, gripper_pos).astype(float)
-    thread_ready = jp.maximum(is_nut_grasped, (xy_err < 2.0 * _SUCCESS_XY).astype(float))
-    release = nut_thread * (1.0 - is_nut_grasped)
+    pre_insert_aligned = (
+        (xy_err < 1.5 * _SUCCESS_XY)
+        & (nut_pos[2] < peg_hover[2] + 0.015)
+        & (nut_pos[2] > peg_pos[2] - 0.01)
+        & (rot_err < 2.0 * _SUCCESS_ROT)
+    ).astype(float)
     success = (
         (xy_err < _SUCCESS_XY)
         & (thread_z_err < _SUCCESS_Z)
+        & (rot_err < _SUCCESS_ROT)
         & (~self._is_nut_grasped(data, nut_pos, gripper_pos))
     ).astype(float)
+    gripper_clear = jp.tanh(10.0 * jp.linalg.norm(gripper_pos - nut_pos))
+    release = success * (1.0 - is_nut_grasped) * gripper_clear
 
     hand_floor_collision = [
         data.sensordata[self._mj_model.sensor_adr[sensor_id]] > 0
@@ -211,7 +219,8 @@ class PandaNutThread(panda.PandaBase):
         "gripper_nut": gripper_nut,
         "nut_lift": nut_lift * is_nut_grasped,
         "nut_align": nut_align * jp.maximum(is_nut_grasped, nut_lift > 0.25),
-        "nut_thread": nut_thread * thread_ready,
+        "nut_orientation": nut_orientation * jp.maximum(is_nut_grasped, nut_lift > 0.25),
+        "nut_thread": nut_thread * (is_nut_grasped * pre_insert_aligned),
         "release": release,
         "no_floor_collision": no_floor_collision,
         "robot_target_qpos": robot_target_qpos,

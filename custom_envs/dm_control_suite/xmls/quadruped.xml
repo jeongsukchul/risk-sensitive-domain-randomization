@@ -1,7 +1,7 @@
 <mujoco model="quadruped">
-    <include file="./skybox.xml"/>
-    <include file="./visual.xml"/>
-    <include file="./materials.xml"/>
+    <include file="./common/skybox.xml"/>
+    <include file="./common/visual.xml"/>
+    <include file="./common/materials.xml"/>
     <option timestep="0.005" solver="Newton" iterations="4" ls_iterations="8"/>
     <custom>
         <numeric data="4" name="max_contact_points"/>
@@ -11,8 +11,8 @@
     <default>
         <geom solimp=".9 .99 .003" solref=".01 1" conaffinity="0" condim="3" contype="0"/>
         <default class="body">
-            <geom  type="capsule" size=".08" condim="1" material="self" density="500"/>
-            <joint type="hinge" damping="30" armature=".01"
+            <geom  type="capsule" size=".08" condim="1" material="self" density="100"/>
+            <joint type="hinge" damping="0.5" armature=".005"
              limited="true" solimplimit="0 .99 .01"/>
             <default class="hip">
                 <default class="yaw">
@@ -36,18 +36,17 @@
                 <site type="sphere" size=".084" material="site"  group="4"/>
             </default>
         </default>
-        <default class="coupling">
-            <equality solimp="0.95 0.99 0.01" solref=".005 .5"/>
-        </default>
-        <general ctrllimited="true" gainprm="1000" biasprm="0 -1000" biastype="affine" dyntype="filter" dynprm=".1"/>
         <default class="yaw_act">
-            <general ctrlrange="-1 1"/>
+            <position kp="35" inheritrange="1" forcerange="-23.7 23.7"/>
         </default>
-        <default class="lift_act">
-            <general ctrlrange="-1 1.1"/>
+        <default class="pitch_act">
+            <position kp="35" inheritrange="1" forcerange="-35.55 35.55"/>
         </default>
-        <default class="extend_act">
-            <general ctrlrange="-.8 .8"/>
+        <default class="knee_act">
+            <position kp="35" inheritrange="1" forcerange="-35.55 35.55"/>
+        </default>
+        <default class="ankle_act">
+            <position kp="35" inheritrange="1" forcerange="-23.7 23.7"/>
         </default>
     </default>
     <worldbody>
@@ -64,7 +63,7 @@
             <geom name="eye_l" type="cylinder" size=".05"  fromto=".1 .07 .12 .31 .07 .08" mass="0"/>
             <site name="pupil_l" type="sphere" size=".033"  pos=".3 .07 .08" zaxis="1 0 0" material="eye"/>
             <site name="workspace" type="sphere" size=".3 .3 .3"  material="site" pos=".8 0 -.2" group="3"/>
-            <geom name="torso" type="ellipsoid" size=".3 .27 .2" density="1000" contype="1"/>
+            <geom name="torso" type="ellipsoid" size=".3 .27 .2" density="75" contype="1"/>
             <site name="torso" size=".05" rgba="1 0 0 1" />
             <body name="hip_front_left" pos=".2 .2 0" euler="0 0 45" childclass="hip">
                 <joint name="yaw_front_left" class="yaw"/>
@@ -136,83 +135,23 @@
             </body>
         </body>
     </worldbody>
-    <tendon>
-        <fixed name="coupling_front_left">
-            <joint joint="pitch_front_left"      coef=".333"/>
-            <joint joint="knee_front_left"       coef=".333"/>
-            <joint joint="ankle_front_left"      coef=".333"/>
-        </fixed>
-        <fixed name="coupling_front_right">
-            <joint joint="pitch_front_right"      coef=".333"/>
-            <joint joint="knee_front_right"       coef=".333"/>
-            <joint joint="ankle_front_right"      coef=".333"/>
-        </fixed>
-        <fixed name="coupling_back_right">
-            <joint joint="pitch_back_right"      coef=".333"/>
-            <joint joint="knee_back_right"       coef=".333"/>
-            <joint joint="ankle_back_right"      coef=".333"/>
-        </fixed>
-        <fixed name="coupling_back_left">
-            <joint joint="pitch_back_left"      coef=".333"/>
-            <joint joint="knee_back_left"       coef=".333"/>
-            <joint joint="ankle_back_left"      coef=".333"/>
-        </fixed>
-        <fixed name="extend_front_left">
-            <joint joint="pitch_front_left"      coef=".25"/>
-            <joint joint="knee_front_left"       coef="-.5"/>
-            <joint joint="ankle_front_left"      coef=".25"/>
-        </fixed>
-        <fixed name="lift_front_left">
-            <joint joint="pitch_front_left"      coef=".5"/>
-            <joint joint="ankle_front_left"      coef="-.5"/>
-        </fixed>
-        <fixed name="extend_front_right">
-            <joint joint="pitch_front_right"     coef=".25"/>
-            <joint joint="knee_front_right"      coef="-.5"/>
-            <joint joint="ankle_front_right"     coef=".25"/>
-        </fixed>
-        <fixed name="lift_front_right">
-            <joint joint="pitch_front_right"     coef=".5"/>
-            <joint joint="ankle_front_right"     coef="-.5"/>
-        </fixed>
-        <fixed name="extend_back_right">
-            <joint joint="pitch_back_right"     coef=".25"/>
-            <joint joint="knee_back_right"      coef="-.5"/>
-            <joint joint="ankle_back_right"     coef=".25"/>
-        </fixed>
-        <fixed name="lift_back_right">
-            <joint joint="pitch_back_right"     coef=".5"/>
-            <joint joint="ankle_back_right"     coef="-.5"/>
-        </fixed>
-        <fixed name="extend_back_left">
-            <joint joint="pitch_back_left"      coef=".25"/>
-            <joint joint="knee_back_left"       coef="-.5"/>
-            <joint joint="ankle_back_left"      coef=".25"/>
-        </fixed>
-        <fixed name="lift_back_left">
-            <joint joint="pitch_back_left"     coef=".5"/>
-            <joint joint="ankle_back_left"     coef="-.5"/>
-        </fixed>
-    </tendon>
-    <equality>
-        <tendon name="coupling_front_left" tendon1="coupling_front_left" class="coupling"/>
-        <tendon name="coupling_front_right" tendon1="coupling_front_right" class="coupling"/>
-        <tendon name="coupling_back_right" tendon1="coupling_back_right" class="coupling"/>
-        <tendon name="coupling_back_left" tendon1="coupling_back_left" class="coupling"/>
-    </equality>
     <actuator>
-        <general name="yaw_front_left" class="yaw_act" joint="yaw_front_left"/>
-        <general name="lift_front_left" class="lift_act" tendon="lift_front_left"/>
-        <general name="extend_front_left" class="extend_act" tendon="extend_front_left"/>
-        <general name="yaw_front_right" class="yaw_act" joint="yaw_front_right"/>
-        <general name="lift_front_right" class="lift_act" tendon="lift_front_right"/>
-        <general name="extend_front_right" class="extend_act" tendon="extend_front_right"/>
-        <general name="yaw_back_right" class="yaw_act" joint="yaw_back_right"/>
-        <general name="lift_back_right" class="lift_act" tendon="lift_back_right"/>
-        <general name="extend_back_right" class="extend_act" tendon="extend_back_right"/>
-        <general name="yaw_back_left" class="yaw_act" joint="yaw_back_left"/>
-        <general name="lift_back_left" class="lift_act" tendon="lift_back_left"/>
-        <general name="extend_back_left" class="extend_act" tendon="extend_back_left"/>
+        <position name="yaw_front_left" class="yaw_act" joint="yaw_front_left"/>
+        <position name="pitch_front_left" class="pitch_act" joint="pitch_front_left"/>
+        <position name="knee_front_left" class="knee_act" joint="knee_front_left"/>
+        <position name="ankle_front_left" class="ankle_act" joint="ankle_front_left"/>
+        <position name="yaw_front_right" class="yaw_act" joint="yaw_front_right"/>
+        <position name="pitch_front_right" class="pitch_act" joint="pitch_front_right"/>
+        <position name="knee_front_right" class="knee_act" joint="knee_front_right"/>
+        <position name="ankle_front_right" class="ankle_act" joint="ankle_front_right"/>
+        <position name="yaw_back_right" class="yaw_act" joint="yaw_back_right"/>
+        <position name="pitch_back_right" class="pitch_act" joint="pitch_back_right"/>
+        <position name="knee_back_right" class="knee_act" joint="knee_back_right"/>
+        <position name="ankle_back_right" class="ankle_act" joint="ankle_back_right"/>
+        <position name="yaw_back_left" class="yaw_act" joint="yaw_back_left"/>
+        <position name="pitch_back_left" class="pitch_act" joint="pitch_back_left"/>
+        <position name="knee_back_left" class="knee_act" joint="knee_back_left"/>
+        <position name="ankle_back_left" class="ankle_act" joint="ankle_back_left"/>
     </actuator>
     <sensor>
         <accelerometer name="imu_accel" site="torso"/>
@@ -226,6 +165,10 @@
         <torque name="torque_toe_front_right" site="toe_front_right"/>
         <torque name="torque_toe_back_right" site="toe_back_right"/>
         <torque name="torque_toe_back_left" site="toe_back_left"/>
+        <framepos objtype="site" objname="toe_front_left" name="toe_front_left_pos" reftype="site" refname="torso"/>
+        <framepos objtype="site" objname="toe_front_right" name="toe_front_right_pos" reftype="site" refname="torso"/>
+        <framepos objtype="site" objname="toe_back_right" name="toe_back_right_pos" reftype="site" refname="torso"/>
+        <framepos objtype="site" objname="toe_back_left" name="toe_back_left_pos" reftype="site" refname="torso"/>
         <subtreecom name="center_of_mass" body="torso"/>
     </sensor>
 </mujoco>

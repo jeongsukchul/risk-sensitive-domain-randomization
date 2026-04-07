@@ -26,33 +26,20 @@ from mujoco import mjx
 
 from custom_envs import mjx_env
 from mujoco_playground._src import reward
+from mujoco_playground._src.dm_control_suite import common
 
-_XML_PATH = mjx_env.ROOT_PATH.parent / "quadruped" / "quadruped.xml"
+_XML_PATH = mjx_env.ROOT_PATH / "dm_control_suite" / "xmls" / "quadruped.xml"
+_REF_MJ_MODEL = mujoco.MjModel.from_xml_string(
+    _XML_PATH.read_text(), common.get_assets()
+)
 
 WALK_SPEED = 0.5
 RUN_SPEED = 5.0
+_STAND_HEIGHT = 0.55
 
 _FLOOR_GEOM_ID = 0
 _TORSO_BODY_ID = 1
-_TOE_GEOM_IDS = jp.array([7, 11, 15, 19])
-_JOINT_DOF_IDS = jp.array([6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21])
-_FRICTION_DIM = 3
-_DAMPING_DIM = 16
-
-_ACTUATOR_NAME_TO_ID = {
-    "yaw_front_left": 0,
-    "lift_front_left": 1,
-    "extend_front_left": 2,
-    "yaw_front_right": 3,
-    "lift_front_right": 4,
-    "extend_front_right": 5,
-    "yaw_back_right": 6,
-    "lift_back_right": 7,
-    "extend_back_right": 8,
-    "yaw_back_left": 9,
-    "lift_back_left": 10,
-    "extend_back_left": 11,
-}
+_BODY_PARAM_DIM = _REF_MJ_MODEL.nbody - 1
 
 
 def default_config() -> config_dict.ConfigDict:
@@ -61,42 +48,37 @@ def default_config() -> config_dict.ConfigDict:
       sim_dt=0.005,
       episode_length=1000,
       action_repeat=1,
+      action_scale=0.5,
       vision=False,
       impl="jax",
       nconmax=150_000,
       njmax=250,
+      history_len=3,
   )
 
 
-def _quat_from_yaw(yaw: jax.Array) -> jax.Array:
-  half = 0.5 * yaw
-  return jp.array([jp.cos(half), 0.0, 0.0, jp.sin(half)])
-
-
-def _find_non_contacting_height(
-    mjx_model: mjx.Model,
-    data: mjx.Data,
-    orientation: jax.Array,
-    x_pos: float = 0.0,
-    y_pos: float = 0.0,
-) -> mjx.Data:
-  def body_fn(state):
-    z_pos, num_contacts, num_attempts, current_data = state
-    qpos = current_data.qpos.at[:3].set(jp.array([x_pos, y_pos, z_pos]))
-    qpos = qpos.at[3:7].set(orientation)
-    next_data = current_data.replace(qpos=qpos)
-    next_data = mjx.forward(mjx_model, next_data)
-    return (z_pos + 0.01, next_data.ncon, num_attempts + 1, next_data)
-
-  initial_state = (0.0, 1, 0, data)
-  *_, num_attempts, next_data = jax.lax.while_loop(
-      lambda state: (state[1] > 0) & (state[2] <= 10_000),
-      body_fn,
-      initial_state,
-  )
-  return jax.tree_util.tree_map(
-      lambda new, old: jp.where(num_attempts < 10_000, new, old), next_data, data
-  )
+_RESET_JOINT_POS_NOISE = 0.05
+_RESET_JOINT_VEL_NOISE = 0.1
+_DEFAULT_JOINT_POSE = jp.array(
+    [
+        0.0,
+        0.55,
+        -0.95,
+        0.45,
+        0.0,
+        0.55,
+        -0.95,
+        0.45,
+        0.0,
+        0.55,
+        -0.95,
+        0.45,
+        0.0,
+        0.55,
+        -0.95,
+        0.45,
+    ]
+)
 
 
 class Quadruped(mjx_env.MjxEnv):
@@ -116,44 +98,77 @@ class Quadruped(mjx_env.MjxEnv):
 
     self._desired_speed = desired_speed
     self._xml_path = _XML_PATH.as_posix()
-    self._mj_model = mujoco.MjModel.from_xml_path(self._xml_path)
+    self._model_assets = common.get_assets()
+    self._mj_model = mujoco.MjModel.from_xml_string(
+        _XML_PATH.read_text(), self._model_assets
+    )
     self._mj_model.opt.timestep = self.sim_dt
     self._mjx_model = mjx.put_model(self._mj_model, impl=self._config.impl)
     self._post_init()
 
   def _post_init(self) -> None:
     self._torso_body_id = self.mj_model.body("torso").id
+    self._default_pose = _DEFAULT_JOINT_POSE
+    self._joint_lowers = jp.array(self._mj_model.jnt_range[1:, 0])
+    self._joint_uppers = jp.array(self._mj_model.jnt_range[1:, 1])
+    self._joint_obs_size = self.mjx_model.nq - 7
+    self._joint_vel_size = self.mjx_model.nv - 6
     self._force_torque_names = [
         f"{kind}_toe_{pos}_{side}"
         for kind, pos, side in product(
             ("force", "torque"), ("front", "back"), ("left", "right")
         )
     ]
+    self._toe_pos_sensor_names = [
+        f"toe_{pos}_{side}_pos"
+        for pos, side in product(("front", "back"), ("left", "right"))
+    ]
 
   def reset(self, rng: jax.Array) -> mjx_env.State:
-    rng, yaw_rng = jax.random.split(rng)
+    rng, qpos_rng, qvel_rng = jax.random.split(rng, 3)
 
     qpos = jp.array(self.mj_model.qpos0)
-    # qpos = qpos.at[3:7].set(
-    #     _quat_from_yaw(
-    #         jax.random.uniform(yaw_rng, (), minval=-jp.pi, maxval=jp.pi)
-    #     )
-    # )
+    qpos = qpos.at[7:].set(self._default_pose)
+    joint_noise = jax.random.uniform(
+        qpos_rng,
+        (self.mjx_model.nq - 7,),
+        minval=-_RESET_JOINT_POS_NOISE,
+        maxval=_RESET_JOINT_POS_NOISE,
+    )
+    qpos = qpos.at[7:].add(joint_noise)
+    qpos = qpos.at[7:].set(jp.clip(qpos[7:], self._joint_lowers, self._joint_uppers))
+
+    qvel = jax.random.uniform(
+        qvel_rng,
+        (self.mjx_model.nv,),
+        minval=-_RESET_JOINT_VEL_NOISE,
+        maxval=_RESET_JOINT_VEL_NOISE,
+    )
+    qvel = qvel.at[:6].set(0.0)
     data = mjx_env.make_data(
         self.mj_model,
         qpos=qpos,
+        qvel=qvel,
         impl=self.mjx_model.impl.value,
         nconmax=self._config.nconmax,
         njmax=self._config.njmax,
     )
     data = mjx.forward(self.mjx_model, data)
-    # data = _find_non_contacting_height(self.mjx_model, data, qpos[3:7])
+    # Keep the crouched default pose, but avoid backend-specific contact-count
+    # fields during reset so this works across MJX implementations.
 
     metrics = {
+        "reward/standing": jp.zeros(()),
         "reward/upright": jp.zeros(()),
+        "reward/stand": jp.zeros(()),
+        "reward/small_control": jp.zeros(()),
         "reward/move": jp.zeros(()),
     }
-    info = {"rng": rng}
+    info = {
+        "rng": rng,
+        "qpos_history": jp.tile(qpos[7:], self._config.history_len),
+        "qvel_history": jp.tile(qvel[6:], self._config.history_len),
+    }
 
     reward_value, done = jp.zeros(2)
     obs = self._get_obs(data, info)
@@ -162,7 +177,8 @@ class Quadruped(mjx_env.MjxEnv):
   def step(self, state: mjx_env.State, action: jax.Array) -> mjx_env.State:
     lower = self._mj_model.actuator_ctrlrange[:, 0]
     upper = self._mj_model.actuator_ctrlrange[:, 1]
-    action = (action + 1.0) / 2.0 * (upper - lower) + lower
+    action = self._default_pose + action * self._config.action_scale
+    action = jp.clip(action, lower, upper)
     data = mjx_env.step(self.mjx_model, state.data, action, self.n_substeps)
     reward_value = self._get_reward(data, action, state.info, state.metrics)
     obs = self._get_obs(data, state.info)
@@ -173,10 +189,20 @@ class Quadruped(mjx_env.MjxEnv):
     )
 
   def _get_obs(self, data: mjx.Data, info: dict[str, Any]) -> dict[str, jax.Array]:
-    del info
+    qpos_history = jp.roll(info["qpos_history"], self._joint_obs_size).at[
+        : self._joint_obs_size
+    ].set(data.qpos[7:])
+    qvel_history = jp.roll(info["qvel_history"], self._joint_vel_size).at[
+        : self._joint_vel_size
+    ].set(data.qvel[6:])
+    info["qpos_history"] = qpos_history
+    info["qvel_history"] = qvel_history
+    toe_pos = self._toe_positions(data)
     state = jp.concatenate(
         [
-            self._egocentric_state(data),
+            qpos_history,
+            qvel_history,
+            toe_pos,
             self._torso_velocity(data),
             self._torso_upright(data).reshape(1),
             self._imu(data),
@@ -186,16 +212,11 @@ class Quadruped(mjx_env.MjxEnv):
     privileged_state = jp.concatenate(
         [
             state,
-            jp.array(
-                [
-                    self.mjx_model.geom_friction[_FLOOR_GEOM_ID, 0],
-                    self.mjx_model.body_mass[_TORSO_BODY_ID],
-                    jp.mean(self.mjx_model.dof_damping[_JOINT_DOF_IDS]),
-                    self.mjx_model.actuator_gear[_ACTUATOR_NAME_TO_ID["lift_front_left"], 0],
-                    self.mjx_model.actuator_gear[_ACTUATOR_NAME_TO_ID["yaw_front_left"], 0],
-                    self.mjx_model.actuator_gear[_ACTUATOR_NAME_TO_ID["extend_front_left"], 0],
-                ]
-            ),
+            self.mjx_model.geom_friction[_FLOOR_GEOM_ID, 0:1],
+            self.mjx_model.body_mass[1:],
+            self.mjx_model.body_ipos[1:, 0],
+            data.qpos[7:],
+            data.qvel[6:],
         ]
     )
     return {
@@ -210,24 +231,42 @@ class Quadruped(mjx_env.MjxEnv):
       info: dict[str, Any],
       metrics: dict[str, Any],
   ) -> jax.Array:
-    del info, action
+    del info
+    torso_height = data.xpos[self._torso_body_id, -1]
+    standing = reward.tolerance(
+        torso_height,
+        bounds=(_STAND_HEIGHT, float("inf")),
+        margin=_STAND_HEIGHT / 2,
+    )
+    metrics["reward/standing"] = standing
+
+    upright = reward.tolerance(
+        self._torso_upright(data),
+        bounds=(0.8, float("inf")),
+        sigmoid="linear",
+        margin=1.8,
+        value_at_margin=0.0,
+    )
+    metrics["reward/upright"] = upright
+
+    stand_reward = standing * upright
+    metrics["reward/stand"] = stand_reward
+
+    small_control = reward.tolerance(
+        action, margin=1.0, value_at_margin=0.0, sigmoid="quadratic"
+    ).mean()
+    small_control = (4.0 + small_control) / 5.0
+    metrics["reward/small_control"] = small_control
+
     move_reward = reward.tolerance(
         self._torso_velocity(data)[0],
         bounds=(self._desired_speed, float("inf")),
         sigmoid="linear",
         margin=self._desired_speed,
-        value_at_margin=0.5,
-    )
-    upright_reward = reward.tolerance(
-        self._torso_upright(data),
-        bounds=(1.0, float("inf")),
-        sigmoid="linear",
-        margin=2.0,
         value_at_margin=0.0,
     )
     metrics["reward/move"] = move_reward
-    metrics["reward/upright"] = upright_reward
-    return move_reward * upright_reward
+    return stand_reward * move_reward * small_control
 
   def _egocentric_state(self, data: mjx.Data) -> jax.Array:
     return jp.concatenate([data.qpos[7:], data.qvel[6:], data.act])
@@ -251,6 +290,14 @@ class Quadruped(mjx_env.MjxEnv):
         ]
     )
 
+  def _toe_positions(self, data: mjx.Data) -> jax.Array:
+    return jp.concatenate(
+        [
+            mjx_env.get_sensor_data(self.mj_model, data, name)
+            for name in self._toe_pos_sensor_names
+        ]
+    )
+
   @property
   def xml_path(self) -> str:
     return self._xml_path
@@ -269,73 +316,54 @@ class Quadruped(mjx_env.MjxEnv):
 
   @property
   def nominal_params(self) -> jp.ndarray:
-    return jp.ones(1 + _FRICTION_DIM + _DAMPING_DIM + 3)
+    return jp.concatenate([
+        self.mjx_model.geom_friction[_FLOOR_GEOM_ID, 0:1],
+        self.mjx_model.body_mass[1:],
+        jp.zeros(_BODY_PARAM_DIM),
+    ])
 
   @property
   def dr_range(self) -> tuple[jp.ndarray, jp.ndarray]:
     low = jp.concatenate([
-        jp.array([0.3]),
-        jp.full((_FRICTION_DIM,), 0.5),
-        jp.full((_DAMPING_DIM,), 0.9),
-        jp.full((3,), 0.9),
+        jp.array([0.5]),
+        self.mjx_model.body_mass[1:] * 0.5,
+        jp.full((_BODY_PARAM_DIM,), -5e-2),
     ])
     high = jp.concatenate([
-        jp.array([10.]),
-        jp.full((_FRICTION_DIM,), 3.),
-        jp.full((_DAMPING_DIM,), 1.1),
-        jp.full((3,), 1.1),
+        jp.array([3.]),
+        self.mjx_model.body_mass[1:] * 1.5,
+        jp.full((_BODY_PARAM_DIM,), 5e-2),
     ])
     return low, high
 
   @property
   def dr_label(self) -> tuple[str, ...]:
     return (
-        "torso mass scale",
-        "friction slide scale",
-        "friction torsion scale",
-        "friction rolling scale",
-        *(f"joint damping scale {i}" for i in range(_DAMPING_DIM)),
-        "lift gear scale",
-        "yaw gear scale",
-        "extend gear scale",
+        "floor friction scale",
+        *(f"body mass {i}" for i in range(_BODY_PARAM_DIM)),
+        *(f"body ipos x offset {i}" for i in range(_BODY_PARAM_DIM)),
     )
 
 
 def _apply_domain_params(model: mjx.Model, params: jax.Array):
   idx = 0
-  torso_scale = params[idx]
+  floor_friction = params[idx]
   idx += 1
-  friction_scale = params[idx : idx + _FRICTION_DIM]
-  idx += _FRICTION_DIM
-  damping_scale = params[idx : idx + _DAMPING_DIM]
-  idx += _DAMPING_DIM
-  gear_lift, gear_yaw, gear_extend = params[idx : idx + 3]
-  idx += 3
+  body_mass_params = params[idx : idx + _BODY_PARAM_DIM]
+  idx += _BODY_PARAM_DIM
+  body_ipos_x_params = params[idx : idx + _BODY_PARAM_DIM]
+  idx += _BODY_PARAM_DIM
   assert idx == params.shape[0]
 
-  geom_friction = model.geom_friction
-  geom_friction = geom_friction.at[_FLOOR_GEOM_ID].multiply(friction_scale)
-  geom_friction = geom_friction.at[_TOE_GEOM_IDS].multiply(friction_scale)
+  geom_friction = model.geom_friction.at[_FLOOR_GEOM_ID, 0].set(floor_friction)
   geom_friction = jp.clip(geom_friction, a_min=1e-3)
 
-  body_mass = model.body_mass.at[_TORSO_BODY_ID].multiply(torso_scale)
-  body_inertia = model.body_inertia.at[_TORSO_BODY_ID].multiply(torso_scale**3)
+  body_mass = model.body_mass.at[1:].set(body_mass_params)
+  body_ipos = model.body_ipos.at[1:, 0].set(
+      model.body_ipos[1:, 0] + body_ipos_x_params
+  )
 
-  dof_damping = model.dof_damping
-  dof_damping = dof_damping.at[_JOINT_DOF_IDS].multiply(damping_scale)
-  dof_damping = jp.clip(dof_damping, a_min=1e-4)
-
-  actuator_gear = model.actuator_gear
-  for name, actuator_id in _ACTUATOR_NAME_TO_ID.items():
-    if "yaw" in name:
-      scale = gear_yaw
-    elif "lift" in name:
-      scale = gear_lift
-    else:
-      scale = gear_extend
-    actuator_gear = actuator_gear.at[actuator_id, 0].multiply(scale)
-
-  return geom_friction, body_mass, body_inertia, dof_damping, actuator_gear
+  return geom_friction, body_mass, body_ipos
 
 
 def domain_randomize(model: mjx.Model, dr_range, params=None, rng: jax.Array = None):
@@ -343,38 +371,47 @@ def domain_randomize(model: mjx.Model, dr_range, params=None, rng: jax.Array = N
     dr_low, dr_high = dr_range
     dist = functools.partial(
         jax.random.uniform,
-        shape=(dr_low.shape[0],),
+        shape=(len(dr_low),),
         minval=dr_low,
         maxval=dr_high,
     )
 
-    @jax.vmap
-    def rand_dynamics(rng_i):
-      return _apply_domain_params(model, dist(rng_i))
+  @jax.vmap
+  def shift_dynamics(param_vec):
+    return _apply_domain_params(model, param_vec)
 
-    (geom_friction, body_mass, body_inertia, dof_damping, actuator_gear) = rand_dynamics(rng)
-  elif params is not None:
-    geom_friction, body_mass, body_inertia, dof_damping, actuator_gear = _apply_domain_params(model, params)
+  @jax.vmap
+  def rand_dynamics(rng_i):
+    return _apply_domain_params(model, dist(rng_i))
+
+  if rng is None and params is not None:
+    (
+        geom_friction,
+        body_mass,
+        body_ipos,
+    ) = shift_dynamics(params)
+  elif rng is not None and params is None:
+    (
+        geom_friction,
+        body_mass,
+        body_ipos,
+    ) = rand_dynamics(rng)
   else:
-    raise ValueError("Provide exactly one of `params` or `rng`.")
+    raise ValueError("rng and params wrong!")
 
   in_axes = jax.tree_util.tree_map(lambda _: None, model)
   in_axes = in_axes.tree_replace(
       {
           "geom_friction": 0,
           "body_mass": 0,
-          "body_inertia": 0,
-          "dof_damping": 0,
-          "actuator_gear": 0,
+          "body_ipos": 0,
       }
   )
   model = model.tree_replace(
       {
           "geom_friction": geom_friction,
           "body_mass": body_mass,
-          "body_inertia": body_inertia,
-          "dof_damping": dof_damping,
-          "actuator_gear": actuator_gear,
+          "body_ipos": body_ipos,
       }
   )
   return model, in_axes
@@ -384,19 +421,41 @@ def domain_randomize_eval(
     model: mjx.Model, dr_range, params=None, rng: jax.Array = None
 ):
   if rng is not None:
-    return domain_randomize(model, dr_range, params=None, rng=rng)
-  if params is None:
-    raise ValueError("Provide `params` or `rng`.")
+    dr_low, dr_high = dr_range
+    dist = functools.partial(
+        jax.random.uniform,
+        shape=(len(dr_low),),
+        minval=dr_low,
+        maxval=dr_high,
+    )
 
-  geom_friction, body_mass, body_inertia, dof_damping, actuator_gear = _apply_domain_params(model, params)
+  def shift_dynamics(param_vec):
+    return _apply_domain_params(model, param_vec)
+
+  def rand_dynamics(rng_i):
+    return _apply_domain_params(model, dist(rng_i))
+
+  if rng is None and params is not None:
+    (
+        geom_friction,
+        body_mass,
+        body_ipos,
+    ) = shift_dynamics(params)
+  elif rng is not None and params is None:
+    (
+        geom_friction,
+        body_mass,
+        body_ipos,
+    ) = rand_dynamics(rng)
+  else:
+    raise ValueError("rng and params wrong!")
+
   in_axes = jax.tree_util.tree_map(lambda _: None, model)
   model = model.tree_replace(
       {
           "geom_friction": geom_friction,
           "body_mass": body_mass,
-          "body_inertia": body_inertia,
-          "dof_damping": dof_damping,
-          "actuator_gear": actuator_gear,
+          "body_ipos": body_ipos,
       }
   )
   return model, in_axes

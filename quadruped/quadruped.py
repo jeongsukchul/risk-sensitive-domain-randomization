@@ -27,18 +27,32 @@ _JOINTS_IDS = [6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21]
 
 actuator_names_to_ids = {
     "yaw_front_left": 0,
-    "lift_front_left": 1,
-    "extend_front_left": 2,
-    "yaw_front_right": 3,
-    "lift_front_right": 4,
-    "extend_front_right": 5,
-    "yaw_back_right": 6,
-    "lift_back_right": 7,
-    "extend_back_right": 8,
-    "yaw_back_left": 9,
-    "lift_back_left": 10,
-    "extend_back_left": 11,
+    "pitch_front_left": 1,
+    "knee_front_left": 2,
+    "ankle_front_left": 3,
+    "yaw_front_right": 4,
+    "pitch_front_right": 5,
+    "knee_front_right": 6,
+    "ankle_front_right": 7,
+    "yaw_back_right": 8,
+    "pitch_back_right": 9,
+    "knee_back_right": 10,
+    "ankle_back_right": 11,
+    "yaw_back_left": 12,
+    "pitch_back_left": 13,
+    "knee_back_left": 14,
+    "ankle_back_left": 15,
 }
+
+
+def _gear_bounds(cfg, name: str, fallback: str | None = None) -> tuple[float, float]:
+    if hasattr(cfg.gear, name):
+        bounds = getattr(cfg.gear, name)
+    elif fallback is not None and hasattr(cfg.gear, fallback):
+        bounds = getattr(cfg.gear, fallback)
+    else:
+        bounds = (1.0, 1.0)
+    return bounds[0], bounds[1]
 
 
 def domain_randomization(cfg, sys, params=None, rng: jax.Array = None):
@@ -52,9 +66,10 @@ def domain_randomization(cfg, sys, params=None, rng: jax.Array = None):
                 cfg.torso[0],
                 cfg.friction[0],
                 cfg.damping[0],
-                cfg.gear.lift[0],
                 cfg.gear.yaw[0],
-                cfg.gear.extend[0],
+                _gear_bounds(cfg, "pitch", fallback="lift")[0],
+                _gear_bounds(cfg, "knee", fallback="extend")[0],
+                _gear_bounds(cfg, "ankle", fallback="extend")[0],
             ]
         )
         dr_high = jp.array(
@@ -62,9 +77,10 @@ def domain_randomization(cfg, sys, params=None, rng: jax.Array = None):
                 cfg.torso[1],
                 cfg.friction[1],
                 cfg.damping[1],
-                cfg.gear.lift[1],
                 cfg.gear.yaw[1],
-                cfg.gear.extend[1],
+                _gear_bounds(cfg, "pitch", fallback="lift")[1],
+                _gear_bounds(cfg, "knee", fallback="extend")[1],
+                _gear_bounds(cfg, "ankle", fallback="extend")[1],
             ]
         )
         dist = functools.partial(
@@ -75,9 +91,9 @@ def domain_randomization(cfg, sys, params=None, rng: jax.Array = None):
         )
 
     def _apply_params(p):
-        """p = [torso, friction, damping, gear_lift, gear_yaw, gear_extend]"""
+        """p = [torso, friction, damping, gear_yaw, gear_pitch, gear_knee, gear_ankle]"""
         torso_val, friction_val, damping_val = p[0], p[1], p[2]
-        gear_lift, gear_yaw, gear_extend = p[3], p[4], p[5]
+        gear_yaw, gear_pitch, gear_knee, gear_ankle = p[3], p[4], p[5], p[6]
 
         friction_sample = sys.geom_friction.copy()
         friction_sample = friction_sample.at[0, 0].add(friction_val)
@@ -95,10 +111,12 @@ def domain_randomization(cfg, sys, params=None, rng: jax.Array = None):
         for name, id_ in actuator_names_to_ids.items():
             if "yaw" in name:
                 update = gear_yaw
-            elif "extend" in name:
-                update = gear_extend
-            elif "lift" in name:
-                update = gear_lift
+            elif "pitch" in name:
+                update = gear_pitch
+            elif "knee" in name:
+                update = gear_knee
+            elif "ankle" in name:
+                update = gear_ankle
             else:
                 raise ValueError(f"Unknown actuator: {name}")
             gear_sample = gear_sample.at[id_, 0].multiply(update)

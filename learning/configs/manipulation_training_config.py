@@ -65,7 +65,7 @@ def manipulation_ppo_config(env_name: str) -> config_dict.ConfigDict:
     rl_config.network_factory.policy_hidden_layer_sizes = (256, 256, 256, 256)
     rl_config.network_factory.value_obs_key = "privileged_state"
   elif env_name == "PandaOpenCabinet":
-    rl_config.num_timesteps = 40_000_000
+    rl_config.num_timesteps = 200_000_000
     rl_config.num_evals = 4
     rl_config.unroll_length = 10
     rl_config.num_minibatches = 32
@@ -126,7 +126,7 @@ def manipulation_ppo_config(env_name: str) -> config_dict.ConfigDict:
     rl_config.learning_rate = 1e-3
     rl_config.entropy_cost = 2e-2
     rl_config.num_envs = 2048
-    rl_config.reward_scaling = 10.
+    rl_config.reward_scaling = 40.
     rl_config.batch_size = 512
     rl_config.num_resets_per_eval = 1
     rl_config.network_factory = config_dict.create(

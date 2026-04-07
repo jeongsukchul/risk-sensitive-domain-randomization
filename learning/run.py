@@ -103,11 +103,114 @@ CAMERAS = {
     "PandaOpenCabinet" : None,
 }
 
-def policy_params_fn(current_step, make_policy, params, ckpt_path: epath.Path):
+def _save_policy_checkpoint(current_step, make_policy, params, ckpt_path: epath.Path):
+  del make_policy
   orbax_checkpointer = ocp.PyTreeCheckpointer()
   save_args = orbax_utils.save_args_from_target(params)
   path = ckpt_path / f"{current_step}"
   orbax_checkpointer.save(path, params, force=True, save_args=save_args)
+
+
+def _rscope_fn(full_states, obs, rew, done):
+  del full_states, obs
+  done_mask = jnp.cumsum(done, axis=0)
+  valid_rewards = rew * (done_mask == 0)
+  episode_rewards = jnp.sum(valid_rewards, axis=0)
+  print(
+      "Collected rscope rollouts with reward"
+      f" {episode_rewards.mean():.3f} +- {episode_rewards.std():.3f}"
+  )
+
+
+class _RscopeAdvEnvAdapter:
+  """Adapts adv-wrapped envs to rscope's Brax-style reset/step API."""
+
+  def __init__(self, env):
+    self.env = env
+
+  def reset(self, rng):
+    return self.env.reset(rng)
+
+  def step(self, state, action):
+    return self.env.step(state, action, state.info["dr_params"])
+
+  def __getattr__(self, name):
+    return getattr(self.env, name)
+
+
+def _make_policy_params_hook(
+    cfg,
+    env,
+    env_cfg,
+    ppo_params,
+    randomization_fn,
+):
+  callbacks = [
+      functools.partial(
+          _save_policy_checkpoint,
+          ckpt_path=cfg.work_dir / "models",
+      )
+  ]
+
+  if getattr(cfg, "rscope_envs", None):
+    try:
+      from rscope import brax as rscope_utils
+    except ImportError as exc:
+      raise ImportError(
+          "rscope is not installed. Run `pip install rscope` in your training "
+          "environment to enable SSH visualization."
+      ) from exc
+
+    rscope_env = registry.load(cfg.task, config=copy.deepcopy(env_cfg))
+    if randomization_fn is None or not hasattr(rscope_env, "dr_range"):
+      raise ValueError(
+          "rscope visualization requires domain randomization so it can be "
+          "wrapped with wrap_for_adv_training."
+      )
+
+    dr_range_low, dr_range_high = rscope_env.dr_range
+    rscope_randomization_fn = functools.partial(
+        randomization_fn,
+        dr_range=rscope_env.dr_range,
+    )
+    rscope_env = wrap_for_adv_training(
+        rscope_env,
+        episode_length=ppo_params.episode_length,
+        action_repeat=ppo_params.action_repeat,
+        randomization_fn=rscope_randomization_fn,
+        param_size=len(dr_range_low),
+        dr_range_low=dr_range_low,
+        dr_range_high=dr_range_high,
+    )
+    rscope_env = _RscopeAdvEnvAdapter(rscope_env)
+    rscope_handle = rscope_utils.BraxRolloutSaver(
+        rscope_env,
+        ppo_params,
+        False,
+        cfg.rscope_envs,
+        cfg.rscope,
+        jax.random.PRNGKey(cfg.seed),
+        _rscope_fn,
+    )
+    print(
+        "rscope enabled. In another SSH terminal, run `python -m rscope` "
+        "from the same environment to inspect rollouts."
+    )
+
+    def _rscope_callback(current_step, make_policy, params):
+      del current_step
+      rscope_handle.set_make_policy(make_policy)
+      rscope_handle.dump_rollout(params)
+
+    callbacks.append(_rscope_callback)
+
+  def _policy_params_hook(current_step, make_policy, params):
+    for callback in callbacks:
+      callback(current_step, make_policy, params)
+
+  return _policy_params_hook
+
+
 def progress_fn(num_steps, metrics, use_wandb=True):
     if use_wandb:
         wandb.log(metrics, step=num_steps)
@@ -120,7 +223,7 @@ def progress_fn(num_steps, metrics, use_wandb=True):
     print("-------------------------------------------------------------------")
 
 
-def train_ppo(cfg:dict, randomization_fn, env, eval_env=None):
+def train_ppo(cfg:dict, randomization_fn, env, env_cfg, eval_env=None):
 
     print("training with ppo")
     if cfg.task in dm_control_suite._envs:
@@ -193,7 +296,6 @@ def train_ppo(cfg:dict, randomization_fn, env, eval_env=None):
             config=OmegaConf.to_container(cfg, resolve=True),
         )
         wandb.config.update({"env_name": cfg.task})
-    ppo_params.num_evals = cfg.num_evals
     network_factory = samplerppo_networks.make_samplerppo_networks
     train_fn = sampler_ppo.train
     for param in ppo_params.keys():
@@ -212,11 +314,18 @@ def train_ppo(cfg:dict, randomization_fn, env, eval_env=None):
     progress = functools.partial(progress_fn, use_wandb=cfg.use_wandb)
 
     train_gamma = cfg.gamma if "FLOW" in sampler_choice else 0.0
+    policy_params_hook = _make_policy_params_hook(
+        cfg=cfg,
+        env=env,
+        env_cfg=env_cfg,
+        ppo_params=ppo_params,
+        randomization_fn=randomizer,
+    )
     train_fn = functools.partial(
         train_fn, **dict(ppo_training_params),
         network_factory=network_factory,
         progress_fn=progress,
-        policy_params_fn=functools.partial(policy_params_fn, ckpt_path=cfg.work_dir / "models" ),
+        policy_params_fn=policy_params_hook,
         randomization_fn=randomizer,
         use_wandb=cfg.use_wandb,
         seed=cfg.seed,
@@ -468,7 +577,7 @@ def train(cfg: dict):
         randomization_fn = None 
 
     if "ppo" in cfg.policy:
-        make_inference_fn, params, metrics = train_ppo(cfg, randomization_fn, env)
+        make_inference_fn, params, metrics = train_ppo(cfg, randomization_fn, env, env_cfg)
     elif "td3" in cfg.policy:
         make_inference_fn, params, metrics = train_td3(cfg, randomization_fn, env)
 
