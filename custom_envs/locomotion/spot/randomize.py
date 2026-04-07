@@ -1,4 +1,4 @@
-"""Domain randomization for the Berkeley Humanoid environment."""
+"""Domain randomization for Spot locomotion environments."""
 
 import jax
 from mujoco import mjx

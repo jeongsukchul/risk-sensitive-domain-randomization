@@ -159,6 +159,35 @@ def make_data(
   return data
 
 
+def init(
+    model: Union[mujoco.MjModel, mjx.Model],
+    qpos: Optional[jax.Array] = None,
+    qvel: Optional[jax.Array] = None,
+    ctrl: Optional[jax.Array] = None,
+    act: Optional[jax.Array] = None,
+    mocap_pos: Optional[jax.Array] = None,
+    mocap_quat: Optional[jax.Array] = None,
+    impl: Optional[str] = None,
+    nconmax: Optional[int] = None,
+    njmax: Optional[int] = None,
+    device: Optional[jax.Device] = None,
+) -> mjx.Data:
+  """Backwards-compatible alias used by existing envs."""
+  return make_data(
+      model,
+      qpos=qpos,
+      qvel=qvel,
+      ctrl=ctrl,
+      act=act,
+      mocap_pos=mocap_pos,
+      mocap_quat=mocap_quat,
+      impl=impl,
+      nconmax=nconmax,
+      njmax=njmax,
+      device=device,
+  )
+
+
 def step(
     model: mjx.Model,
     data: mjx.Data,

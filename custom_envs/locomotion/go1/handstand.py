@@ -25,14 +25,15 @@ import numpy as np
 
 from mujoco_playground._src import collision
 from custom_envs import mjx_env
-from mujoco_playground._src.locomotion.go1 import base as go1_base
-from mujoco_playground._src.locomotion.go1 import go1_constants as consts
+from custom_envs.locomotion.go1 import base as go1_base
+from custom_envs.locomotion.go1 import go1_constants as consts
 
 
 def default_config() -> config_dict.ConfigDict:
   return config_dict.create(
       ctrl_dt=0.02,
       sim_dt=0.004,
+      impl="jax",
       episode_length=500,
       Kp=35.0,
       Kd=0.5,

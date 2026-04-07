@@ -26,6 +26,7 @@ import numpy as np
 
 from mujoco_playground._src import collision
 from custom_envs import mjx_env
+from custom_envs.locomotion import randomization_utils
 
 _FEET_SITES = [
     "foot_front_left",
@@ -273,6 +274,10 @@ class Joystick(mjx_env.MjxEnv):
     done = jp.float32(done)
     state = state.replace(data=data, obs=obs, reward=reward, done=done)
     return state
+
+  @property
+  def dr_range(self) -> tuple[jax.Array, jax.Array]:
+    return randomization_utils.make_default_dr_range(self._mjx_model)
 
   def _get_obs(
       self,

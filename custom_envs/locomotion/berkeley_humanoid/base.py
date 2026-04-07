@@ -24,6 +24,7 @@ import mujoco
 from mujoco import mjx
 
 from custom_envs import mjx_env
+from custom_envs.locomotion import randomization_utils
 from mujoco_playground._src.locomotion.berkeley_humanoid import berkeley_humanoid_constants as consts
 
 
@@ -117,3 +118,11 @@ class BerkeleyHumanoidEnv(mjx_env.MjxEnv):
   @property
   def mjx_model(self) -> mjx.Model:
     return self._mjx_model
+
+  @property
+  def dr_range(self) -> tuple[jax.Array, jax.Array]:
+    return randomization_utils.make_default_dr_range(
+        self._mjx_model,
+        dof_friction_range=(0.9, 1.1),
+        armature_range=(1.0, 1.05),
+    )

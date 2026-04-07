@@ -18,11 +18,13 @@ from typing import Any, Dict, Optional, Union
 
 from etils import epath
 import jax
+import jax.numpy as jp
 from ml_collections import config_dict
 import mujoco
 from mujoco import mjx
 
 from custom_envs import mjx_env
+from custom_envs.locomotion import randomization_utils
 from mujoco_playground._src.locomotion.op3 import op3_constants as consts
 
 
@@ -116,3 +118,7 @@ class Op3Env(mjx_env.MjxEnv):
   @property
   def mjx_model(self) -> mjx.Model:
     return self._mjx_model
+
+  @property
+  def dr_range(self) -> tuple[jax.Array, jax.Array]:
+    return randomization_utils.make_default_dr_range(self._mjx_model)

@@ -33,6 +33,7 @@ def default_config() -> config_dict.ConfigDict:
   return config_dict.create(
       ctrl_dt=0.02,
       sim_dt=0.004,
+      impl="jax",
       episode_length=1000,
       Kp=35.0,
       Kd=0.5,
