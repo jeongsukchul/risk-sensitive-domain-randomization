@@ -23,6 +23,7 @@ from mujoco import mjx
 
 from custom_envs import mjx_env
 from custom_envs.locomotion.barkour import joystick as barkour_joystick
+from custom_envs.locomotion.barkour import randomize as barkour_randomize
 from custom_envs.locomotion.berkeley_humanoid import joystick as berkeley_humanoid_joystick
 from custom_envs.locomotion.berkeley_humanoid import randomize as berkeley_humanoid_randomize
 from custom_envs.locomotion.g1 import joystick as g1_joystick
@@ -31,12 +32,15 @@ from custom_envs.locomotion.go1 import getup as go1_getup
 from custom_envs.locomotion.go1 import handstand as go1_handstand
 from custom_envs.locomotion.go1 import joystick as go1_joystick
 from custom_envs.locomotion.go1 import randomize as go1_randomize
+from custom_envs.locomotion.h1 import randomize as h1_randomize
 from custom_envs.locomotion.h1 import inplace_gait_tracking as h1_inplace_gait_tracking
 from custom_envs.locomotion.h1 import joystick_gait_tracking as h1_joystick_gait_tracking
 from custom_envs.locomotion.op3 import joystick as op3_joystick
+from custom_envs.locomotion.op3 import randomize as op3_randomize
 from custom_envs.locomotion.spot import getup as spot_getup
 from custom_envs.locomotion.spot import joystick as spot_joystick
 from custom_envs.locomotion.spot import joystick_gait_tracking as spot_joystick_gait_tracking
+from custom_envs.locomotion.spot import randomize as spot_randomize
 from custom_envs.locomotion.t1 import joystick as t1_joystick
 from custom_envs.locomotion.t1 import randomize as t1_randomize
 
@@ -107,6 +111,7 @@ _cfgs = {
 }
 
 _randomizer = {
+    "BarkourJoystick": barkour_randomize.domain_randomize,
     "BerkeleyHumanoidJoystickFlatTerrain": (
         berkeley_humanoid_randomize.domain_randomize
     ),
@@ -120,17 +125,24 @@ _randomizer = {
     "Go1Getup": go1_randomize.domain_randomize,
     "Go1Handstand": go1_randomize.domain_randomize,
     "Go1Footstand": go1_randomize.domain_randomize,
+    "H1InplaceGaitTracking": h1_randomize.domain_randomize,
+    "H1JoystickGaitTracking": h1_randomize.domain_randomize,
+    "Op3Joystick": op3_randomize.domain_randomize,
+    "SpotFlatTerrainJoystick": spot_randomize.domain_randomize,
+    "SpotGetup": spot_randomize.domain_randomize,
+    "SpotJoystickGaitTracking": spot_randomize.domain_randomize,
     "T1JoystickFlatTerrain": t1_randomize.domain_randomize,
     "T1JoystickRoughTerrain": t1_randomize.domain_randomize,
 }
 
 _randomizer_eval = {
-    # "BerkeleyHumanoidJoystickFlatTerrain": (
-    #     berkeley_humanoid_randomize.domain_randomize_eval
-    # ),
-    # "BerkeleyHumanoidJoystickRoughTerrain": (
-    #     berkeley_humanoid_randomize.domain_randomize_eval
-    # ),
+    "BarkourJoystick": barkour_randomize.domain_randomize_eval,
+    "BerkeleyHumanoidJoystickFlatTerrain": (
+        berkeley_humanoid_randomize.domain_randomize_eval
+    ),
+    "BerkeleyHumanoidJoystickRoughTerrain": (
+        berkeley_humanoid_randomize.domain_randomize_eval
+    ),
     "G1JoystickFlatTerrain": g1_randomize.domain_randomize_eval,
     "G1JoystickRoughTerrain": g1_randomize.domain_randomize_eval,
     "Go1JoystickFlatTerrain": go1_randomize.domain_randomize_eval,
@@ -138,6 +150,12 @@ _randomizer_eval = {
     "Go1Getup": go1_randomize.domain_randomize_eval,
     "Go1Handstand": go1_randomize.domain_randomize_eval,
     "Go1Footstand": go1_randomize.domain_randomize_eval,
+    "H1InplaceGaitTracking": h1_randomize.domain_randomize_eval,
+    "H1JoystickGaitTracking": h1_randomize.domain_randomize_eval,
+    "Op3Joystick": op3_randomize.domain_randomize_eval,
+    "SpotFlatTerrainJoystick": spot_randomize.domain_randomize_eval,
+    "SpotGetup": spot_randomize.domain_randomize_eval,
+    "SpotJoystickGaitTracking": spot_randomize.domain_randomize_eval,
     "T1JoystickFlatTerrain": t1_randomize.domain_randomize_eval,
     "T1JoystickRoughTerrain": t1_randomize.domain_randomize_eval,
 }
@@ -212,7 +230,7 @@ def get_domain_randomizer_eval(
     env_name: str,
 ) -> Optional[Callable[[mjx.Model, jax.Array], Tuple[mjx.Model, mjx.Model]]]:
   """Get the default domain randomizer for an environment."""
-  if env_name not in _randomizer:
+  if env_name not in _randomizer_eval:
     print(
         f"Env '{env_name}' does not have a domain randomizer in the locomotion"
         " registry."
