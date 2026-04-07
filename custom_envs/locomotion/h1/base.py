@@ -18,14 +18,13 @@ from typing import Any, Dict, Optional, Union
 
 from etils import epath
 import jax
-import jax.numpy as jp
 from ml_collections import config_dict
 import mujoco
 from mujoco import mjx
 
 from custom_envs import mjx_env
 from custom_envs.locomotion import randomization_utils
-from mujoco_playground._src.locomotion.h1 import h1_constants as consts
+from custom_envs.locomotion.h1 import h1_constants as consts
 
 
 def get_assets() -> Dict[str, bytes]:
@@ -48,8 +47,9 @@ class H1Env(mjx_env.MjxEnv):
   ) -> None:
     super().__init__(config, config_overrides)
 
+    self._model_assets = get_assets()
     self._mj_model = mujoco.MjModel.from_xml_string(
-        epath.Path(xml_path).read_text(), assets=get_assets()
+        epath.Path(xml_path).read_text(), assets=self._model_assets
     )
     self._mj_model.opt.timestep = self._config.sim_dt
 
@@ -58,8 +58,18 @@ class H1Env(mjx_env.MjxEnv):
     self._mj_model.vis.global_.offwidth = 3840
     self._mj_model.vis.global_.offheight = 2160
 
-    self._mjx_model =  mjx.put_model(self._mj_model, impl=self._config.impl)
+    self._mjx_model = mjx.put_model(self._mj_model, impl=self._config.impl)
     self._xml_path = xml_path
+
+    # Contact sensor IDs.
+    self._left_foot_floor_found_sensor = [
+        self._mj_model.sensor(f"left_foot{i}_floor_found").id
+        for i in range(1, 4)
+    ]
+    self._right_foot_floor_found_sensor = [
+        self._mj_model.sensor(f"right_foot{i}_floor_found").id
+        for i in range(1, 4)
+    ]
 
   # Sensor readings.
 
@@ -114,5 +124,9 @@ class H1Env(mjx_env.MjxEnv):
     return self._mjx_model
 
   @property
-  def dr_range(self) -> tuple[jax.Array, jax.Array]:
+  def dr_range(self):
     return randomization_utils.make_default_dr_range(self._mjx_model)
+
+  @property
+  def nominal_params(self):
+    return randomization_utils.make_default_nominal_params(self._mjx_model)

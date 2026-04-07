@@ -22,8 +22,9 @@ import jax.numpy as jp
 from ml_collections import config_dict
 import mujoco
 from mujoco import mjx
-import jax
+
 from custom_envs import mjx_env
+from custom_envs.locomotion import randomization_utils
 from custom_envs.locomotion.go1 import go1_constants as consts
 
 
@@ -48,10 +49,12 @@ class Go1Env(mjx_env.MjxEnv):
   ) -> None:
     super().__init__(config, config_overrides)
 
+    self._model_assets = get_assets()
     self._mj_model = mujoco.MjModel.from_xml_string(
-        epath.Path(xml_path).read_text(), assets=get_assets()
+        epath.Path(xml_path).read_text(), assets=self._model_assets
     )
     self._mj_model.opt.timestep = self._config.sim_dt
+    self._mj_model.opt.ccd_iterations = 20
 
     # Modify PD gains.
     self._mj_model.dof_damping[6:] = config.Kd
@@ -62,9 +65,15 @@ class Go1Env(mjx_env.MjxEnv):
     self._mj_model.vis.global_.offwidth = 3840
     self._mj_model.vis.global_.offheight = 2160
 
-    self._mjx_model =  mjx.put_model(self._mj_model, impl=self._config.impl)
+    self._mjx_model = mjx.put_model(self._mj_model, impl=self._config.impl)
     self._xml_path = xml_path
     self._imu_site_id = self._mj_model.site("imu").id
+
+    # Contact sensor ids.
+    self._feet_floor_found_sensor = [
+        self._mj_model.sensor(f"{geom}_floor_found").id
+        for geom in consts.FEET_GEOMS
+    ]
 
   # Sensor readings.
 
@@ -120,24 +129,11 @@ class Go1Env(mjx_env.MjxEnv):
   @property
   def mjx_model(self) -> mjx.Model:
     return self._mjx_model
+
   @property
-  def dr_range(self) -> jp.ndarray:
-    low = jp.array(
-        [0.4] +                             #floor_friction_min (1)
-        [0.9] * (self.mjx_model.nv-6) +   # dof_friction_min (12)
-        [1.0] * (self.mjx_model.nv-6) +    # dof armature (12)
-        [-0.05] * 3 +                          #com_offset_min(3)
-        [0.9] * (self.mjx_model.nbody) + # body link mass scale min(14)
-        [-1.0] +                          # torso link mass offset min(1)
-        [-0.05] * (self.mjx_model.nv-6)   # q pos offset (12)
-      ) 
-    high = jp.array(
-        [1.0] +                             #floor_friction_max(1)
-        [1.1] * (self.mjx_model.nv-6)+   #dof_friction_max(12)
-        [1.05] * (self.mjx_model.nv-6) +    # dof armature (12)
-        [0.05] * 3 +                          #com_offset_max(3)
-        [1.1] * (self.mjx_model.nbody) + # body link mass scale max(14)
-        [1.0]  +                   # torso link mass offset max(1)
-        [0.05] * (self.mjx_model.nv-6)   # q pos offset (12)
-        ) 
-    return low, high
+  def dr_range(self):
+    return randomization_utils.make_default_dr_range(self._mjx_model)
+
+  @property
+  def nominal_params(self):
+    return randomization_utils.make_default_nominal_params(self._mjx_model)

@@ -1,4 +1,4 @@
-"""Shared domain randomization utilities for legged locomotion envs."""
+"""Shared domain randomization utilities for locomotion envs."""
 
 import functools
 
@@ -19,7 +19,6 @@ def make_default_dr_range(
     dof_damping_range: tuple[float, float] = (0.8, 1.2),
     actuator_gain_range: tuple[float, float] = (0.9, 1.1),
 ) -> tuple[jax.Array, jax.Array]:
-  """Builds a broad DM-control-style DR range for legged robots."""
   n_dofs = model.nv - 6
   low = jp.array(
       [floor_friction_range[0]]
@@ -44,6 +43,20 @@ def make_default_dr_range(
   return low, high
 
 
+def make_default_nominal_params(model: mjx.Model, *, floor_geom_id: int = 0):
+  n_dofs = model.nv - 6
+  return jp.concatenate([
+      jp.array([model.geom_friction[floor_geom_id, 0]]),
+      jp.ones(n_dofs),
+      jp.ones(n_dofs),
+      jp.ones(model.nbody),
+      jp.zeros(1),
+      jp.zeros(n_dofs),
+      jp.ones(n_dofs),
+      jp.ones(model.nu),
+  ])
+
+
 def _apply_legged_randomization(
     model: mjx.Model,
     params: jax.Array,
@@ -51,7 +64,6 @@ def _apply_legged_randomization(
     floor_geom_id: int,
     torso_body_id: int,
 ):
-  """Applies one parameter vector to a legged robot MJX model."""
   idx = 0
   n_dofs = model.nv - 6
 
@@ -124,7 +136,6 @@ def _finalize_randomization(model: mjx.Model, randomized):
       "actuator_gainprm": actuator_gainprm,
       "actuator_biasprm": actuator_biasprm,
   })
-
   in_axes = jax.tree_util.tree_map(lambda x: None, model)
   in_axes = in_axes.tree_replace({
       "geom_friction": 0,
@@ -148,7 +159,6 @@ def domain_randomize_batched(
     rng: jax.Array = None,
     params: jax.Array = None,
 ):
-  """Randomizes a batched set of models for training."""
   dr_low, dr_high = dr_range
 
   if rng is not None and params is None:
@@ -184,9 +194,7 @@ def domain_randomize_batched(
           )
       )(params)
   else:
-    raise ValueError(
-        "Exactly one of rng or params must be provided for domain randomization."
-    )
+    raise ValueError("Exactly one of rng or params must be provided.")
 
   return _finalize_randomization(model, randomized)
 
@@ -198,19 +206,15 @@ def domain_randomize_single(
     floor_geom_id: int,
     torso_body_id: int,
     rng: jax.Array = None,
-    params: jax.Array = None,
+    params=None,
 ):
-  """Randomizes one model for evaluation."""
   dr_low, dr_high = dr_range
-
   if rng is not None and params is None:
     params = jax.random.uniform(
         rng, shape=(len(dr_low),), minval=dr_low, maxval=dr_high
     )
   elif params is None:
-    raise ValueError(
-        "Exactly one of rng or params must be provided for domain randomization."
-    )
+    raise ValueError("Exactly one of rng or params must be provided.")
 
   randomized = _apply_legged_randomization(
       model,

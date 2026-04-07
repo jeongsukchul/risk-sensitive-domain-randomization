@@ -18,13 +18,14 @@ from typing import Any, Dict, Optional, Union
 
 from etils import epath
 import jax
+import jax.numpy as jp
 from ml_collections import config_dict
 import mujoco
 from mujoco import mjx
 
 from custom_envs import mjx_env
-from mujoco_playground._src.locomotion.g1 import g1_constants as consts
-import jax.numpy as jnp
+from custom_envs.locomotion.g1 import g1_constants as consts
+
 
 def get_assets() -> Dict[str, bytes]:
   assets = {}
@@ -47,8 +48,9 @@ class G1Env(mjx_env.MjxEnv):
   ) -> None:
     super().__init__(config, config_overrides)
 
+    self._model_assets = get_assets()
     self._mj_model = mujoco.MjModel.from_xml_string(
-        epath.Path(xml_path).read_text(), assets=get_assets()
+        epath.Path(xml_path).read_text(), assets=self._model_assets
     )
     self._mj_model.opt.timestep = self.sim_dt
 
@@ -59,7 +61,7 @@ class G1Env(mjx_env.MjxEnv):
     self._mj_model.vis.global_.offwidth = 3840
     self._mj_model.vis.global_.offheight = 2160
 
-    self._mjx_model =  mjx.put_model(self._mj_model, impl=self._config.impl)
+    self._mjx_model = mjx.put_model(self._mj_model, impl=self._config.impl)
     self._xml_path = xml_path
 
   # Sensor readings.
@@ -117,22 +119,43 @@ class G1Env(mjx_env.MjxEnv):
   @property
   def mjx_model(self) -> mjx.Model:
     return self._mjx_model
+
   @property
-  def dr_range(self) -> jax.Array:
-    low = jnp.array(
-      [0.4] +                       #pair_friction (1)
-      [0.5] *(self.mjx_model.nv-6) +  #dof_friction (29)
-      [1.0] *(self.mjx_model.nv-6) +  #dof_armature (29)
-      [0.9] *(self.mjx_model.nbody) +  #line mass scale (31)
-      [-1.0]  +  #torso mass offset (1)
-      [-0.05] *(self.mjx_model.nv-6)  #qpos offset (29)
+  def dr_range(self):
+    n_dofs = self._mjx_model.nv - 6
+    low = jp.array(
+        [0.4]
+        + [0.5] * n_dofs
+        + [1.0] * n_dofs
+        + [0.9] * self._mjx_model.nbody
+        + [-1.0]
+        + [-0.05] * n_dofs
+        + [0.8] * n_dofs
+        + [0.9] * self._mjx_model.nu
     )
-    high = jnp.array(
-      [1.0] +                       #pair_friction (1)
-      [2.0] *(self.mjx_model.nv-6) +  #dof_friction (29)
-      [1.05] *(self.mjx_model.nv-6) +  #dof_armature (29)
-      [1.1] *(self.mjx_model.nbody) +  #line mass scale (31)
-      [1.0]  +                        #torso mass offset (1)
-      [0.05] *(self.mjx_model.nv-6)  #qpos offset (29)
+    high = jp.array(
+        [1.0]
+        + [2.0] * n_dofs
+        + [1.05] * n_dofs
+        + [1.1] * self._mjx_model.nbody
+        + [1.0]
+        + [0.05] * n_dofs
+        + [1.2] * n_dofs
+        + [1.1] * self._mjx_model.nu
     )
     return low, high
+
+  @property
+  def nominal_params(self):
+    n_dofs = self._mjx_model.nv - 6
+    floor_friction = jp.array([self._mjx_model.pair_friction[0, 0]])
+    return jp.concatenate([
+        floor_friction,
+        jp.ones(n_dofs),
+        jp.ones(n_dofs),
+        jp.ones(self._mjx_model.nbody),
+        jp.zeros(1),
+        jp.zeros(n_dofs),
+        jp.ones(n_dofs),
+        jp.ones(self._mjx_model.nu),
+    ])

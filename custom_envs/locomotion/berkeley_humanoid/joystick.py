@@ -25,9 +25,8 @@ import numpy as np
 
 from mujoco_playground._src import gait
 from custom_envs import mjx_env
-from mujoco_playground._src.collision import geoms_colliding
-from mujoco_playground._src.locomotion.berkeley_humanoid import base as berkeley_humanoid_base
-from mujoco_playground._src.locomotion.berkeley_humanoid import berkeley_humanoid_constants as consts
+from custom_envs.locomotion.berkeley_humanoid import base as berkeley_humanoid_base
+from custom_envs.locomotion.berkeley_humanoid import berkeley_humanoid_constants as consts
 
 
 def default_config() -> config_dict.ConfigDict:
@@ -94,6 +93,9 @@ def default_config() -> config_dict.ConfigDict:
       lin_vel_x=[-1.0, 1.0],
       lin_vel_y=[-1.0, 1.0],
       ang_vel_yaw=[-1.0, 1.0],
+      impl="jax",
+      nconmax=8 * 8192,
+      njmax=60,
   )
 
 
@@ -178,6 +180,12 @@ class Joystick(berkeley_humanoid_base.BerkeleyHumanoidEnv):
     qpos_noise_scale[faa_ids] = self._config.noise_config.scales.faa_pos
     self._qpos_noise_scale = jp.array(qpos_noise_scale)
 
+    # Contact sensor IDs.
+    self._feet_floor_found_sensor = [
+        self._mj_model.sensor(f"{geom}_floor_found").id
+        for geom in consts.FEET_GEOMS
+    ]
+
   def reset(self, rng: jax.Array) -> mjx_env.State:
     qpos = self._init_q
     qvel = jp.zeros(self.mjx_model.nv)
@@ -204,7 +212,16 @@ class Joystick(berkeley_humanoid_base.BerkeleyHumanoidEnv):
         jax.random.uniform(key, (6,), minval=-0.5, maxval=0.5)
     )
 
-    data = mjx_env.init(self.mjx_model, qpos=qpos, qvel=qvel, ctrl=qpos[7:])
+    data = mjx_env.make_data(
+        self.mj_model,
+        qpos=qpos,
+        qvel=qvel,
+        ctrl=qpos[7:],
+        impl=self.mjx_model.impl.value,
+        nconmax=self._config.nconmax,
+        njmax=self._config.njmax,
+    )
+    data = mjx.forward(self.mjx_model, data)
 
     # Phase, freq=U(1.0, 1.5)
     rng, key = jax.random.split(rng)
@@ -249,9 +266,10 @@ class Joystick(berkeley_humanoid_base.BerkeleyHumanoidEnv):
     metrics["swing_peak"] = jp.zeros(())
 
     contact = jp.array([
-        geoms_colliding(data, geom_id, self._floor_geom_id)
-        for geom_id in self._feet_geom_id
+        data.sensordata[self._mj_model.sensor_adr[sensor_id]] > 0
+        for sensor_id in self._feet_floor_found_sensor
     ])
+
     obs = self._get_obs(data, info, contact)
     reward, done = jp.zeros(2)
     return mjx_env.State(data, obs, reward, done, metrics, info)
@@ -284,8 +302,8 @@ class Joystick(berkeley_humanoid_base.BerkeleyHumanoidEnv):
     state.info["motor_targets"] = motor_targets
 
     contact = jp.array([
-        geoms_colliding(data, geom_id, self._floor_geom_id)
-        for geom_id in self._feet_geom_id
+        data.sensordata[self._mj_model.sensor_adr[sensor_id]] > 0
+        for sensor_id in self._feet_floor_found_sensor
     ])
     contact_filt = contact | state.info["last_contact"]
     first_contact = (state.info["feet_air_time"] > 0.0) * contact_filt
