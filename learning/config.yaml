@@ -81,3 +81,10 @@ horizon: 3
 
 #m2td3
 omega_distance_threshold: 0.1
+
+hydra:
+  run:
+    dir: ${hydra:runtime.cwd}/learning/outputs/${now:%Y-%m-%d}/${now:%H-%M-%S}
+  sweep:
+    dir: ${hydra:runtime.cwd}/learning/outputs/multirun/${now:%Y-%m-%d}/${now:%H-%M-%S}
+    subdir: ${hydra:job.num}

@@ -5,8 +5,11 @@ __pycache__
 MUJOCO_LOG.TXT
 mujoco_menagerie
 checkpoints/
-learning/logs
-learning/outputs
+
 learning/commands
 .git/
 external_deps/
+logs/
+outputs/
+learning/logs
+learning/outputs

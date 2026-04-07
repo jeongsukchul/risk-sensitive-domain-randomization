@@ -547,9 +547,9 @@ def train(cfg: dict):
 
     rng = jax.random.PRNGKey(cfg.seed)
     
-    path = epath.Path(".").resolve()
+    path = epath.Path(__file__).resolve().parent
     cfg_dir = make_dir(cfg.work_dir / "cfg")
-    shutil.copy('config.yaml', os.path.join(cfg_dir, 'config.yaml'))
+    shutil.copy(path / "config.yaml", os.path.join(cfg_dir, 'config.yaml'))
     env_cfg = registry.get_default_config(cfg.task)
     env_cfg['impl'] = cfg.impl
     if cfg.policy == "td3" :

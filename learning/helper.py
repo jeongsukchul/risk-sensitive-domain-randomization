@@ -58,19 +58,23 @@ def parse_cfg(cfg: OmegaConf) -> OmegaConf:
             pass
 
     # Convenience
+    learning_root = Path(__file__).resolve().parent
     try:
-        cfg.work_dir = (
-            Path(hydra.utils.get_original_cwd())
-            / "logs"
-            / cfg.task
-            / str(cfg.seed)
-            / cfg.policy
-            
-        )
-    except Exception as e:
-        # print(colored(f"Failed to set work_dir: {e}", "red"))
+        original_cwd = Path(hydra.utils.get_original_cwd()).resolve()
+        if learning_root.is_relative_to(original_cwd):
+            base_dir = learning_root
+        else:
+            base_dir = original_cwd / "learning"
+    except Exception:
+        base_dir = learning_root
 
-        cfg.work_dir = Path.cwd() / "logs" / cfg.task / str(cfg.seed) / cfg.policy 
+    cfg.work_dir = (
+        base_dir
+        / "logs"
+        / cfg.task
+        / str(cfg.seed)
+        / cfg.policy
+    )
     return cfg
 
 

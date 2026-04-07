@@ -68,7 +68,7 @@ def default_config() -> config_dict.ConfigDict:
       ),
       impl="jax",
       nconmax=30 * 8192,
-      njmax=200,
+      njmax=250,
   )
 
 
