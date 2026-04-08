@@ -18,6 +18,7 @@ See: https://arxiv.org/pdf/1707.06347.pdf
 """
 
 import functools
+import io
 import time
 from typing import Any, Callable, Mapping, Optional, Tuple, Union
 
@@ -53,6 +54,7 @@ import optax
 import distrax
 import wandb
 import matplotlib.pyplot as plt
+from PIL import Image
 from learning.module.wrapper.wrapper import Wrapper, wrap_for_brax_training
 from learning.module.wrapper.evaluator import AdvEvaluator, Evaluator, generate_adv_unroll, generate_unroll
 from flax import nnx
@@ -69,6 +71,8 @@ InferenceParams = Tuple[running_statistics.NestedMeanStd, Params]
 Metrics = types.Metrics
 
 _PMAP_AXIS_NAME = 'i'
+_WANDB_IMAGE_MAX_SIDE_PX = 1600
+_WANDB_IMAGE_DPI = 100
 
 
 @flax.struct.dataclass
@@ -89,6 +93,36 @@ class TrainingState:
 
 def _unpmap(v):
   return jax.tree_util.tree_map(lambda x: x[0], v)
+
+
+def _wandb_image_from_figure(
+    fig: plt.Figure,
+    *,
+    max_side_px: int = _WANDB_IMAGE_MAX_SIDE_PX,
+    dpi: int = _WANDB_IMAGE_DPI,
+) -> wandb.Image:
+  """Rasterizes a matplotlib figure to a bounded image for WandB logging."""
+  width_in, height_in = fig.get_size_inches()
+  width_px = max(width_in * dpi, 1.0)
+  height_px = max(height_in * dpi, 1.0)
+  scale = min(1.0, max_side_px / max(width_px, height_px))
+  target_width_in = max(width_in * scale, 1.0)
+  target_height_in = max(height_in * scale, 1.0)
+
+  original_size = (width_in, height_in)
+  original_dpi = fig.dpi
+  buffer = io.BytesIO()
+  try:
+    fig.set_size_inches(target_width_in, target_height_in, forward=True)
+    fig.set_dpi(dpi)
+    fig.savefig(buffer, format="png", dpi=dpi, bbox_inches="tight")
+  finally:
+    fig.set_size_inches(*original_size, forward=True)
+    fig.set_dpi(original_dpi)
+
+  buffer.seek(0)
+  with Image.open(buffer) as image:
+    return wandb.Image(image.copy())
 
 
 def _strip_weak_type(tree):
@@ -1334,7 +1368,7 @@ def train(
       gmm_frames.append(np.asarray(model_fig.canvas.buffer_rgba())[...,:3])
       if use_wandb:
         wandb.log(
-                {"Sampler Heatmap" :wandb.Image(model_fig)},
+                {"Sampler Heatmap" :_wandb_image_from_figure(model_fig)},
                 step=int(current_step),
             )
     elif sampler_choice=="GBS":
@@ -1365,7 +1399,7 @@ def train(
       gbs_frames.append(np.asarray(fig.canvas.buffer_rgba())[...,:3])
       if use_wandb:
         wandb.log(
-            {"GBS Heatmap": wandb.Image((lambda f: (f.set_size_inches(12, 8, forward=True), f.set_dpi(100), f)[-1])(fig))},
+            {"GBS Heatmap": _wandb_image_from_figure(fig)},
 
             step=int(current_step),
         )
@@ -1394,7 +1428,7 @@ def train(
     evaluation_frames.append(np.asarray(eval_fig.canvas.buffer_rgba())[...,:3])
     if use_wandb:
       wandb.log({
-        'eval on each params' : wandb.Image(eval_fig)
+        'eval on each params' : _wandb_image_from_figure(eval_fig)
       }, step=int(0))
     sample_key, local_key = jax.random.split(local_key,2)
     if sampler_choice=="AutoDR":
@@ -1414,7 +1448,7 @@ def train(
       
       if use_wandb:
         wandb.log(
-            {f"Sampler Heatmap": wandb.Image(fig)},
+            {f"Sampler Heatmap": _wandb_image_from_figure(fig)},
             step=int(current_step),
         )
     elif sampler_choice=='DORAEMON':
@@ -1444,7 +1478,7 @@ def train(
 
       if use_wandb:
         wandb.log(
-            {f"Sampler Heatmap": wandb.Image(fig)},
+            {f"Sampler Heatmap": _wandb_image_from_figure(fig)},
             step=int(current_step),
         )
 
@@ -1493,7 +1527,7 @@ def train(
       gbs_frames.append(np.asarray(fig.canvas.buffer_rgba())[...,:3])
       if use_wandb:
         wandb.log(
-            {"GBS Heatmap": wandb.Image((lambda f: (f.set_size_inches(12, 8, forward=True), f.set_dpi(100), f)[-1])(fig))},
+            {"GBS Heatmap": _wandb_image_from_figure(fig)},
             step=int(current_step),
         )
     elif sampler_choice=="GMM":
@@ -1544,7 +1578,7 @@ def train(
       gmm_frames.append(np.asarray(model_fig.canvas.buffer_rgba())[...,:3])
       if use_wandb:
         wandb.log(
-                {"Sampler Heatmap" :wandb.Image(model_fig)},
+                {"Sampler Heatmap" :_wandb_image_from_figure(model_fig)},
                 step=int(current_step),
             )
     
@@ -1567,7 +1601,7 @@ def train(
     occupancy_frames.append(np.asarray(target_fig.canvas.buffer_rgba())[...,:3])
     if use_wandb:
       wandb.log({
-        'target log prob on current occupancy with returns' : wandb.Image(target_fig)
+        'target log prob on current occupancy with returns' : _wandb_image_from_figure(target_fig)
       }, step=0)
     logging.info(metrics)
     progress_fn(0, metrics)
@@ -1786,7 +1820,7 @@ def train(
         evaluation_frames.append(np.asarray(eval_fig.canvas.buffer_rgba())[...,:3])
         if use_wandb:
           wandb.log({
-            'eval on each params' : wandb.Image(eval_fig)
+            'eval on each params' : _wandb_image_from_figure(eval_fig)
           }, step=int(current_step))
         if sampler_choice=="AutoDR":
           fig, ax = plt.subplots()
@@ -1802,7 +1836,7 @@ def train(
                 )
           if use_wandb:
             wandb.log(
-                {"Sampler Heatmap": wandb.Image(fig)},
+                {"Sampler Heatmap": _wandb_image_from_figure(fig)},
                 step=int(current_step),
             )
           fig.tight_layout()
@@ -1832,7 +1866,7 @@ def train(
         
           if use_wandb:
             wandb.log(
-                {"Sampler Heatmap": wandb.Image(fig)},
+                {"Sampler Heatmap": _wandb_image_from_figure(fig)},
                 step=int(current_step),
             )
           fig.tight_layout()
@@ -1881,7 +1915,7 @@ def train(
           )
           if use_wandb:
             wandb.log(
-              {"GBS Heatmap": wandb.Image((lambda f: (f.set_size_inches(12, 8, forward=True), f.set_dpi(100), f)[-1])(fig))},
+              {"GBS Heatmap": _wandb_image_from_figure(fig)},
                 step=int(current_step),
             )
           fig.tight_layout()
@@ -1934,7 +1968,7 @@ def train(
           gmm_frames.append(np.asarray(model_fig.canvas.buffer_rgba())[...,:3])
           if use_wandb:
             wandb.log(
-                    {"Sampler Heatmap" :wandb.Image(model_fig)},
+                    {"Sampler Heatmap" :_wandb_image_from_figure(model_fig)},
                     step=int(current_step),
                 )
       
@@ -1961,7 +1995,7 @@ def train(
         occupancy_frames.append(np.asarray(target_fig.canvas.buffer_rgba())[...,:3])
         if use_wandb:
           wandb.log({
-            'target log prob on current occupancy with returns' : wandb.Image(target_fig)
+            'target log prob on current occupancy with returns' : _wandb_image_from_figure(target_fig)
           }, step=int(current_step))
       elif run_evals and len(dr_range_low)>2 and sampler_choice=="GMM":
         sample_key, local_key = jax.random.split(local_key)
@@ -1983,7 +2017,7 @@ def train(
         gmm_frames.append(np.asarray(model_fig.canvas.buffer_rgba())[...,:3])
         if use_wandb:
           wandb.log(
-                  {"Sampler Heatmap" :wandb.Image(model_fig)},
+                  {"Sampler Heatmap" :_wandb_image_from_figure(model_fig)},
                   step=int(current_step),
               )
       elif run_evals and len(dr_range_low)>2 and sampler_choice=="GBS":
@@ -2014,7 +2048,7 @@ def train(
         gbs_frames.append(np.asarray(fig.canvas.buffer_rgba())[...,:3])
         if use_wandb:
           wandb.log(
-              {"GBS Heatmap": wandb.Image((lambda f: (f.set_size_inches(12, 8, forward=True), f.set_dpi(100), f)[-1])(fig))},
+              {"GBS Heatmap": _wandb_image_from_figure(fig)},
               step=int(current_step),
           )
       logging.info(metrics)
