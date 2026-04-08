@@ -140,7 +140,7 @@ class Go1Env(mjx_env.MjxEnv):
             jp.full((n_dofs,), 1.0),
             jp.full((3,), -0.05),
             jp.full((self._mjx_model.nbody,), 0.9),
-            jp.array([-1.0]),
+            jp.array([-.1]),
             jp.full((n_dofs,), -0.0005),
         ]),
         jp.concatenate([
@@ -149,7 +149,7 @@ class Go1Env(mjx_env.MjxEnv):
             jp.full((n_dofs,), 1.05),
             jp.full((3,), 0.05),
             jp.full((self._mjx_model.nbody,), 1.1),
-            jp.array([1.0]),
+            jp.array([.1]),
             jp.full((n_dofs,), 0.0005),
         ]),
     )
