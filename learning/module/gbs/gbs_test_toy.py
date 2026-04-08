@@ -20,16 +20,42 @@ from learning.module.gbs.target4_notebook_utils import (
     run_gbs_toy_target4,
     target4_logprob,
 )
+from learning.module.gbs.target4_family import (
+    add_target4_cli_args,
+    build_target4_params_from_args,
+    get_target4_harmonic_params,
+)
 
 
-def plot_target4_contour(ax, lam: float, n: int = 200, gamma: float = 0.45) -> None:
+def plot_target4_contour(
+    ax,
+    lam: float,
+    *,
+    target_params=None,
+    n: int = 200,
+    gamma: float = 0.45,
+) -> None:
     x, y = jnp.meshgrid(
         jnp.linspace(0.0, 1.0, n),
         jnp.linspace(0.0, 1.0, n),
         indexing="xy",
     )
     grid = jnp.stack([x.reshape(-1), y.reshape(-1)], axis=-1)
-    z = jnp.exp(jnp.clip(target4_logprob(grid, lam), a_min=-1000.0)).reshape(n, n)
+    if target_params is None:
+        params = get_target4_harmonic_params(2)
+    else:
+        params = get_target4_harmonic_params(
+            2,
+            type(target_params)(
+                c=target_params.c,
+                a=target_params.a[:2],
+                k=target_params.k[:2],
+                phi=target_params.phi[:2],
+            ),
+        )
+    z = jnp.exp(
+        jnp.clip(target4_logprob(grid, lam, target_params=params), a_min=-1000.0)
+    ).reshape(n, n)
     contour = ax.contourf(
         np.asarray(x),
         np.asarray(y),
@@ -68,8 +94,9 @@ def build_run_tag(args: argparse.Namespace) -> str:
         f"tau{sanitize(args.tau)}",
         f"pf{sanitize(args.p_update_freq)}",
         f"ema{sanitize(args.p_ema_alpha)}",
-        f"jump{sanitize(args.p_jump_prob)}",
+        # f"jump{sanitize(args.p_jump_prob)}",
         f"loss{sanitize(args.loss_mode)}",
+        f"bij{sanitize(int(args.use_tanh_bijection))}",
         f"model{sanitize(args.model_type)}",
     ]
     return "_".join(parts)
@@ -149,9 +176,15 @@ def save_metric_plot(hist: dict[str, list[float]], output_path: Path) -> None:
     plt.close(fig)
 
 
-def save_final_sample_plot(samples: np.ndarray, lam: float, output_path: Path) -> None:
+def save_final_sample_plot(
+    samples: np.ndarray,
+    lam: float,
+    output_path: Path,
+    *,
+    target_params=None,
+) -> None:
     fig, ax = plt.subplots(1, 1, figsize=(5, 5))
-    plot_target4_contour(ax, lam=lam)
+    plot_target4_contour(ax, lam=lam, target_params=target_params)
     ax.scatter(samples[:, 0], samples[:, 1], s=2, alpha=0.2, c="r")
     ax.set_title(f"Final samples vs target4 (lambda={lam:.4f})")
     fig.tight_layout()
@@ -162,7 +195,7 @@ def save_final_sample_plot(samples: np.ndarray, lam: float, output_path: Path) -
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="GBS toy experiment with dynamic target4.")
     parser.add_argument("--seed", type=int, default=0)
-    parser.add_argument("--dim", type=int, default=2, help="Dimension d in lambda = beta * p / d.")
+    parser.add_argument("--dim", type=int, default=2, help="Dimension d of the target family.")
     parser.add_argument("--iters", type=int, default=400)
     parser.add_argument("--batch_size", type=int, default=1024)
     parser.add_argument("--num_steps", type=int, default=100)
@@ -170,6 +203,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--init_std", type=float, default=0.5)
     parser.add_argument("--beta", type=float, default=-10.0)
     parser.add_argument("--tau", type=float, default=1)
+    parser.add_argument("--safe_q", type=float, default=.6)
     parser.add_argument("--initial_p", type=float, default=0.8)
     parser.add_argument(
         "--p_update_freq",
@@ -197,8 +231,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--model_type", choices=["pisgrad", "potential"], default="pisgrad")
     parser.add_argument("--model_num_layers", type=int, default=2)
     parser.add_argument("--model_num_hid", type=int, default=64)
+    parser.add_argument("--use_tanh_bijection", action="store_true")
+    parser.add_argument("--no_use_tanh_bijection", dest="use_tanh_bijection", action="store_false")
+    parser.set_defaults(use_tanh_bijection=True)
     parser.add_argument("--save_dir", type=str, default="results")
     parser.add_argument("--show", action="store_true")
+    add_target4_cli_args(parser)
     return parser.parse_args()
 
 
@@ -207,6 +245,7 @@ def main() -> None:
     save_dir = Path(args.save_dir)
     save_dir.mkdir(parents=True, exist_ok=True)
     run_tag = build_run_tag(args)
+    target_params = build_target4_params_from_args(args, args.dim)
 
     low = jnp.zeros(args.dim)
     high = jnp.ones(args.dim)
@@ -223,6 +262,7 @@ def main() -> None:
         seed=args.seed,
         beta=args.beta,
         tau=args.tau,
+        q=args.safe_q,
         initial_p=args.initial_p,
         p_update_freq=args.p_update_freq,
         p_ema_alpha=args.p_ema_alpha,
@@ -233,10 +273,12 @@ def main() -> None:
         n_particles=args.n_particles,
         n_spatial_dim=args.n_spatial_dim,
         save_dir=save_dir,
+        use_tanh_bijection=args.use_tanh_bijection,
         model_type=args.model_type,
         model_num_layers=args.model_num_layers,
         model_num_hid=args.model_num_hid,
-        final_sample_size=2**14
+        final_sample_size=2**14,
+        target_params=target_params,
     )
 
     hist_np = {k: np.asarray(v, dtype=np.float64) for k, v in hist.items()}
@@ -246,7 +288,7 @@ def main() -> None:
     np.savez(history_path.as_posix(), **hist_np)
 
     final_p = float(hist["target4/p"][-1])
-    final_lambda = float(hist["target4/lambda"][-1])
+    final_lambda = float(args.beta * final_p)
     final_forward_kl = float(hist["target4/forward_kl"][-1])
     final_reverse_kl = float(hist["target4/reverse_kl"][-1])
     final_wasserstein = float(hist["target4/wasserstein"][-1])
@@ -257,16 +299,27 @@ def main() -> None:
 
     save_metric_plot(hist, metrics_path)
     if args.dim >= 2:
-        save_final_sample_plot(np.asarray(xT_final), final_lambda, final_samples_path)
+        save_final_sample_plot(
+            np.asarray(xT_final),
+            final_lambda,
+            final_samples_path,
+            target_params=target_params,
+        )
 
     print(f"Saved outputs to: {save_dir}")
     print(f"dimension d: {args.dim}")
     print(f"model type: {args.model_type}")
+    print(f"use tanh bijection: {args.use_tanh_bijection}")
+    print(f"target4 c: {float(target_params.c):.6f}")
+    print(f"target4 a: {np.asarray(target_params.a)}")
+    print(f"target4 k: {np.asarray(target_params.k)}")
+    print(f"target4 phi: {np.asarray(target_params.phi)}")
+    print(f"safe q: {args.safe_q:.6f}")
     print(f"p update frequency: {args.p_update_freq} (0 means fixed p)")
     print(f"p ema alpha: {args.p_ema_alpha:.3f}")
     print(f"p jump probability: {args.p_jump_prob:.3f}")
     print(f"final p: {final_p:.6f}")
-    print(f"final lambda = beta * p / d: {final_lambda:.6f}")
+    print(f"final lambda = beta * p: {final_lambda:.6f}")
     print(f"final forward KL: {final_forward_kl:.6f}")
     print(f"final reverse KL: {final_reverse_kl:.6f}")
     print(f"final Wasserstein: {final_wasserstein:.6f}")

@@ -20,6 +20,12 @@ from learning.module.gbs.target4_notebook_utils import (
     sample_truncated_exponential,
     target4_logprob,
 )
+from learning.module.gbs.target4_family import (
+    add_target4_cli_args,
+    build_target4_params_from_args,
+    get_target4_harmonic_params,
+    target4_energy_values,
+)
 
 
 def _load_final_lambda(history_path: Path | None) -> float | None:
@@ -45,29 +51,38 @@ def _safe_n_particles(dim: int, n_particles: int | None, n_spatial_dim: int) -> 
 def _target_metrics(
     samples: np.ndarray,
     lam: float,
+    target_params,
     num_bins: int,
     sinkhorn_num_samples: int,
     n_particles: int | None,
     n_spatial_dim: int,
     key: jax.Array,
 ) -> dict[str, float]:
-    flat_samples = samples.reshape(-1)
-    sample_mean = float(np.mean(flat_samples))
-    sample_std = float(np.std(flat_samples))
-    sample_min = float(np.min(flat_samples))
-    sample_max = float(np.max(flat_samples))
+    energy_vals = np.asarray(target4_energy_values(jnp.asarray(samples), target_params))
+    sample_mean = float(np.mean(energy_vals))
+    sample_std = float(np.std(energy_vals))
+    sample_min = float(np.min(energy_vals))
+    sample_max = float(np.max(energy_vals))
     forward_kl, reverse_kl, wasserstein = compute_target4_metrics(
-        flat_samples,
+        samples,
         lam,
+        target_params=target_params,
         num_bins=num_bins,
         key=key,
     )
 
     n_sink = min(sinkhorn_num_samples, samples.shape[0])
     key, subkey = jax.random.split(key)
-    ref = sample_truncated_exponential(subkey, lam, samples[:n_sink].shape)
+    ref = sample_truncated_exponential(
+        subkey,
+        lam,
+        samples[:n_sink].shape,
+        target_params=target_params,
+    )
     sinkhorn = sinkhorn_distance(jnp.asarray(samples[:n_sink]), ref)
-    ess = effective_sample_size_from_log_weights(target4_logprob(jnp.asarray(samples), lam))
+    ess = effective_sample_size_from_log_weights(
+        target4_logprob(jnp.asarray(samples), lam, target_params=target_params)
+    )
 
     metrics = {
         "lambda": float(lam),
@@ -86,6 +101,7 @@ def _target_metrics(
         jnp.asarray(samples[:n_sink]),
         ref,
         lam,
+        target_params=target_params,
     )
     metrics["energy_w2"] = float(energy_w2)
     if n_particles is not None and n_particles > 1:
@@ -97,7 +113,12 @@ def _target_metrics(
         )
         metrics["interatomic_w2"] = float(interatomic_w2)
 
-    optimal_p, target_mean = optimal_p_from_target_mean(lam, tau=0.10)
+    optimal_p, target_mean = optimal_p_from_target_mean(
+        lam,
+        tau=0.10,
+        q=1.0,
+        target_params=target_params,
+    )
     metrics["target_mean"] = float(target_mean)
     metrics["optimal_p_tau_0.10"] = float(optimal_p)
     return metrics
@@ -165,11 +186,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--sinkhorn-num-samples", type=int, default=512)
     parser.add_argument("--n-particles", type=int, default=None)
     parser.add_argument("--n-spatial-dim", type=int, default=1)
+    parser.add_argument("--use_tanh_bijection", action="store_true")
+    parser.add_argument("--no_use_tanh_bijection", dest="use_tanh_bijection", action="store_false")
+    parser.set_defaults(use_tanh_bijection=True)
     parser.add_argument(
         "--output-csv",
         type=Path,
         default=Path("learning/module/gbs/results/gbs_gmmvi_comparison.csv"),
     )
+    add_target4_cli_args(parser)
     return parser.parse_args()
 
 
@@ -187,6 +212,7 @@ def main() -> None:
 
     dim = int(gbs_samples.shape[1])
     n_particles = _safe_n_particles(dim, args.n_particles, args.n_spatial_dim)
+    target_params = build_target4_params_from_args(args, dim)
     gbs_lambda = args.gbs_lambda
     if gbs_lambda is None:
         gbs_lambda = _load_final_lambda(args.gbs_history)
@@ -201,6 +227,7 @@ def main() -> None:
     gbs_metrics = _target_metrics(
         gbs_samples,
         gbs_lambda,
+        target_params,
         args.metric_num_bins,
         args.sinkhorn_num_samples,
         n_particles,
@@ -210,6 +237,7 @@ def main() -> None:
     gmmvi_metrics = _target_metrics(
         gmmvi_samples,
         gmmvi_lambda,
+        target_params,
         args.metric_num_bins,
         args.sinkhorn_num_samples,
         n_particles,
@@ -220,15 +248,37 @@ def main() -> None:
 
     rows = []
     for metric_name, value in gbs_metrics.items():
-        rows.append({"group": "gbs", "metric": metric_name, "value": value})
+        rows.append(
+            {
+                "group": "gbs",
+                "metric": metric_name,
+                "value": value,
+                "use_tanh_bijection": int(args.use_tanh_bijection),
+            }
+        )
     for metric_name, value in gmmvi_metrics.items():
-        rows.append({"group": "gmmvi", "metric": metric_name, "value": value})
+        rows.append(
+            {
+                "group": "gmmvi",
+                "metric": metric_name,
+                "value": value,
+                "use_tanh_bijection": int(args.use_tanh_bijection),
+            }
+        )
     for metric_name, value in pairwise.items():
-        rows.append({"group": "pairwise", "metric": metric_name, "value": value})
+        rows.append(
+            {
+                "group": "pairwise",
+                "metric": metric_name,
+                "value": value,
+                "use_tanh_bijection": int(args.use_tanh_bijection),
+            }
+        )
     args.output_csv.parent.mkdir(parents=True, exist_ok=True)
     _write_csv(args.output_csv, rows)
 
     print("GBS metrics")
+    print(f"  use_tanh_bijection: {args.use_tanh_bijection}")
     for metric_name, value in gbs_metrics.items():
         print(f"  {metric_name}: {value:.6f}")
     print("GMMVI metrics")

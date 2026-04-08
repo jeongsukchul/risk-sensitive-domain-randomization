@@ -292,7 +292,7 @@ def train(
     sampler_visualization: bool = False,
     dr_config_task: Optional[str] = None,
     sampler_update_freq=10,
-    sample_ratio: int = 8,
+    sampler_batch_size: Optional[int] = 512,
     gamma = 0.5,
     beta = 1.0,
     sampler_choice : str = "NODR", #(NODR, UDR, AutoDR, DORAEMON, FLOW_NS, FLOW_REALNVP, GMM, GBS)
@@ -361,12 +361,6 @@ def train(
       local_devices_to_use,
   )
   device_count = local_devices_to_use * process_count
-  if sample_ratio < 1:
-    raise ValueError(f"sample_ratio must be >= 1, got {sample_ratio}")
-  if not float(sample_ratio).is_integer():
-    raise ValueError(f"sample_ratio must be an integer, got {sample_ratio}")
-  sample_ratio = int(sample_ratio)
-
   def make_2d_dynamics_grid(num_points: int):
     # Exact rectangular grid: dim_x * dim_y == num_points.
     # Prefer dim_x < dim_y whenever possible.
@@ -406,8 +400,8 @@ def train(
           * max(num_resets_per_eval, 1)
       )
   ).astype(int)
-  num_training_steps = num_training_steps_per_epoch * num_evals_after_init
-  print("num_training steps", num_training_steps)
+  print("num training steps per epoch", num_training_steps_per_epoch)
+  print("num training steps", num_training_steps_per_epoch * num_evals_after_init)
   key = jax.random.PRNGKey(seed)
   global_key, local_key = jax.random.split(key)
   del key
@@ -420,12 +414,40 @@ def train(
 
   assert num_envs % device_count == 0
   local_num_envs = num_envs // device_count
-  if local_num_envs % sample_ratio != 0:
-    raise ValueError(
-        "sample_ratio must divide the per-device env batch size: "
-        f"{local_num_envs} % {sample_ratio} != 0"
-    )
-  sampler_batch_size = local_num_envs // sample_ratio
+  sampler_rollout_batch_size = local_num_envs
+  gbs_batch_size = local_num_envs
+  gbs_num_updates = 1
+  if sampler_choice == "GBS":
+    if sampler_batch_size is None:
+      sampler_batch_size = num_envs
+    if not float(sampler_batch_size).is_integer():
+      raise ValueError(
+          f"sampler_batch_size must be an integer, got {sampler_batch_size}"
+      )
+    sampler_batch_size = int(sampler_batch_size)
+    if sampler_batch_size < 1:
+      raise ValueError(
+          f"sampler_batch_size must be >= 1, got {sampler_batch_size}"
+      )
+    if num_envs % sampler_batch_size != 0:
+      raise ValueError(
+          "For GBS, num_envs must be divisible by sampler_batch_size: "
+          f"{num_envs} % {sampler_batch_size} != 0"
+      )
+    if sampler_batch_size % device_count != 0:
+      raise ValueError(
+          "For GBS, sampler_batch_size must be divisible by the device count "
+          f"for pmap sharding: {sampler_batch_size} % {device_count} != 0"
+      )
+    gbs_batch_size = sampler_batch_size // device_count
+    if local_num_envs % gbs_batch_size != 0:
+      raise ValueError(
+          "For GBS, per-device num_envs must be divisible by the per-device "
+          f"sampler batch size: {local_num_envs} % {gbs_batch_size} != 0"
+      )
+    gbs_num_updates = local_num_envs // gbs_batch_size
+  else:
+    sampler_batch_size = local_num_envs
   import copy
   env = copy.deepcopy(environment)
   nominal_dynamics_params_full = jnp.asarray(env.nominal_params)
@@ -518,7 +540,7 @@ def train(
       observation_size = obs_shape,
       action_size= env.action_size, 
       dynamics_param_size=len(dr_range_low), 
-      sampler_batch_size = sampler_batch_size,
+      sampler_batch_size = sampler_rollout_batch_size,
       init_key=gmm_key,
       preprocess_observations_fn=normalize_fn,
       bound_info = training_dr_range,
@@ -592,8 +614,6 @@ def train(
           gbs_init_std=gbs_init_std,
       )
   )
-  gbs_batch_size = sampler_batch_size
-
   if sampler_choice == "GBS":
     gbs_key_fwd, gbs_key_bwd = jax.random.split(gmm_key)
     gbs_model_fwd = make_gbs_model(
@@ -774,19 +794,10 @@ def train(
     )
     return state, data, reset_happened
 
-  def _expand_dynamics_params_for_rollout(
-      dynamics_params: Optional[jnp.ndarray],
-  ) -> Optional[jnp.ndarray]:
-    if dynamics_params is None or sample_ratio == 1:
-      return dynamics_params
-    return jnp.repeat(dynamics_params, sample_ratio, axis=0)
-
-  def _reduce_sample_ratio(x: jnp.ndarray) -> jnp.ndarray:
-    if sample_ratio == 1:
-      return x
+  def _split_into_gbs_batches(x: jnp.ndarray) -> jnp.ndarray:
     return jnp.reshape(
-        x, (sampler_batch_size, sample_ratio) + x.shape[1:]
-    ).mean(axis=1)
+        x, (gbs_num_updates, gbs_batch_size) + x.shape[1:]
+    )
 
   def training_step(
       carry: Tuple[TrainingState, envs.State, PRNGKey], unused_t
@@ -794,16 +805,16 @@ def train(
     training_state, state, cumulated_values, key = carry
     key_sgd, key_generate_unroll, param_key, key_update, new_key = jax.random.split(key, 5)
     rewards = None
-    gbs_sampler_key = param_key
+    gbs_sample_keys = None
     if sampler_choice=="NODR":
       sampled_dynamics_params = (
-          jnp.ones((sampler_batch_size, len(dr_range_low)))
+          jnp.ones((sampler_rollout_batch_size, len(dr_range_low)))
           * nominal_dynamics_params[None, :]
       )
     elif sampler_choice=="UDR" or sampler_choice=="EPOpt":
         sampled_dynamics_params = jax.random.uniform(
             param_key,
-            shape=(sampler_batch_size, len(dr_range_low)),
+            shape=(sampler_rollout_batch_size, len(dr_range_low)),
             minval=dr_range_low,
             maxval=dr_range_high,
         )
@@ -811,7 +822,7 @@ def train(
     elif sampler_choice=="AutoDR":
         sampled_dynamics_params = get_adr_sample(
             training_state.autodr_state,
-            sampler_batch_size,
+            sampler_rollout_batch_size,
             param_key,
         )
     elif sampler_choice == "DORAEMON":
@@ -822,47 +833,51 @@ def train(
             b,
             dr_range_low,
             dr_range_high,
-            sampler_batch_size,
+            sampler_rollout_batch_size,
         )
     elif "FLOW" in sampler_choice:
       flow_model = nnx.merge(samplerppo_network.flow_network, training_state.flow_state)
       sampled_dynamics_params, logp = flow_model.sample(
-          (sampler_batch_size,),
+          (sampler_rollout_batch_size,),
           rng=param_key,
       )
         
     elif sampler_choice == "GBS":
       fwd_state, bwd_state = training_state.flow_state
-      _, dynamics_params_latent, _ = gbs_sampler_jit(
-          param_key,
-          (fwd_state, bwd_state),
-          fwd_state.params,
-          gbs_batch_size,
-          gbs_prior_sampler,
-          gbs_num_steps,
-          gbs_process,
-          True,
-          gbs_sde_ctrl_noise,
-          gbs_sde_ctrl_dropout,
-          gbs_center,
-      )
-      sampled_dynamics_params = (
-          gbs_to_box(dynamics_params_latent)
-          if gbs_use_tanh_bijection
-          else dynamics_params_latent
+      gbs_sample_keys = jax.random.split(param_key, gbs_num_updates)
+      def _sample_gbs_one(sample_key):
+        _, dynamics_params_latent, _ = gbs_sampler_jit(
+            sample_key,
+            (fwd_state, bwd_state),
+            fwd_state.params,
+            gbs_batch_size,
+            gbs_prior_sampler,
+            gbs_num_steps,
+            gbs_process,
+            True,
+            gbs_sde_ctrl_noise,
+            gbs_sde_ctrl_dropout,
+            gbs_center,
+        )
+        return (
+            gbs_to_box(dynamics_params_latent)
+            if gbs_use_tanh_bijection
+            else dynamics_params_latent
+        )
+      sampled_dynamics_params = jnp.reshape(
+          jax.vmap(_sample_gbs_one)(gbs_sample_keys),
+          (sampler_rollout_batch_size, len(dr_range_low)),
       )
 
     elif sampler_choice == "GMM":
         sampled_dynamics_params, mapping = samplerppo_network.gmm_network.model.sample(
           training_state.gmm_training_state.model_state.gmm_state,
           param_key,
-          sampler_batch_size,
+          sampler_rollout_batch_size,
         )
     else:
       raise ValueError("No Sampler Available")
-    rollout_dynamics_params = _expand_dynamics_params_for_rollout(
-        sampled_dynamics_params
-    )
+    rollout_dynamics_params = sampled_dynamics_params
     prev_dynamics_params = state.info.get('dr_params', None)
     # #for debugging
     # dynamics_params = (dr_range_low + dr_range_high)/2 +\
@@ -950,12 +965,6 @@ def train(
         episode_returns=episode_returns,
         episode_lengths=rollout_episode_lengths,
     )
-    mean_partial_episode_return = _reduce_sample_ratio(
-        mean_partial_episode_return
-    )
-    mean_partial_episode_reward_rate = _reduce_sample_ratio(
-        mean_partial_episode_reward_rate
-    )
     print("mean_partial_episode_reward_rate", mean_partial_episode_reward_rate)
     values = mean_partial_episode_reward_rate if sampler_choice!="EPOpt" else 0
     cumulated_values += values
@@ -1018,17 +1027,25 @@ def train(
         return (fs_n, fos_n, current_sample, current_logq), None
       (flow_state_new, flow_opt_state_new, _, _), _  = jax.lax.scan(body, (flow_state, flow_opt_state, prev_sample, prev_logq), (), length=n_sampler_iters)
       return (flow_state_new, flow_opt_state_new, 1.)
-    def update_gbs(gbs_state, sample_key):
+    def update_gbs(gbs_state, sample_keys):
       target_lnpdf = _beta * cumulated_values/sampler_update_freq
+      target_batches = _split_into_gbs_batches(target_lnpdf)
       fwd_state, bwd_state = gbs_state
-      # GBS relies on replaying the exact sampler trajectory that produced the
-      # current batch: same PRNG key and same pre-update params. With this
-      # single-step update, the internal xT matches the sampled dynamics_params.
-      fwd_state_new, bwd_state_new, _ = gbs_train_step_jit(
-          sample_key,
-          fwd_state,
-          bwd_state,
-          target_lnpdf,
+      def _one_update(carry, xs):
+        fwd_state_carry, bwd_state_carry = carry
+        sample_key, target_batch = xs
+        fwd_state_new, bwd_state_new, _ = gbs_train_step_jit(
+            sample_key,
+            fwd_state_carry,
+            bwd_state_carry,
+            target_batch,
+        )
+        return (fwd_state_new, bwd_state_new), None
+      (fwd_state_new, bwd_state_new), _ = jax.lax.scan(
+          _one_update,
+          (fwd_state, bwd_state),
+          (sample_keys, target_batches),
+          length=gbs_num_updates,
       )
       return ((fwd_state_new, bwd_state_new), 1.)
     def update_adr(autodr_state, returns):
@@ -1074,7 +1091,7 @@ def train(
     elif sampler_choice=="GBS":
         flow_state, update_signal = jax.lax.cond(
             training_state.update_steps % sampler_update_freq == 0,
-            lambda: update_gbs(training_state.flow_state, gbs_sampler_key),
+            lambda: update_gbs(training_state.flow_state, gbs_sample_keys),
             lambda: (training_state.flow_state, 0.),
         )
     elif sampler_choice=="GMM":
@@ -1143,7 +1160,7 @@ def train(
   ) -> Tuple[TrainingState, envs.State, Metrics]:
     (training_state, state, _, _), loss_metrics = jax.lax.scan(
         training_step,
-        (training_state, state, jnp.zeros(sampler_batch_size), key),
+        (training_state, state, jnp.zeros(sampler_rollout_batch_size), key),
         (),
         length=num_training_steps_per_epoch,
     )

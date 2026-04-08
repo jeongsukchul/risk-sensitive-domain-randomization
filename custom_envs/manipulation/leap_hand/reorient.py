@@ -71,8 +71,8 @@ def default_config() -> config_dict.ConfigDict:
       dynamics_randomization_in_domain_randomization=True,
       reset_randomization_in_domain_randomization=True,
       impl='jax',
-      naconmax=30 * 8192,
-      naccdmax=30 * 8192,
+      nconmax=30 * 8192,
+    #   naccdmax=30 * 8192,
       njmax=160,
   )
 
@@ -239,8 +239,8 @@ class CubeReorient(leap_hand_base.LeapHandEnv):
         mocap_pos=self._init_mpos,
         mocap_quat=goal_quat,
         impl=self._mjx_model.impl.value,
-        naconmax=self._config.naconmax,
-        naccdmax=self._config.naccdmax,
+        nconmax=self._config.nconmax,
+        # naccdmax=self._config.naccdmax,
         njmax=self._config.njmax,
     )
 

@@ -1,0 +1,39 @@
+task: PandaStackCube
+
+parameters:
+  - {name: finger_friction, group: dynamics, low: 0.5, high: 1.5, learnable: true}
+  - {name: box_mass_scale, group: dynamics, low: 0.5, high: 4.0, learnable: true}
+  - {name: support_mass_scale, group: dynamics, low: 0.5, high: 4.0, learnable: true}
+  - {name: link_mass_scale_00, group: dynamics, low: 0.8, high: 1.2, learnable: true}
+  - {name: link_mass_scale_01, group: dynamics, low: 0.8, high: 1.2, learnable: true}
+  - {name: link_mass_scale_02, group: dynamics, low: 0.8, high: 1.2, learnable: true}
+  - {name: link_mass_scale_03, group: dynamics, low: 0.8, high: 1.2, learnable: true}
+  - {name: link_mass_scale_04, group: dynamics, low: 0.8, high: 1.2, learnable: true}
+  - {name: link_mass_scale_05, group: dynamics, low: 0.8, high: 1.2, learnable: true}
+  - {name: link_mass_scale_06, group: dynamics, low: 0.8, high: 1.2, learnable: true}
+  - {name: link_mass_scale_07, group: dynamics, low: 0.8, high: 1.2, learnable: true}
+  - {name: link_mass_scale_08, group: dynamics, low: 0.8, high: 1.2, learnable: true}
+  - {name: link_mass_scale_09, group: dynamics, low: 0.8, high: 1.2, learnable: true}
+  - {name: link_mass_scale_10, group: dynamics, low: 0.8, high: 1.2, learnable: true}
+  - {name: damping_scale_00, group: dynamics, low: 0.8, high: 1.2, learnable: true}
+  - {name: damping_scale_01, group: dynamics, low: 0.8, high: 1.2, learnable: true}
+  - {name: damping_scale_02, group: dynamics, low: 0.8, high: 1.2, learnable: true}
+  - {name: damping_scale_03, group: dynamics, low: 0.8, high: 1.2, learnable: true}
+  - {name: damping_scale_04, group: dynamics, low: 0.8, high: 1.2, learnable: true}
+  - {name: damping_scale_05, group: dynamics, low: 0.8, high: 1.2, learnable: true}
+  - {name: damping_scale_06, group: dynamics, low: 0.8, high: 1.2, learnable: true}
+  - {name: damping_scale_07, group: dynamics, low: 0.8, high: 1.2, learnable: true}
+  - {name: damping_scale_08, group: dynamics, low: 0.8, high: 1.2, learnable: true}
+  - {name: kp_scale_00, group: dynamics, low: 0.9, high: 1.1, learnable: true}
+  - {name: kp_scale_01, group: dynamics, low: 0.9, high: 1.1, learnable: true}
+  - {name: kp_scale_02, group: dynamics, low: 0.9, high: 1.1, learnable: true}
+  - {name: kp_scale_03, group: dynamics, low: 0.9, high: 1.1, learnable: true}
+  - {name: kp_scale_04, group: dynamics, low: 0.9, high: 1.1, learnable: true}
+  - {name: kp_scale_05, group: dynamics, low: 0.9, high: 1.1, learnable: true}
+  - {name: kp_scale_06, group: dynamics, low: 0.9, high: 1.1, learnable: true}
+  - {name: box_dx, group: reset, low: -0.15, high: 0.15, learnable: true}
+  - {name: box_dy, group: reset, low: -0.15, high: 0.15, learnable: true}
+  - {name: support_dx, group: reset, low: -0.15, high: 0.15, learnable: true}
+  - {name: support_dy, group: reset, low: -0.15, high: 0.15, learnable: true}
+  - {name: box_yaw, group: reset, low: -3.141592653589793, high: 3.141592653589793, learnable: true}
+  - {name: support_yaw, group: reset, low: -3.141592653589793, high: 3.141592653589793, learnable: true}

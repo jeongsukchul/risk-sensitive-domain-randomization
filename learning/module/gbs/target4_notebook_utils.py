@@ -26,6 +26,14 @@ from learning.module.gbs.sinkhorn_metrics import (
     interatomic_wasserstein_1d,
     sinkhorn_distance,
 )
+from learning.module.gbs.target4_family import (
+    Target4HarmonicParams,
+    get_target4_harmonic_params,
+    sample_target4_product,
+    target4_energy_values,
+    target4_expected_energy,
+    target4_log_normalizer,
+)
 
 
 def tanh_box_bijector(z, low, high):
@@ -41,32 +49,32 @@ def tanh_box_logabsdet(z, low, high):
     return jnp.sum(jnp.log(jnp.clip(jac_diag, 1e-12)), axis=-1)
 
 
-def truncated_exponential_logprob_1d(x, lam):
-    x = jnp.asarray(x)
-    lam = jnp.asarray(lam)
-    safe = jnp.abs(lam) > 1e-6
-    log_norm = jnp.where(
-        safe,
-        jnp.log(jnp.abs(lam)) - jnp.log(jnp.abs(jnp.expm1(lam))),
-        0.0,
-    )
-    logp = jnp.where(safe, log_norm + lam * x, 0.0)
-    return jnp.where((x >= 0.0) & (x <= 1.0), logp, -jnp.inf)
-
-
-def target4_logprob(z, lam):
+def target4_logprob(
+    z,
+    lam,
+    target_params: Target4HarmonicParams | None = None,
+):
     z = jnp.atleast_2d(z)
-    return jnp.sum(truncated_exponential_logprob_1d(z, lam), axis=-1).squeeze()
+    params = get_target4_harmonic_params(z.shape[-1], target_params)
+    log_unnorm = jnp.asarray(lam, dtype=jnp.float32) * target4_energy_values(z, params)
+    return (log_unnorm - target4_log_normalizer(lam, params)).squeeze()
 
 
-def update_p_from_samples(x, tau):
-    sample_mean = jnp.mean(x)
-    p = jax.nn.sigmoid((sample_mean - 1.0) / tau)
-    return p, sample_mean
+def update_p_from_samples(
+    x,
+    tau,
+    q,
+    target_params: Target4HarmonicParams | None = None,
+):
+    x = jnp.atleast_2d(jnp.asarray(x, dtype=jnp.float32))
+    params = get_target4_harmonic_params(x.shape[-1], target_params)
+    sample_mean_g = jnp.mean(target4_energy_values(x, params))
+    p = jax.nn.sigmoid(tau * (sample_mean_g - q))
+    return p, sample_mean_g
 
 
-def update_p_with_ema_and_jump(prev_p, sample_mean, tau, ema_alpha, jump_prob, key):
-    base_p = float(jax.nn.sigmoid((sample_mean - 1.0) / tau))
+def update_p_with_ema_and_jump(prev_p, sample_mean_g, tau, q, ema_alpha, jump_prob, key):
+    base_p = float(jax.nn.sigmoid(tau * (sample_mean_g - q)))
     ema_p = float(np.clip(ema_alpha * prev_p + (1.0 - ema_alpha) * base_p, 0.0, 1.0))
     key_jump, key_uniform = jax.random.split(key)
     jumped = bool(jax.random.bernoulli(key_jump, p=jump_prob))
@@ -77,63 +85,103 @@ def update_p_with_ema_and_jump(prev_p, sample_mean, tau, ema_alpha, jump_prob, k
     return new_p, base_p, ema_p, jumped
 
 
-def truncated_exponential_cdf(x, lam):
-    x = np.asarray(x, dtype=np.float64)
-    lam = float(lam)
-    if abs(lam) <= 1e-6:
-        return x
-    return np.expm1(lam * x) / np.expm1(lam)
-
-
-def truncated_exponential_mean(lam):
-    lam = np.asarray(lam, dtype=np.float64)
-    out = np.empty_like(lam, dtype=np.float64)
-    small = np.abs(lam) <= 1e-6
-    out[small] = 0.5
-    ls = lam[~small]
-    out[~small] = np.exp(ls) / np.expm1(ls) - 1.0 / ls
-    if out.ndim == 0:
-        return float(out)
-    return out
-
-
-def optimal_p_from_target_mean(lam, tau):
-    target_mean = truncated_exponential_mean(lam)
-    optimal_p = 1.0 / (1.0 + np.exp(-(target_mean - 1.0) / tau))
+def optimal_p_from_target_mean(
+    lam,
+    tau,
+    q,
+    target_params: Target4HarmonicParams | None = None,
+):
+    params = get_target4_harmonic_params(
+        len(target_params.a) if target_params is not None else 1,
+        target_params,
+    )
+    target_mean = float(target4_expected_energy(lam, params))
+    optimal_p = 1.0 / (1.0 + np.exp(-tau * (target_mean - q)))
     return float(optimal_p), float(target_mean)
 
 
-def sample_truncated_exponential(key, lam, shape):
-    u = jax.random.uniform(key, shape=shape)
-    lam = jnp.asarray(lam)
-    safe = jnp.abs(lam) > 1e-6
-    return jnp.where(safe, jnp.log1p(u * jnp.expm1(lam)) / lam, u)
+def sample_truncated_exponential(
+    key,
+    lam,
+    shape,
+    target_params: Target4HarmonicParams | None = None,
+):
+    if len(shape) != 2:
+        raise ValueError(f"shape must be rank-2, got {shape}")
+    params = get_target4_harmonic_params(shape[1], target_params)
+    return sample_target4_product(key, lam, shape, params)
 
 
-def compute_target4_metrics(samples, lam, num_bins=128, eps=1e-8, key=None):
-    samples = np.asarray(samples, dtype=np.float64).reshape(-1)
+def compute_target4_metrics(
+    samples,
+    lam,
+    target_params: Target4HarmonicParams | None = None,
+    num_bins=128,
+    eps=1e-8,
+    key=None,
+):
+    samples = np.asarray(samples, dtype=np.float64)
+    if samples.ndim != 2:
+        raise ValueError(f"samples must be rank-2, got {samples.shape}")
+    dim = samples.shape[1]
+    params = get_target4_harmonic_params(dim, target_params)
     edges = np.linspace(0.0, 1.0, num_bins + 1)
-    q_hist, _ = np.histogram(np.clip(samples, 0.0, 1.0), bins=edges, density=False)
-    q_probs = q_hist.astype(np.float64)
-    q_probs = q_probs / max(q_probs.sum(), 1.0)
+    grid = np.arange(num_bins, dtype=np.float64)
+    mids = (grid + 0.5) / num_bins
+    comp = np.asarray(
+        target4_energy_values(jnp.asarray(mids[:, None].repeat(dim, axis=1)), params)
+    )
+    del comp
+    forward_terms = []
+    reverse_terms = []
+    for i in range(dim):
+        q_hist, _ = np.histogram(np.clip(samples[:, i], 0.0, 1.0), bins=edges, density=False)
+        q_probs = q_hist.astype(np.float64)
+        q_probs = q_probs / max(q_probs.sum(), 1.0)
 
-    p_probs = truncated_exponential_cdf(edges[1:], lam) - truncated_exponential_cdf(edges[:-1], lam)
-    p_probs = np.maximum(p_probs, eps)
-    p_probs = p_probs / p_probs.sum()
-    q_probs = np.maximum(q_probs, eps)
-    q_probs = q_probs / q_probs.sum()
+        x_mid = jnp.asarray(mids[:, None], dtype=jnp.float32)
+        single_params = Target4HarmonicParams(
+            c=jnp.asarray(0.0, dtype=jnp.float32),
+            a=params.a[i : i + 1],
+            k=params.k[i : i + 1],
+            phi=params.phi[i : i + 1],
+        )
+        logw = np.asarray(
+            target4_logprob(x_mid, jnp.asarray(lam, dtype=jnp.float32), target_params=single_params)
+        )
+        p_probs = np.exp(logw - scipy_special_logsumexp_np(logw))
+        p_probs = np.maximum(p_probs, eps)
+        p_probs = p_probs / p_probs.sum()
+        q_probs = np.maximum(q_probs, eps)
+        q_probs = q_probs / q_probs.sum()
 
-    forward_kl = float(np.sum(p_probs * (np.log(p_probs) - np.log(q_probs))))
-    reverse_kl = float(np.sum(q_probs * (np.log(q_probs) - np.log(p_probs))))
+        forward_terms.append(np.sum(p_probs * (np.log(p_probs) - np.log(q_probs))))
+        reverse_terms.append(np.sum(q_probs * (np.log(q_probs) - np.log(p_probs))))
+
+    forward_kl = float(np.mean(forward_terms))
+    reverse_kl = float(np.mean(reverse_terms))
 
     if key is None:
-        ref = np.linspace(0.0, 1.0, samples.size, endpoint=False) + 0.5 / max(samples.size, 1)
+        ref = np.tile(
+            (np.linspace(0.0, 1.0, samples.shape[0], endpoint=False) + 0.5 / max(samples.shape[0], 1))[:, None],
+            (1, dim),
+        )
     else:
-        ref = np.asarray(sample_truncated_exponential(key, lam, (samples.size,)))
+        ref = np.asarray(sample_truncated_exponential(key, lam, samples.shape, params))
     wasserstein = float(
-        np.mean(np.abs(np.sort(np.clip(samples, 0.0, 1.0)) - np.sort(np.clip(ref, 0.0, 1.0))))
+        np.mean(
+            np.abs(
+                np.sort(np.clip(samples, 0.0, 1.0), axis=0)
+                - np.sort(np.clip(ref, 0.0, 1.0), axis=0)
+            )
+        )
     )
     return forward_kl, reverse_kl, wasserstein
+
+
+def scipy_special_logsumexp_np(values: np.ndarray) -> float:
+    vmax = float(np.max(values))
+    return vmax + float(np.log(np.sum(np.exp(values - vmax))))
 
 
 def run_gbs_toy_target4(
@@ -150,6 +198,7 @@ def run_gbs_toy_target4(
     seed=0,
     beta=1.0,
     tau=0.1,
+    q=1.0,
     initial_p=None,
     p_update_freq=1,
     p_ema_alpha=0.9,
@@ -160,10 +209,13 @@ def run_gbs_toy_target4(
     n_particles=None,
     n_spatial_dim=1,
     save_dir=".",
+    use_tanh_bijection=True,
     model_type="pisgrad",
     model_num_layers=2,
     model_num_hid=64,
     final_sample_size=2**14,
+    max_rnd=1e8,
+    target_params: Target4HarmonicParams | None = None,
 ):
     if snap_iters is None:
         snap_iters = []
@@ -199,25 +251,39 @@ def run_gbs_toy_target4(
         raise ValueError(
             f"n_particles * n_spatial_dim must equal dim, got {n_particles} * {n_spatial_dim} != {dim}"
         )
+    target_params = get_target4_harmonic_params(dim, target_params)
 
-    # Train in unconstrained latent space z and map to the box [low, high] via tanh.
-    # This keeps the prior sampler and prior_log_prob consistent while respecting the
-    # bounded target support.
-    def to_box(z):
-        return tanh_box_bijector(z, low=low, high=high)
+    # Optional tanh bijection: train in unconstrained latent space z and map to the
+    # bounded box only when requested.
+    if use_tanh_bijection:
+        def to_box(z):
+            return tanh_box_bijector(z, low=low, high=high)
 
-    def target4_logprob_latent(z, lam):
-        x_box = to_box(z)
-        return target4_logprob(x_box, lam) + tanh_box_logabsdet(z, low=low, high=high)
+        def target4_logprob_latent(z, lam):
+            x_box = to_box(z)
+            return (
+                target4_logprob(x_box, lam, target_params=target_params)
+                + tanh_box_logabsdet(z, low=low, high=high)
+            )
 
-    latent_prior_loc = jnp.zeros(dim, dtype=jnp.float32)
-    process_center = jnp.zeros(dim, dtype=jnp.float32)
+        latent_prior_loc = jnp.zeros(dim, dtype=jnp.float32)
+        process_center = jnp.zeros(dim, dtype=jnp.float32)
+    else:
+        to_box = lambda z: z
+        target4_logprob_latent = lambda z, lam: target4_logprob(z, lam, target_params=target_params)
+        latent_prior_loc = 0.5 * (low + high)
+        process_center = latent_prior_loc
 
     prior = distrax.MultivariateNormalDiag(
         loc=latent_prior_loc,
         scale_diag=jnp.ones(dim) * init_std,
     )
-    prior_sampler = lambda k: jnp.squeeze(prior.sample(seed=k, sample_shape=(1,)))
+    if use_tanh_bijection:
+        prior_sampler = lambda k: jnp.squeeze(prior.sample(seed=k, sample_shape=(1,)))
+    else:
+        prior_sampler = lambda k: jnp.clip(
+            jnp.squeeze(prior.sample(seed=k, sample_shape=(1,))), low, high
+        )
     prior_log_prob = prior.log_prob
 
     model_cfg = dict(
@@ -258,11 +324,14 @@ def run_gbs_toy_target4(
             )
             target_lp_vals = jnp.asarray(target4_logprob_latent(xT, lam)).reshape(-1)
             rnd_total = prior_log_prob(x0) + rnd_running - target_lp_vals
-            loss, aux, _ = lv_loss_from_rnd(rnd_total, xT=xT)
+            loss, aux, _ = lv_loss_from_rnd(rnd_total, xT=xT, max_rnd=max_rnd)
             return loss, aux
 
         loss_grad = jax.jit(jax.grad(loss_wrapped, (2, 3), has_aux=True))
-        hist = {k: [] for k in ["train/rnd_mean", "train/rnd_var", "train/xT_mean_norm"]}
+        hist = {
+            k: []
+            for k in ["train/rnd_mean", "train/rnd_var", "train/xT_mean_norm", "train/n_filtered"]
+        }
     elif loss_mode == "tr_lv_subtraj":
         if model_type != "potential":
             raise ValueError("loss_mode='tr_lv_subtraj' requires model_type='potential'.")
@@ -305,6 +374,7 @@ def run_gbs_toy_target4(
                     num_steps=num_steps,
                     prior_log_prob=prior_log_prob,
                     target_lp_vals=target_lp_vals,
+                    max_rnd=max_rnd,
                 )
                 return loss, aux
 
@@ -322,7 +392,7 @@ def run_gbs_toy_target4(
                 )
                 target_lp_vals = jnp.asarray(target4_logprob_latent(xT, lam)).reshape(-1)
                 rnd_total = prior_log_prob(x0) + rnd_running - target_lp_vals
-                loss, aux, _ = lv_loss_from_rnd(rnd_total, xT=xT)
+                loss, aux, _ = lv_loss_from_rnd(rnd_total, xT=xT, max_rnd=max_rnd)
                 aux = add_subtraj_aux_defaults(
                     aux,
                     idx_init=0.0,
@@ -341,6 +411,7 @@ def run_gbs_toy_target4(
                 "train/rnd_mean",
                 "train/rnd_var",
                 "train/xT_mean_norm",
+                "train/n_filtered",
                 "train/subtraj_scale",
                 "train/subtraj_idx_init",
                 "train/subtraj_idx_end",
@@ -363,7 +434,9 @@ def run_gbs_toy_target4(
                 process_center=process_center,
             )
             target_lp_vals = jnp.asarray(target4_logprob_latent(xT, lam)).reshape(-1)
-            loss, aux = lv_loss_from_values(x0, xT, log_ratio, prior_log_prob, target_lp_vals)
+            loss, aux = lv_loss_from_values(
+                x0, xT, log_ratio, prior_log_prob, target_lp_vals, max_rnd=max_rnd
+            )
             return loss, aux
 
         loss_grad = jax.jit(jax.grad(loss_wrapped, (2, 3), has_aux=True))
@@ -373,6 +446,7 @@ def run_gbs_toy_target4(
             "train/running_mean",
             "train/terminal_mean",
             "train/xT_mean_norm",
+            "train/n_filtered",
         ]}
     else:
         raise ValueError(f"Unknown loss_mode: {loss_mode}")
@@ -401,7 +475,7 @@ def run_gbs_toy_target4(
     frames = []
 
     for t in trange(T):
-        current_lambda = beta * p / dim
+        current_lambda = beta * p
         key, k_step = jax.random.split(key)
         model_state = (fwd_state, bwd_state)
 
@@ -435,21 +509,26 @@ def run_gbs_toy_target4(
             if k in hist:
                 hist[k].append(float(aux[k]))
 
-        sample_mean = float(jnp.mean(xT))
+        sample_mean_g = float(jnp.mean(target4_energy_values(xT, target_params)))
         key, k_metric, k_update = jax.random.split(key, 3)
         forward_kl, reverse_kl, wasserstein = compute_target4_metrics(
-            xT, current_lambda, num_bins=metric_num_bins, key=k_metric
+            xT, current_lambda, target_params=target_params, num_bins=metric_num_bins, key=k_metric
         )
         key, k_sink = jax.random.split(key)
-        sinkhorn_target = sample_truncated_exponential(k_sink, current_lambda, xT.shape)
+        sinkhorn_target = sample_truncated_exponential(
+            k_sink, current_lambda, xT.shape, target_params=target_params
+        )
         n_sink = min(int(sinkhorn_num_samples), int(xT.shape[0]))
         sinkhorn = sinkhorn_distance(xT[:n_sink], sinkhorn_target[:n_sink])
-        ess = effective_sample_size_from_log_weights(target4_logprob(xT, current_lambda))
+        ess = effective_sample_size_from_log_weights(
+            target4_logprob(xT, current_lambda, target_params=target_params)
+        )
         energy_w2 = float(
             energy_wasserstein_1d(
                 xT[:n_sink],
                 sinkhorn_target[:n_sink],
                 current_lambda,
+                target_params=target_params,
             )
         )
         interatomic_w2 = float(
@@ -460,11 +539,16 @@ def run_gbs_toy_target4(
                 n_spatial_dim=n_spatial_dim,
             )
         )
-        optimal_p, target_mean = optimal_p_from_target_mean(current_lambda, tau)
+        optimal_p, target_mean = optimal_p_from_target_mean(
+            current_lambda,
+            tau,
+            q,
+            target_params=target_params,
+        )
 
         hist["target4/p"].append(float(p))
         hist["target4/lambda"].append(float(current_lambda))
-        hist["target4/sample_mean"].append(sample_mean)
+        hist["target4/sample_mean"].append(sample_mean_g)
         hist["target4/forward_kl"].append(forward_kl)
         hist["target4/reverse_kl"].append(reverse_kl)
         hist["target4/wasserstein"].append(wasserstein)
@@ -477,17 +561,19 @@ def run_gbs_toy_target4(
         should_update_p = p_update_freq > 0 and ((t + 1) % p_update_freq == 0)
         hist["target4/p_updated"].append(float(should_update_p))
         hist["target4/p_jumped"].append(0.0)
-        hist["target4/p_base"].append(float(jax.nn.sigmoid((sample_mean - 1.0) / tau)))
+        hist["target4/p_base"].append(float(jax.nn.sigmoid(tau * (sample_mean_g - q))))
         hist["target4/p_ema"].append(float(p))
         if should_update_p:
             p, base_p, ema_p, jumped = update_p_with_ema_and_jump(
                 prev_p=p,
-                sample_mean=sample_mean,
+                sample_mean_g=sample_mean_g,
                 tau=tau,
+                q=q,
                 ema_alpha=p_ema_alpha,
                 jump_prob=p_jump_prob,
                 key=k_update,
             )
+            hist["target4/p"][-1] = float(p)
             hist["target4/p_jumped"][-1] = float(jumped)
             hist["target4/p_base"][-1] = float(base_p)
             hist["target4/p_ema"][-1] = float(ema_p)
@@ -512,7 +598,7 @@ def run_gbs_toy_target4(
 
     key, k_final = jax.random.split(key)
     B = 2**14
-    if loss_mode == "tr_lv":
+    if loss_mode in ("tr_lv", "tr_lv_subtraj"):
         _, xT_final_latent, _ = rnd_time_reversal_lv_no_target(
             k_final, (fwd_state, bwd_state), fwd_state.params,
             final_sample_size, prior_sampler, num_steps, proc, True, process_center=process_center

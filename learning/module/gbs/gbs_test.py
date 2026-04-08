@@ -24,6 +24,7 @@ from learning.module.gbs.gbs_loss import (
     rnd_time_reversal_lv_no_target,
 )
 from learning.module.gbs.gbs_trainer import PISGRADNet
+from learning.module.gbs.sinkhorn_metrics import sinkhorn_distance
 
 
 def tanh_box_bijector(z: jax.Array, low: jax.Array, high: jax.Array) -> jax.Array:
@@ -128,6 +129,79 @@ def plot_target_contour(
   ax.set_ylim(float(low[1]), float(high[1]))
   ax.set_aspect("equal")
   return ctf
+
+
+def _sanitize_tag(value: object) -> str:
+  return str(value).replace("-", "m").replace(".", "p")
+
+
+def build_artifact_stem(target: str, beta: float) -> str:
+  return f"{target}_beta{_sanitize_tag(beta)}"
+
+
+def sample_target_reference(
+    key: jax.Array,
+    low: jax.Array,
+    high: jax.Array,
+    logprob_fn,
+    sample_shape: tuple[int, int],
+    grid_size: int = 128,
+) -> jax.Array:
+  """Approximate target samples by categorical resampling from a dense 2D grid."""
+  if len(sample_shape) != 2 or sample_shape[1] != 2:
+    raise ValueError(f"Expected sample_shape [N,2], got {sample_shape}")
+
+  x, y = jnp.meshgrid(
+      jnp.linspace(low[0], high[0], grid_size),
+      jnp.linspace(low[1], high[1], grid_size),
+      indexing="xy",
+  )
+  grid = jnp.stack([x.reshape(-1), y.reshape(-1)], axis=-1)
+  logp = jnp.asarray(logprob_fn(grid)).reshape(-1)
+  idx = jax.random.categorical(key, logp, shape=(sample_shape[0],))
+  return grid[idx]
+
+
+def energy_wasserstein_against_target(
+    samples: jax.Array,
+    ref_samples: jax.Array,
+    logprob_fn,
+) -> float:
+  sample_energy = -jnp.asarray(logprob_fn(samples)).reshape(-1)
+  ref_energy = -jnp.asarray(logprob_fn(ref_samples)).reshape(-1)
+  sample_energy = jnp.sort(sample_energy)
+  ref_energy = jnp.sort(ref_energy)
+  n = min(sample_energy.shape[0], ref_energy.shape[0])
+  return float(jnp.mean((sample_energy[:n] - ref_energy[:n]) ** 2))
+
+
+def save_metric_plot(
+    metric_hist: dict[str, list[float]],
+    output_path: Path,
+    *,
+    target: str,
+    beta: float,
+) -> None:
+  iters = np.arange(len(metric_hist["sinkhorn"]))
+  fig, axes = plt.subplots(1, 2, figsize=(10, 4))
+
+  axes[0].plot(iters, np.asarray(metric_hist["sinkhorn"], dtype=np.float64), color="tab:blue")
+  axes[0].set_title(f"Sinkhorn vs target ({target}, beta={beta:g})")
+  axes[0].set_xlabel("iteration")
+  axes[0].grid(alpha=0.3)
+
+  axes[1].plot(
+      iters,
+      np.asarray(metric_hist["energy_w2"], dtype=np.float64),
+      color="tab:brown",
+  )
+  axes[1].set_title(f"Energy W2 vs target ({target}, beta={beta:g})")
+  axes[1].set_xlabel("iteration")
+  axes[1].grid(alpha=0.3)
+
+  fig.tight_layout()
+  fig.savefig(output_path.as_posix(), dpi=150)
+  plt.close(fig)
 
 
 @dataclass(frozen=True)
@@ -243,6 +317,10 @@ def main():
 
   save_dir = Path(cfg.save_dir)
   save_dir.mkdir(parents=True, exist_ok=True)
+  artifact_stem = build_artifact_stem(cfg.target, cfg.beta)
+  gif_name = cfg.gif_name
+  if gif_name == "GBS_training.gif":
+    gif_name = f"GBS_training_{artifact_stem}.gif"
 
   dim = 2
   logprob_fn_x, low, high, prior_loc, clip_prior, process_center = get_target_setup(
@@ -357,6 +435,7 @@ def main():
       k: []
       for k in ["train/rnd_mean", "train/rnd_var", "train/xT_mean_norm", "train/n_filtered"]
   }
+  metric_hist = {"sinkhorn": [], "energy_w2": []}
   frames: list[np.ndarray] = []
   last_xT = None
 
@@ -392,6 +471,21 @@ def main():
     if t % max(cfg.snap_every, 1) == 0:
       print(t, {k: hist[k][-1] for k in hist})
 
+      key, k_ref = jax.random.split(key)
+      pts = jnp.asarray(to_box(last_xT))
+      ref = sample_target_reference(k_ref, low, high, logprob_fn_x, pts.shape)
+      metric_hist["sinkhorn"].append(float(sinkhorn_distance(pts, ref)))
+      metric_hist["energy_w2"].append(
+          energy_wasserstein_against_target(pts, ref, logprob_fn_x)
+      )
+      print(
+          "metrics",
+          {
+              "sinkhorn": metric_hist["sinkhorn"][-1],
+              "energy_w2": metric_hist["energy_w2"][-1],
+          },
+      )
+
     if cfg.save_gif and (t % max(cfg.snap_every, 1) == 0):
       fig, ax = plt.subplots(1, 1, figsize=(5, 5))
       ctf = plot_target_contour(
@@ -402,7 +496,7 @@ def main():
           n=200,
           levels=10,
           norm_gamma=cfg.gamma,
-          title=f"GBS xT (iter {t}) {cfg.target} beta={cfg.beta}",
+          title=f"GBS xT (iter {t}) {cfg.target} beta={cfg.beta:g}",
       )
       fig.colorbar(ctf, ax=ax)
       pts = np.array(to_box(last_xT))
@@ -414,7 +508,7 @@ def main():
       plt.close(fig)
 
   if cfg.save_gif and frames:
-    gif_path = save_dir / cfg.gif_name
+    gif_path = save_dir / gif_name
     imageio.mimsave(gif_path.as_posix(), frames, fps=4)
     print("Saved GIF to:", gif_path)
 
@@ -435,7 +529,8 @@ def main():
       process_center=process_center,
   )
   xT_final_box = to_box(xT_final)
-  np.save((save_dir / "gbs_samples.npy").as_posix(), np.array(xT_final_box))
+  samples_path = save_dir / f"gbs_samples_{artifact_stem}.npy"
+  np.save(samples_path.as_posix(), np.array(xT_final_box))
 
   fig, ax = plt.subplots(1, 1, figsize=(5, 5))
   ctf = plot_target_contour(
@@ -446,13 +541,31 @@ def main():
       n=200,
       levels=10,
       norm_gamma=cfg.gamma,
-      title="Target density + final xT",
+      title=f"Target density + final xT ({cfg.target}, beta={cfg.beta:g})",
   )
   fig.colorbar(ctf, ax=ax)
   pts = np.array(xT_final_box)
   ax.scatter(pts[:, 0], pts[:, 1], s=1, alpha=0.25, c="r")
   fig.tight_layout()
-  fig.savefig((save_dir / "gbs_final.png").as_posix(), dpi=150)
+  final_plot_path = save_dir / f"GBS_{artifact_stem}_final.png"
+  fig.savefig(final_plot_path.as_posix(), dpi=150)
+  plt.close(fig)
+
+  key, k_final_ref = jax.random.split(key)
+  final_ref = sample_target_reference(k_final_ref, low, high, logprob_fn_x, xT_final_box.shape)
+  final_sinkhorn = float(sinkhorn_distance(jnp.asarray(xT_final_box), final_ref))
+  final_energy_w2 = energy_wasserstein_against_target(
+      jnp.asarray(xT_final_box), final_ref, logprob_fn_x
+  )
+  metrics_plot_path = save_dir / f"GBS_{cfg.target}_metrics.png"
+  save_metric_plot(metric_hist, metrics_plot_path, target=cfg.target, beta=cfg.beta)
+  print(f"Target: {cfg.target}")
+  print(f"Beta: {cfg.beta:g}")
+  print(f"Saved samples to: {samples_path}")
+  print(f"Saved final plot to: {final_plot_path}")
+  print(f"Saved metrics plot to: {metrics_plot_path}")
+  print(f"Final Sinkhorn to target: {final_sinkhorn:.6f}")
+  print(f"Final Energy W2 to target: {final_energy_w2:.6f}")
   plt.show()
 
 

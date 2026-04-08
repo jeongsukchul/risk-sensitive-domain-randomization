@@ -7,6 +7,7 @@ import jax
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
 import numpy as np
+from mpl_toolkits.axes_grid1 import make_axes_locatable
 from tqdm import trange
 
 from learning.module.gbs.gbs_test_toy import build_run_tag as build_gbs_run_tag
@@ -25,6 +26,12 @@ from learning.module.gbs.target4_notebook_utils import (
     sample_truncated_exponential,
     target4_logprob,
     update_p_with_ema_and_jump,
+)
+from learning.module.gbs.target4_family import (
+    add_target4_cli_args,
+    build_target4_params_from_args,
+    get_target4_harmonic_params,
+    target4_energy_values,
 )
 from learning.module.gmmvi.network import create_gmm_network_and_state
 
@@ -65,8 +72,9 @@ def run_gmmvi_target4_online(args: argparse.Namespace) -> dict[str, np.ndarray]:
         prior_scale=args.gmmvi_prior_scale,
         bound_info=(low, high),
     )
+    target_params = build_target4_params_from_args(args, dim)
     gather_samples, train_iter, sample_model, model_log_density = build_gmmvi_fns(
-        gmm_network, args.gmmvi_num_envs
+        gmm_network, args.gmmvi_num_envs, target_params
     )
 
     if args.initial_p is None:
@@ -94,13 +102,13 @@ def run_gmmvi_target4_online(args: argparse.Namespace) -> dict[str, np.ndarray]:
         "model/num_components": [],
     }
 
-    current_lambda = args.beta * p / dim
+    current_lambda = args.beta * p
     for _ in range(max(args.gmmvi_batch_size // args.gmmvi_num_envs, 1)):
         key, subkey = jax.random.split(key)
         state = gather_samples(state, subkey, jnp.asarray(current_lambda))
 
     for step in trange(args.iters, desc="GMMVI", leave=False):
-        current_lambda = args.beta * p / dim
+        current_lambda = args.beta * p
 
         key, subkey = jax.random.split(key)
         state = train_iter(state, subkey, jnp.asarray(current_lambda))
@@ -109,24 +117,35 @@ def run_gmmvi_target4_online(args: argparse.Namespace) -> dict[str, np.ndarray]:
         samples = np.asarray(sample_model(state, k_eval, args.gmmvi_eval_samples))
         _ = model_log_density(state, jnp.asarray(samples))
 
-        sample_mean = float(np.mean(samples))
+        sample_mean = float(
+            np.mean(np.asarray(target4_energy_values(jnp.asarray(samples), target_params)))
+        )
         forward_kl, reverse_kl, wasserstein = compute_target4_metrics(
             samples,
             current_lambda,
+            target_params=target_params,
             num_bins=args.metric_num_bins,
             key=k_metric,
         )
         key, k_sink = jax.random.split(key)
         samples_jax = jnp.asarray(samples)
-        sinkhorn_target = sample_truncated_exponential(k_sink, current_lambda, samples.shape)
+        sinkhorn_target = sample_truncated_exponential(
+            k_sink,
+            current_lambda,
+            samples.shape,
+            target_params=target_params,
+        )
         n_sink = min(args.sinkhorn_num_samples, samples.shape[0])
         sinkhorn = sinkhorn_distance(samples_jax[:n_sink], sinkhorn_target[:n_sink])
-        ess = effective_sample_size_from_log_weights(target4_logprob(samples_jax, current_lambda))
+        ess = effective_sample_size_from_log_weights(
+            target4_logprob(samples_jax, current_lambda, target_params=target_params)
+        )
         energy_w2 = float(
             energy_wasserstein_1d(
                 samples_jax[:n_sink],
                 sinkhorn_target[:n_sink],
                 current_lambda,
+                target_params=target_params,
             )
         )
         interatomic_w2 = float(
@@ -137,7 +156,12 @@ def run_gmmvi_target4_online(args: argparse.Namespace) -> dict[str, np.ndarray]:
                 n_spatial_dim=args.n_spatial_dim,
             )
         )
-        optimal_p, target_mean = optimal_p_from_target_mean(current_lambda, args.tau)
+        optimal_p, target_mean = optimal_p_from_target_mean(
+            current_lambda,
+            args.tau,
+            args.safe_q,
+            target_params=target_params,
+        )
 
         hist["target4/p"].append(float(p))
         hist["target4/lambda"].append(float(current_lambda))
@@ -156,24 +180,30 @@ def run_gmmvi_target4_online(args: argparse.Namespace) -> dict[str, np.ndarray]:
         should_update_p = args.p_update_freq > 0 and ((step + 1) % args.p_update_freq == 0)
         hist["target4/p_updated"].append(float(should_update_p))
         hist["target4/p_jumped"].append(0.0)
-        hist["target4/p_base"].append(float(jax.nn.sigmoid((sample_mean - 1.0) / args.tau)))
+        hist["target4/p_base"].append(float(jax.nn.sigmoid(args.tau * (sample_mean - args.safe_q))))
         hist["target4/p_ema"].append(float(p))
 
         if should_update_p:
             key, k_update = jax.random.split(key)
             p, base_p, ema_p, jumped = update_p_with_ema_and_jump(
                 prev_p=p,
-                sample_mean=sample_mean,
+                sample_mean_g=sample_mean,
                 tau=args.tau,
+                q=args.safe_q,
                 ema_alpha=args.p_ema_alpha,
                 jump_prob=args.p_jump_prob,
                 key=k_update,
             )
+            hist["target4/p"][-1] = float(p)
             hist["target4/p_jumped"][-1] = float(jumped)
             hist["target4/p_base"][-1] = float(base_p)
             hist["target4/p_ema"][-1] = float(ema_p)
 
-    return {key: np.asarray(value, dtype=np.float64) for key, value in hist.items()}
+    final_samples = np.asarray(sample_model(state, key, 2**12))
+    return {
+        "hist": {key: np.asarray(value, dtype=np.float64) for key, value in hist.items()},
+        "final_samples": final_samples,
+    }
 
 
 def save_unified_plot(
@@ -183,13 +213,13 @@ def save_unified_plot(
     hide_initial_point: bool,
     title: str,
 ) -> None:
-    fig, axes = plt.subplots(1, 4, figsize=(20, 4.5))
+    fig, axes = plt.subplots(1, 3, figsize=(15, 4.5))
     colors = {"DIS-LV": "tab:blue", "GMMVI": "tab:orange"}
 
     metric_specs = [
         ("target4/p", "Learned policy p", False),
         ("target4/sinkhorn", "Sinkhorn Distance", hide_initial_point),
-        ("target4/interatomic_w2", r"\mathcal{W}_2$", hide_initial_point),
+        # ("target4/interatomic_w2", r"\mathcal{W}_2$", hide_initial_point),
         ("target4/energy_w2", r"$E(\cdot)\,\mathcal{W}_2$", hide_initial_point),
     ]
 
@@ -204,12 +234,67 @@ def save_unified_plot(
 
     axes[0].set_ylabel("Learned Policy Probability", fontsize=20)
     axes[1].set_ylabel("Sinkhorn Distance", fontsize=20)
-    axes[2].set_ylabel(r"$\mathcal{W}_2$", fontsize=20)
-    axes[3].set_ylabel(r"$E(\cdot)\,\mathcal{W}_2$", fontsize=20)
+    # axes[2].set_ylabel(r"$\mathcal{W}_2$", fontsize=20)
+    axes[2].set_ylabel(r"$E(\cdot)\,\mathcal{W}_2$", fontsize=20)
     handles, labels = axes[0].get_legend_handles_labels()
     # fig.legend(handles, labels, loc="upper center", ncol=2, frameon=False)
     # fig.suptitle(title, y=0.98)
     fig.tight_layout(rect=(0.0, 0.0, 1.0, 0.92))
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(output_path.as_posix(), dpi=160)
+    plt.close(fig)
+
+
+def save_dim01_plot(
+    gbs_samples: np.ndarray,
+    gmmvi_samples: np.ndarray,
+    target_params,
+    lam_gbs: float,
+    lam_gmmvi: float,
+    output_path: Path,
+    n_grid: int = 180,
+) -> None:
+    if gbs_samples.shape[1] < 2 or gmmvi_samples.shape[1] < 2:
+        return
+
+    params2 = type(target_params)(
+        c=target_params.c,
+        a=target_params.a[:2],
+        k=target_params.k[:2],
+        phi=target_params.phi[:2],
+    )
+    x = jnp.linspace(0.0, 1.0, n_grid)
+    y = jnp.linspace(0.0, 1.0, n_grid)
+    X, Y = jnp.meshgrid(x, y, indexing="xy")
+    grid = jnp.stack([X.reshape(-1), Y.reshape(-1)], axis=-1)
+
+    fig, axes = plt.subplots(1, 2, figsize=(10, 4.5))
+    panels = [
+        (axes[0], gbs_samples, lam_gbs, "GBS"),
+        (axes[1], gmmvi_samples, lam_gmmvi, "GMMVI"),
+    ]
+    contour = None
+    for ax, samples, lam, title in panels:
+        logp = np.asarray(target4_logprob(grid, lam, target_params=params2)).reshape(n_grid, n_grid)
+        logp = logp - np.max(logp)
+        density = np.exp(logp)
+        contour = ax.contourf(
+            np.asarray(X),
+            np.asarray(Y),
+            density,
+            levels=20,
+            cmap="viridis",
+        )
+        ax.scatter(samples[:, 0], samples[:, 1], s=3, alpha=0.20, c="r", marker='x')
+        ax.set_xlim(0.0, 1.0)
+        ax.set_ylim(0.0, 1.0)
+        ax.set_xlabel("dim 0")
+        ax.set_ylabel("dim 1")
+        ax.set_title(f"{title} | lambda={lam:.3f}")
+    divider = make_axes_locatable(axes[1])
+    cax = divider.append_axes("right", size="5%", pad=0.08)
+    fig.colorbar(contour, cax=cax)
+    fig.tight_layout()
     output_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(output_path.as_posix(), dpi=160)
     plt.close(fig)
@@ -224,6 +309,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--iters", type=int, default=400)
     parser.add_argument("--beta", type=float, default=-200.0)
     parser.add_argument("--tau", type=float, default=1.0)
+    parser.add_argument("--safe_q", type=float, default=1.0)
     parser.add_argument("--initial_p", type=float, default=0.9)
     parser.add_argument("--p_update_freq", type=int, default=1)
     parser.add_argument("--p_ema_alpha", type=float, default=0.99)
@@ -241,6 +327,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--gbs_model_type", choices=["pisgrad", "potential"], default="pisgrad")
     parser.add_argument("--gbs_model_num_layers", type=int, default=2)
     parser.add_argument("--gbs_model_num_hid", type=int, default=64)
+    parser.add_argument("--use_tanh_bijection", action="store_true")
+    parser.add_argument("--no_use_tanh_bijection", dest="use_tanh_bijection", action="store_false")
+    parser.set_defaults(use_tanh_bijection=True)
 
     parser.add_argument("--gmmvi_num_envs", type=int, default=1024)
     parser.add_argument("--gmmvi_batch_size", type=int, default=1024)
@@ -250,9 +339,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--output_dir",
         type=Path,
-        default=Path("results/target4_online_comparison"),
+        default=Path("compare_GBS_GMMVI"),
     )
     parser.add_argument("--hide_initial_point", action="store_true")
+    add_target4_cli_args(parser)
     return parser.parse_args()
 
 
@@ -262,6 +352,7 @@ def main() -> None:
     args.n_particles = n_particles
     gbs_artifact_dir = args.output_dir / "online_compare_gbs_artifacts"
 
+    target_params = build_target4_params_from_args(args, args.dim)
     gbs_hist_raw = run_gbs_toy_target4(
         low=jnp.zeros(args.dim),
         high=jnp.ones(args.dim),
@@ -274,6 +365,7 @@ def main() -> None:
         seed=args.seed,
         beta=args.beta,
         tau=args.tau,
+        q=args.safe_q,
         initial_p=args.initial_p,
         p_update_freq=args.p_update_freq,
         p_ema_alpha=args.p_ema_alpha,
@@ -284,15 +376,19 @@ def main() -> None:
         n_particles=args.n_particles,
         n_spatial_dim=args.n_spatial_dim,
         save_dir=gbs_artifact_dir,
+        use_tanh_bijection=args.use_tanh_bijection,
         model_type=args.gbs_model_type,
         model_num_layers=args.gbs_model_num_layers,
         model_num_hid=args.gbs_model_num_hid,
         final_sample_size=2**12,
+        target_params=target_params,
     )
-    _, _, gbs_hist, _ = gbs_hist_raw
+    _, _, gbs_hist, gbs_final_samples = gbs_hist_raw
     gbs_hist_np = {key: np.asarray(value, dtype=np.float64) for key, value in gbs_hist.items()}
 
-    gmmvi_hist_np = run_gmmvi_target4_online(args)
+    gmmvi_result = run_gmmvi_target4_online(args)
+    gmmvi_hist_np = gmmvi_result["hist"]
+    gmmvi_final_samples = gmmvi_result["final_samples"]
 
     gbs_tag_args = argparse.Namespace(
         seed=args.seed,
@@ -308,6 +404,7 @@ def main() -> None:
         p_ema_alpha=args.p_ema_alpha,
         p_jump_prob=args.p_jump_prob,
         loss_mode=args.gbs_loss_mode,
+        use_tanh_bijection=args.use_tanh_bijection,
         model_type=args.gbs_model_type,
     )
     gmmvi_tag_args = argparse.Namespace(
@@ -328,7 +425,7 @@ def main() -> None:
     gmmvi_tag = build_gmmvi_run_tag(gmmvi_tag_args)
 
     output_path = args.output_dir / (
-        f"target4_online_compare_p_sinkhorn_energy__gbs_{gbs_tag}.png"#__gmmvi_{gmmvi_tag}.png"
+        f"{gbs_tag}.png"#__gmmvi_{gmmvi_tag}.png"
     )
     title = (
         f"Target4 online comparison | dim={args.dim}, iters={args.iters}, "
@@ -341,8 +438,20 @@ def main() -> None:
         hide_initial_point=args.hide_initial_point,
         title=title,
     )
+    if args.dim >= 2:
+        dim01_output_path = args.output_dir / f"{gbs_tag}_dim01.png"
+        save_dim01_plot(
+            gbs_final_samples,
+            gmmvi_final_samples,
+            target_params,
+            lam_gbs=float(args.beta * gbs_hist_np["target4/p"][-1]),
+            lam_gmmvi=float(args.beta * gmmvi_hist_np["target4/p"][-1]),
+            output_path=dim01_output_path,
+        )
+        print(f"Saved dim0/dim1 comparison plot to: {dim01_output_path}")
 
     print(f"Saved unified comparison plot to: {output_path}")
+    print(f"GBS uses tanh bijection: {args.use_tanh_bijection}")
     print(f"GBS final p: {gbs_hist_np['target4/p'][-1]:.6f}")
     print(f"GMMVI final p: {gmmvi_hist_np['target4/p'][-1]:.6f}")
     print(f"GBS final Sinkhorn: {gbs_hist_np['target4/sinkhorn'][-1]:.6f}")

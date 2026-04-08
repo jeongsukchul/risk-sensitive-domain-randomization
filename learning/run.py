@@ -94,6 +94,7 @@ CAMERAS = {
     "LeapCubeReorient" :"side",
     "PandaPickCube" :None,
     "PandaPickCubeOrientation" :None,
+    "PandaStackCube" :None,
     "PandaOpenCabinet" :None,
     "AlohaSinglePegInsertion" : "collaborator_pov",
     "PandaRobotiqPushCube" : None,
@@ -342,7 +343,7 @@ def train_ppo(cfg:dict, randomization_fn, env, eval_env=None):
         gamma = train_gamma,
         beta = cfg.beta,
         sampler_update_freq =cfg.sampler_update_freq,
-        sample_ratio=getattr(cfg, "sample_ratio", 8),
+        sampler_batch_size=getattr(cfg, "sampler_batch_size", None),
         n_sampler_iters = cfg.n_sampler_iters,
         sampler_visualization=getattr(cfg, "sampler_visualization", False),
         dr_config_task=cfg.task,
@@ -632,7 +633,7 @@ def train(cfg: dict):
     if cfg.save_video and cfg.use_wandb:
         policy_fn = make_inference_fn(params, deterministic=True)
         jit_policy_fn = jax.jit(policy_fn)
-        fps = 1.0 / env.sim_dt
+        fps = 1.0 / env.dt
 
         percentile_levels = metrics.get('final_eval/percentile_levels', None) if isinstance(metrics, dict) else None
         percentile_params = metrics.get('final_eval/dynamics_params_percentiles', None) if isinstance(metrics, dict) else None

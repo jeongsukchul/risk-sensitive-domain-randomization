@@ -96,7 +96,7 @@ def manipulation_ppo_config(
     rl_config.network_factory.policy_hidden_layer_sizes = (256, 256)
     rl_config.num_resets_per_eval = 1
     rl_config.max_grad_norm = 1.0
-  elif env_name.startswith("PandaPickCube"):
+  elif env_name.startswith("PandaPickCube") or env_name == "PandaStackCube":
     rl_config.num_timesteps = 200_000_000
     rl_config.num_evals = 4
     rl_config.unroll_length = 10
@@ -134,7 +134,7 @@ def manipulation_ppo_config(
         value_obs_key="privileged_state",
     )
   elif env_name == "LeapCubeRotateZAxis":
-    rl_config.num_timesteps = 150_000_000
+    rl_config.num_timesteps = 200_000_000
     rl_config.num_evals = 10
     rl_config.num_minibatches = 32
     rl_config.unroll_length = 40
