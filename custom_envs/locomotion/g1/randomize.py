@@ -37,16 +37,6 @@ def _apply_randomization(model: mjx.Model, params: jax.Array):
   qpos0 = model.qpos0.at[7:].set(model.qpos0[7:] + params[idx : idx + n_dofs])
   idx += n_dofs
 
-  dof_damping = model.dof_damping.at[6:].set(
-      model.dof_damping[6:] * params[idx : idx + n_dofs]
-  )
-  idx += n_dofs
-
-  kp_val = model.actuator_gainprm[:, 0] * params[idx : idx + model.nu]
-  actuator_gainprm = model.actuator_gainprm.at[:, 0].set(kp_val)
-  actuator_biasprm = model.actuator_biasprm.at[:, 1].set(-kp_val)
-  idx += model.nu
-
   assert idx == params.shape[0]
 
   randomized_model = model.tree_replace({
@@ -55,9 +45,6 @@ def _apply_randomization(model: mjx.Model, params: jax.Array):
       "dof_armature": dof_armature,
       "body_mass": body_mass,
       "qpos0": qpos0,
-      "dof_damping": dof_damping,
-      "actuator_gainprm": actuator_gainprm,
-      "actuator_biasprm": actuator_biasprm,
   })
   in_axes = jax.tree_util.tree_map(lambda x: None, randomized_model)
   in_axes = in_axes.tree_replace({
@@ -66,9 +53,6 @@ def _apply_randomization(model: mjx.Model, params: jax.Array):
       "dof_armature": 0,
       "body_mass": 0,
       "qpos0": 0,
-      "dof_damping": 0,
-      "actuator_gainprm": 0,
-      "actuator_biasprm": 0,
   })
   return randomized_model, in_axes
 
@@ -98,9 +82,6 @@ def domain_randomize(
       "dof_armature": 0,
       "body_mass": 0,
       "qpos0": 0,
-      "dof_damping": 0,
-      "actuator_gainprm": 0,
-      "actuator_biasprm": 0,
   })
   return model_v, in_axes
 
@@ -117,8 +98,6 @@ def domain_randomize_eval(
         jp.ones(model.nbody),
         jp.zeros(1),
         jp.zeros(n_dofs),
-        jp.ones(n_dofs),
-        jp.ones(model.nu),
     ])
   if rng is not None and params is None:
     dr_low, dr_high = dr_range

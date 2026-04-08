@@ -18,12 +18,12 @@ from typing import Any, Dict, Optional, Union
 
 from etils import epath
 import jax
+import jax.numpy as jp
 from ml_collections import config_dict
 import mujoco
 from mujoco import mjx
 
 from custom_envs import mjx_env
-from custom_envs.locomotion import randomization_utils
 from custom_envs.locomotion.t1 import t1_constants as consts
 
 
@@ -117,12 +117,40 @@ class T1Env(mjx_env.MjxEnv):
 
   @property
   def dr_range(self):
-    return randomization_utils.make_default_dr_range(
-        self._mjx_model,
-        floor_friction_range=(0.2, 0.6),
-        body_mass_range=(0.98, 1.02),
+    n_dofs = self._mjx_model.nv - 6
+    return (
+        jp.concatenate([
+            jp.array([0.2]),
+            jp.full((n_dofs,), 0.9),
+            jp.full((n_dofs,), 1.0),
+            jp.full((self._mjx_model.nbody,), 0.98),
+            jp.array([-1.0]),
+            jp.full((n_dofs,), -0.05),
+            jp.full((self._mjx_model.nu,), 0.9),
+            jp.full((n_dofs,), 0.9),
+        ]),
+        jp.concatenate([
+            jp.array([0.6]),
+            jp.full((n_dofs,), 1.1),
+            jp.full((n_dofs,), 1.05),
+            jp.full((self._mjx_model.nbody,), 1.02),
+            jp.array([1.0]),
+            jp.full((n_dofs,), 0.05),
+            jp.full((self._mjx_model.nu,), 1.1),
+            jp.full((n_dofs,), 1.1),
+        ]),
     )
 
   @property
   def nominal_params(self):
-    return randomization_utils.make_default_nominal_params(self._mjx_model)
+    n_dofs = self._mjx_model.nv - 6
+    return jp.concatenate([
+        jp.array([self._mjx_model.geom_friction[0, 0]]),
+        jp.ones(n_dofs),
+        jp.ones(n_dofs),
+        jp.ones(self._mjx_model.nbody),
+        jp.zeros(1),
+        jp.zeros(n_dofs),
+        jp.ones(self._mjx_model.nu),
+        jp.ones(n_dofs),
+    ])

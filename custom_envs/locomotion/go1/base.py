@@ -132,8 +132,37 @@ class Go1Env(mjx_env.MjxEnv):
 
   @property
   def dr_range(self):
-    return randomization_utils.make_default_dr_range(self._mjx_model)
+    n_dofs = self._mjx_model.nv - 6
+    return (
+        jp.concatenate([
+            jp.array([0.4]),
+            jp.full((n_dofs,), 0.9),
+            jp.full((n_dofs,), 1.0),
+            jp.full((3,), -0.05),
+            jp.full((self._mjx_model.nbody,), 0.9),
+            jp.array([-1.0]),
+            jp.full((n_dofs,), -0.05),
+        ]),
+        jp.concatenate([
+            jp.array([1.0]),
+            jp.full((n_dofs,), 1.1),
+            jp.full((n_dofs,), 1.05),
+            jp.full((3,), 0.05),
+            jp.full((self._mjx_model.nbody,), 1.1),
+            jp.array([1.0]),
+            jp.full((n_dofs,), 0.05),
+        ]),
+    )
 
   @property
   def nominal_params(self):
-    return randomization_utils.make_default_nominal_params(self._mjx_model)
+    n_dofs = self._mjx_model.nv - 6
+    return jp.concatenate([
+        jp.array([self._mjx_model.geom_friction[0, 0]]),
+        jp.ones(n_dofs),
+        jp.ones(n_dofs),
+        jp.zeros(3),
+        jp.ones(self._mjx_model.nbody),
+        jp.zeros(1),
+        jp.zeros(n_dofs),
+    ])

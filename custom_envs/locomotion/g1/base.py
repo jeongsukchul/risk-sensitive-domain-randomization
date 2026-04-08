@@ -130,8 +130,6 @@ class G1Env(mjx_env.MjxEnv):
         + [0.9] * self._mjx_model.nbody
         + [-1.0]
         + [-0.05] * n_dofs
-        + [0.8] * n_dofs
-        + [0.9] * self._mjx_model.nu
     )
     high = jp.array(
         [1.0]
@@ -140,8 +138,6 @@ class G1Env(mjx_env.MjxEnv):
         + [1.1] * self._mjx_model.nbody
         + [1.0]
         + [0.05] * n_dofs
-        + [1.2] * n_dofs
-        + [1.1] * self._mjx_model.nu
     )
     return low, high
 
@@ -156,6 +152,4 @@ class G1Env(mjx_env.MjxEnv):
         jp.ones(self._mjx_model.nbody),
         jp.zeros(1),
         jp.zeros(n_dofs),
-        jp.ones(n_dofs),
-        jp.ones(self._mjx_model.nu),
     ])
