@@ -34,7 +34,7 @@ _REF_MJ_MODEL = mujoco.MjModel.from_xml_string(
 )
 
 WALK_SPEED = 0.5
-RUN_SPEED = 5.0
+RUN_SPEED = 2.0
 _STAND_HEIGHT = 0.55
 
 _FLOOR_GEOM_ID = 0
@@ -53,7 +53,7 @@ def default_config() -> config_dict.ConfigDict:
       impl="jax",
       nconmax=150_000,
       njmax=250,
-      history_len=3,
+      history_len=1,
   )
 
 
@@ -326,12 +326,12 @@ class Quadruped(mjx_env.MjxEnv):
   def dr_range(self) -> tuple[jp.ndarray, jp.ndarray]:
     low = jp.concatenate([
         jp.array([0.5]),
-        self.mjx_model.body_mass[1:] * 0.5,
+        self.mjx_model.body_mass[1:] * 0.8,
         jp.full((_BODY_PARAM_DIM,), -5e-2),
     ])
     high = jp.concatenate([
-        jp.array([3.]),
-        self.mjx_model.body_mass[1:] * 1.5,
+        jp.array([10.]),
+        self.mjx_model.body_mass[1:] * 2.,
         jp.full((_BODY_PARAM_DIM,), 5e-2),
     ])
     return low, high

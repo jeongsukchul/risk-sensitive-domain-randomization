@@ -13,8 +13,8 @@
       <geom
         name="nut_left"
         type="box"
-        pos="-0.0555 0 0"
-        size="0.0165 0.072 0.024"
+        pos="-0.0605 0 0"
+        size="0.0115 0.072 0.024"
         density="50"
         friction="4 0.03 0.003"
         condim="4"
@@ -24,8 +24,8 @@
       <geom
         name="nut_right"
         type="box"
-        pos="0.0555 0 0"
-        size="0.0165 0.072 0.024"
+        pos="0.0605 0 0"
+        size="0.0115 0.072 0.024"
         density="50"
         friction="4 0.03 0.003"
         condim="4"
@@ -35,8 +35,8 @@
       <geom
         name="nut_top"
         type="box"
-        pos="0 0.0555 0"
-        size="0.0555 0.0165 0.024"
+        pos="0 0.0605 0"
+        size="0.0605 0.0115 0.024"
         density="50"
         friction="4 0.03 0.003"
         condim="4"
@@ -46,8 +46,8 @@
       <geom
         name="nut_bottom"
         type="box"
-        pos="0 -0.0555 0"
-        size="0.0555 0.0165 0.024"
+        pos="0 -0.0605 0"
+        size="0.0605 0.0115 0.024"
         density="50"
         friction="4 0.03 0.003"
         condim="4"

@@ -279,7 +279,6 @@ def train(
     training_metrics_steps: Optional[int] = None,
     # callbacks
     progress_fn: Callable[[int, Metrics], None] = lambda *args: None,
-    policy_params_fn: Callable[..., None] = lambda *args: None,
     run_evals: bool = True,
     dr_train_ratio = 1.0,
     use_wandb= False,
@@ -1572,7 +1571,6 @@ def train(
     logging.info(metrics)
     progress_fn(0, metrics)
   
-  # Run initial policy_params_fn.
   params = _unpmap((
       training_state.normalizer_params,
       training_state.params.policy,
@@ -1612,7 +1610,6 @@ def train(
 
   # --- END INSERT ---
 
-  policy_params_fn(current_step, make_policy, params)
     
     
   for it in range(num_evals_after_init):
@@ -1643,7 +1640,6 @@ def train(
         training_state.params.value,
     ))
 
-    policy_params_fn(current_step, make_policy, params)
 
     if num_evals > 0:
       metrics = training_metrics

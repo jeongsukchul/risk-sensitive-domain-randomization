@@ -17,11 +17,12 @@ from mujoco_playground._src.mjx_env import State  # pylint: disable=g-importing-
 
 _MODEL_PARAM_SIZE = 29
 _NUT_HALF_HEIGHT = 0.024
-_SUCCESS_XY = 0.005
+_SUCCESS_XY = 0.012
 _SUCCESS_Z = 0.036
 _SUCCESS_ROT = 0.35
 _RELEASE_DISTANCE = 0.15
 _RELEASE_OPEN_SUM = 0.055
+_GRASP_DISTANCE = 0.05
 
 _XML_PATH = (
     mjx_env.ROOT_PATH
@@ -51,10 +52,10 @@ def default_config() -> config_dict.ConfigDict:
       reward_config=config_dict.create(
           scales=config_dict.create(
               gripper_nut=1.5 /4,
-              nut_lift=1.0 /4,
+              nut_lift=0.5 /4,
               nut_align=2.0 /4,
               nut_orientation=1.0 /4,
-              nut_thread=6.0 /4,
+              nut_thread=50.0 /4,
               release=2.0 /4,
               no_floor_collision=0.1/4,
               robot_target_qpos=0.1/4,
@@ -179,7 +180,10 @@ class PandaNutThread(panda.PandaBase):
     xy_err = jp.linalg.norm((nut_pos - peg_pos)[:2])
     thread_z_err = jp.abs(nut_pos[2] - peg_pos[2])
     hover_err = jp.linalg.norm(nut_pos - peg_hover)
-    rot_err = jp.linalg.norm(nut_mat[:, :2] - peg_mat[:, :2])
+    nut_yaw_axis = nut_mat[:2, 0]
+    peg_yaw_axis = peg_mat[:2, 0]
+    yaw_cos = jp.clip(jp.dot(nut_yaw_axis, peg_yaw_axis), -1.0, 1.0)
+    rot_err = jp.arccos(yaw_cos)
 
     gripper_nut = 1.0 - jp.tanh(8.0 * handle_dist)
     nut_lift = 1.0 - jp.tanh(12.0 * jp.abs(nut_pos[2] - peg_hover[2]))
@@ -188,10 +192,13 @@ class PandaNutThread(panda.PandaBase):
     nut_thread = 1.0 - jp.tanh(20.0 * (3.0 * xy_err + thread_z_err + 0.2 * rot_err))
 
     is_nut_grasped = self._is_nut_grasped(data, nut_pos, gripper_pos).astype(float)
+    near_thread_region = (
+        (xy_err < 2.0 * _SUCCESS_XY) & (thread_z_err < 0.06)
+    ).astype(float)
     pre_insert_aligned = (
         (xy_err < 1.5 * _SUCCESS_XY)
         & (nut_pos[2] < peg_hover[2] + 0.015)
-        & (nut_pos[2] > peg_pos[2] - 0.01)
+        # & (nut_pos[2] > peg_pos[2] - 0.01)
         & (rot_err < 2.0 * _SUCCESS_ROT)
     ).astype(float)
     success = (
@@ -218,9 +225,13 @@ class PandaNutThread(panda.PandaBase):
     return {
         "gripper_nut": gripper_nut,
         "nut_lift": nut_lift * is_nut_grasped,
-        "nut_align": nut_align * jp.maximum(is_nut_grasped, nut_lift > 0.25),
-        "nut_orientation": nut_orientation * jp.maximum(is_nut_grasped, nut_lift > 0.25),
-        "nut_thread": nut_thread * (is_nut_grasped * pre_insert_aligned),
+        "nut_align": nut_align * jp.maximum(is_nut_grasped, pre_insert_aligned),
+        "nut_orientation": nut_orientation * jp.maximum(
+            is_nut_grasped, pre_insert_aligned
+        ),
+        "nut_thread": nut_thread * jp.maximum(
+            is_nut_grasped * pre_insert_aligned, near_thread_region
+        ),
         "release": release,
         "no_floor_collision": no_floor_collision,
         "robot_target_qpos": robot_target_qpos,
@@ -278,9 +289,9 @@ class PandaNutThread(panda.PandaBase):
       self, data: mjx.Data, nut_pos: jax.Array, gripper_pos: jax.Array
   ) -> jax.Array:
     finger_open_sum = jp.sum(data.qpos[self._robot_qposadr[-2:]])
-    gripper_far = jp.linalg.norm(nut_pos - gripper_pos) > _RELEASE_DISTANCE
-    gripper_open = finger_open_sum > _RELEASE_OPEN_SUM
-    return ~(gripper_far & gripper_open)
+    gripper_close = jp.linalg.norm(nut_pos - gripper_pos) < _GRASP_DISTANCE
+    gripper_closed = finger_open_sum < (_RELEASE_OPEN_SUM + 0.01)
+    return gripper_close & gripper_closed
 
   @property
   def nominal_params(self) -> jax.Array:

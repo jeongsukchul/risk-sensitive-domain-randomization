@@ -27,17 +27,14 @@ import numpy as np
 
 from custom_envs import mjx_env
 from custom_envs.manipulation.franka_emika_panda import panda
-from custom_envs.manipulation.franka_emika_panda import panda_kinematics
 from mujoco_playground._src.mjx_env import State  # pylint: disable=g-importing-member
 
-_MODEL_PARAM_SIZE = 30
+_MODEL_PARAM_SIZE = 33
 _CUBE_HALF_SIZE = 0.02
 _RELEASE_DISTANCE = 0.04
 _RELEASE_OPEN_SUM = 0.06
 _STATIC_LIN_THRESH = 1e-2
 _STATIC_ANG_THRESH = 0.5
-_RETREAT_Z_OFFSET = 0.12
-_RETREAT_Z_TOL = 0.01
 
 _XML_PATH = (
     mjx_env.ROOT_PATH
@@ -62,23 +59,23 @@ def default_config() -> config_dict.ConfigDict:
   return config_dict.create(
       ctrl_dt=0.02,
       sim_dt=0.005,
-      episode_length=300,
+      episode_length=250,
       action_repeat=1,
       action_scale=0.04,
       reward_config=config_dict.create(
           scales=config_dict.create(
-              gripper_box=2.0,
-              box_goal=4.0,
-              release=1.0,
-              static=1.0,
-              no_floor_collision=0.25,
-              robot_target_qpos=0.1,
-              success=2.0,
+              gripper_box=2.0 /5, 
+              box_goal=4.0 /5 ,
+              release=1.0/ 5,
+              static=1.0/ 5,
+              no_floor_collision=0.25/5,
+              robot_target_qpos=0.1/5,
+              success=2.0/5,
           )
       ),
       impl="jax",
       nconmax=48 * 2048,
-      njmax=192,
+      njmax=256,
   )
 
 
@@ -97,6 +94,10 @@ class PandaStackCube(panda.PandaBase):
     self._support_qposadr = self._mj_model.jnt_qposadr[
         self._mj_model.body("cubeB").jntadr[0]
     ]
+    self._robot_qveladr = np.array([
+        self._mj_model.jnt_dofadr[self._mj_model.joint(j).id]
+        for j in panda._ARM_JOINTS + panda._FINGER_JOINTS
+    ])
     self._box_dofadr = self._mj_model.jnt_dofadr[
         self._mj_model.body("box").jntadr[0]
     ]
@@ -108,7 +109,15 @@ class PandaStackCube(panda.PandaBase):
         self._mj_model.sensor(f"{geom}_floor_found").id
         for geom in ["left_finger_pad", "right_finger_pad", "hand_capsule"]
     ]
-
+    home_data = mujoco.MjData(self._mj_model)
+    home_data.qpos[:] = self._init_q
+    mujoco.mj_forward(self._mj_model, home_data)
+    self._home_gripper_xy = jp.array(
+        home_data.site_xpos[self._gripper_site][:2], dtype=jp.float32
+    )
+    self._robot_base_xy = jp.array(
+        home_data.xpos[self._mj_model.body("link0").id][:2], dtype=jp.float32
+    )
   def reset(self, rng: jax.Array) -> State:
     rng, rng_anchor, rng_radius, rng_angle, rng_yaw_a, rng_yaw_b = (
         jax.random.split(rng, 6)
@@ -124,12 +133,19 @@ class PandaStackCube(panda.PandaBase):
     angle = jax.random.uniform(rng_angle, (), minval=-jp.pi, maxval=jp.pi)
     offset = radius * jp.array([jp.cos(angle), jp.sin(angle)])
 
-    box_xy = self._init_obj_pos[:2] + anchor + 0.5 * offset
-    support_xy = self._support_init_pos[:2] + anchor - 0.5 * offset
-    box_xy = jp.clip(box_xy, jp.array([0.35, -0.20]), jp.array([0.65, 0.20]))
-    support_xy = jp.clip(
-        support_xy, jp.array([0.35, -0.20]), jp.array([0.65, 0.20])
-    )
+    box_xy = self._home_gripper_xy + anchor 
+    theta= 3.14/4 # 90 degree
+    rot_mat = jp.array([[jp.cos(theta), -jp.sin(theta)], [jp.sin(theta), jp.cos(theta)]])
+    rot_cw = rot_mat @ box_xy
+    # rot90_cw = jp.array([box_xy[1], -box_xy[0]])
+    support_xy = self._robot_base_xy + rot_cw + offset
+
+    # box_xy = self._init_obj_pos[:2] + anchor + 0.5 * offset
+    # support_xy = self._support_init_pos[:2] + anchor - 0.5 * offset
+    # box_xy = jp.clip(box_xy, jp.array([0.35, -0.20]), jp.array([0.65, 0.20]))
+    # support_xy = jp.clip(
+    #     support_xy, jp.array([0.35, -0.20]), jp.array([0.65, 0.20])
+    # )
 
     box_pos = jp.array([box_xy[0], box_xy[1], _CUBE_HALF_SIZE])
     support_pos = jp.array([support_xy[0], support_xy[1], _CUBE_HALF_SIZE])
@@ -173,11 +189,7 @@ class PandaStackCube(panda.PandaBase):
         "success": jp.array(0.0, dtype=float),
         **{k: jp.array(0.0, dtype=float) for k in self._config.reward_config.scales},
     }
-    info = {
-        "rng": rng,
-        "return_phase": jp.array(0, dtype=jp.int32),
-        "retreat_z": jp.array(0.0, dtype=jp.float32),
-    }
+    info = {"rng": rng}
     obs = self._get_obs(data, info)
     reward_value, done = jp.zeros(2)
     return State(data, obs, reward_value, done, metrics, info)
@@ -186,18 +198,10 @@ class PandaStackCube(panda.PandaBase):
     delta = action * self._action_scale
     ctrl = state.data.ctrl + delta
     ctrl = jp.clip(ctrl, self._lowers, self._uppers)
-    ctrl = self._apply_return_ctrl(
-        state.data,
-        ctrl,
-        state.info["return_phase"],
-        state.info["retreat_z"],
-    )
 
     data = mjx_env.step(self._mjx_model, state.data, ctrl, self.n_substeps)
     data = self._update_target_marker(data)
 
-    raw_rewards = self._get_reward_terms(data)
-    data = self._release_gripper_if_stacked(data, raw_rewards["is_box_on_support"])
     raw_rewards = self._get_reward_terms(data)
     reward_value = jp.clip(
         sum(
@@ -208,26 +212,10 @@ class PandaStackCube(panda.PandaBase):
         1e4,
     )
     success = raw_rewards["success"]
+    # data = self._reset_arm_if_success(data, success)
+
     box_pos = data.xpos[self._obj_body]
     support_pos = data.xpos[self._support_body]
-    return_phase = jp.where(
-        (state.info["return_phase"] == 0) & (success > 0),
-        jp.array(1, dtype=jp.int32),
-        state.info["return_phase"],
-    )
-    retreat_z = jp.where(
-        (state.info["return_phase"] == 0) & (success > 0),
-        jp.maximum(
-            data.site_xpos[self._gripper_site][2] + _RETREAT_Z_OFFSET,
-            self._goal_pos(support_pos)[2] + _RETREAT_Z_OFFSET,
-        ),
-        state.info["retreat_z"],
-    )
-    return_phase = self._advance_return_phase(data, return_phase, retreat_z)
-    data = data.replace(
-        ctrl=self._apply_return_ctrl(data, data.ctrl, return_phase, retreat_z)
-    )
-
     out_of_bounds = jp.any(jp.abs(box_pos) > 1.0)
     out_of_bounds |= jp.any(jp.abs(support_pos) > 1.0)
     out_of_bounds |= box_pos[2] < 0.0
@@ -237,60 +225,25 @@ class PandaStackCube(panda.PandaBase):
 
     state.metrics.update(**raw_rewards, out_of_bounds=out_of_bounds.astype(float))
     obs = self._get_obs(data, state.info)
-    state.info["return_phase"] = return_phase
-    state.info["retreat_z"] = retreat_z
     return State(data, obs, reward_value, done, state.metrics, state.info)
 
-  def _release_gripper_if_stacked(
-      self, data: mjx.Data, is_box_on_support: jax.Array
+  def _reset_arm_if_success(
+      self, data: mjx.Data, success: jax.Array
   ) -> mjx.Data:
-    # Force the gripper command open once the cube is placed on the support.
-    release_ctrl = data.ctrl.at[-1].set(
-        jp.where(is_box_on_support > 0, self._uppers[-1], data.ctrl[-1])
+    home_qpos = self._init_q[self._robot_qposadr]
+    qpos = data.qpos.at[self._robot_qposadr].set(
+        jp.where(success, home_qpos, data.qpos[self._robot_qposadr])
     )
-    return data.replace(ctrl=release_ctrl)
-
-  def _apply_return_ctrl(
-      self,
-      data: mjx.Data,
-      ctrl: jax.Array,
-      return_phase: jax.Array,
-      retreat_z: jax.Array,
-  ) -> jax.Array:
-    retreat_ctrl = self._get_retreat_ctrl(data, retreat_z)
-    ctrl = jp.where(return_phase == 1, retreat_ctrl, ctrl)
-    ctrl = jp.where(return_phase == 2, self._init_ctrl, ctrl)
-    return ctrl
-
-  def _advance_return_phase(
-      self, data: mjx.Data, return_phase: jax.Array, retreat_z: jax.Array
-  ) -> jax.Array:
-    gripper_z = data.site_xpos[self._gripper_site][2]
-    finger_open_sum = jp.sum(data.qpos[self._robot_qposadr[-2:]])
-    lifted_clear = gripper_z >= (retreat_z - _RETREAT_Z_TOL)
-    gripper_open = finger_open_sum > _RELEASE_OPEN_SUM
-    return jp.where(
-        (return_phase == 1) & lifted_clear & gripper_open,
-        jp.array(2, dtype=jp.int32),
-        return_phase,
+    qvel = data.qvel.at[self._robot_qveladr].set(
+        jp.where(
+            success,
+            jp.zeros_like(data.qvel[self._robot_qveladr]),
+            data.qvel[self._robot_qveladr],
+        )
     )
-
-  def _get_retreat_ctrl(self, data: mjx.Data, retreat_z: jax.Array) -> jax.Array:
-    gripper_pos = data.site_xpos[self._gripper_site]
-    gripper_rot = data.site_xmat[self._gripper_site]
-    target_pos = gripper_pos.at[2].set(jp.clip(retreat_z, 0.1, 0.5))
-    target_tf = jp.eye(4, dtype=gripper_pos.dtype)
-    target_tf = target_tf.at[:3, :3].set(gripper_rot)
-    target_tf = target_tf.at[:3, 3].set(target_pos)
-
-    arm_ctrl = panda_kinematics.compute_franka_ik(
-        target_tf, data.ctrl[6], data.ctrl[:7]
-    )
-    arm_ctrl = jp.where(jp.any(jp.isnan(arm_ctrl)), data.ctrl[:7], arm_ctrl)
-
-    retreat_ctrl = data.ctrl.at[:7].set(arm_ctrl)
-    retreat_ctrl = retreat_ctrl.at[7].set(self._uppers[7])
-    return retreat_ctrl
+    ctrl = jp.where(success, self._init_ctrl, data.ctrl)
+    data = data.replace(qpos=qpos, qvel=qvel, ctrl=ctrl)
+    return mjx.forward(self._mjx_model, data)
 
   def _get_reward_terms(self, data: mjx.Data) -> Dict[str, jax.Array]:
     box_pos = data.xpos[self._obj_body]
@@ -419,17 +372,19 @@ class PandaStackCube(panda.PandaBase):
     low = []
     high = []
     low.append(jp.array([0.3]))
-    high.append(jp.array([3.0]))
+    high.append(jp.array([10.0]))
     low.append(jp.array([0.1]))
-    high.append(jp.array([8.0]))
+    high.append(jp.array([10.0]))
     low.append(jp.array([0.1]))
-    high.append(jp.array([8.0]))
-    low.append(jp.full((11,), 0.8))
-    high.append(jp.full((11,), 1.2))
+    high.append(jp.array([10.0]))
+    low.append(jp.full((11,), 0.7))
+    high.append(jp.full((11,), 1.3))
     low.append(jp.full((9,), 0.8))
     high.append(jp.full((9,), 1.2))
-    low.append(jp.full((7,), 0.9))
-    high.append(jp.full((7,), 1.1))
+    low.append(jp.full((7,), 0.8))
+    high.append(jp.full((7,), 1.2))
+    low.append(jp.full((3,), -0.003))
+    high.append(jp.full((3,), 0.003))
     return jp.concatenate(low), jp.concatenate(high)
 
 
@@ -463,10 +418,16 @@ def _apply_domain_randomization(model: mjx.Model, params: jax.Array):
   actuator_biasprm = model.actuator_biasprm.at[_ARM_QIDS, 1].set(-kp_val)
   idx += 7
 
+  body_ipos = model.body_ipos.at[_BOX_BODY].set(
+      model.body_ipos[_BOX_BODY] + params[idx : idx + 3]
+  )
+  idx += 3
+
   assert idx == _MODEL_PARAM_SIZE
   return (
       geom_friction,
       body_mass,
+      body_ipos,
       dof_armature,
       dof_damping,
       actuator_gainprm,
@@ -478,6 +439,7 @@ def _finalize_randomization(
     model: mjx.Model,
     geom_friction,
     body_mass,
+    body_ipos,
     dof_armature,
     dof_damping,
     actuator_gainprm,
@@ -486,6 +448,7 @@ def _finalize_randomization(
   model = model.tree_replace({
       "geom_friction": geom_friction,
       "body_mass": body_mass,
+      "body_ipos": body_ipos,
       "dof_armature": dof_armature,
       "dof_damping": dof_damping,
       "actuator_gainprm": actuator_gainprm,
@@ -495,6 +458,7 @@ def _finalize_randomization(
   in_axes = in_axes.tree_replace({
       "geom_friction": 0,
       "body_mass": 0,
+      "body_ipos": 0,
       "dof_armature": 0,
       "dof_damping": 0,
       "actuator_gainprm": 0,

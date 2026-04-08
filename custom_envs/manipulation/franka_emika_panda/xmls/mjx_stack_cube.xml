@@ -8,12 +8,13 @@
         type="box"
         name="box"
         size="0.02 0.02 0.02"
-        condim="3"
-        friction="1 .03 .003"
+        condim="4"
+        friction="2 .03 .003"
         rgba="0.85 0.15 0.15 1"
         contype="2"
         conaffinity="1"
-        solref="0.01 1"/>
+        solref="0.005 2"
+        solimp="0.99 0.995 0.0005"/>
     </body>
     <body name="cubeB" pos="0.55 0.04 0.02">
       <freejoint/>
@@ -21,12 +22,13 @@
         type="box"
         name="cubeB"
         size="0.02 0.02 0.02"
-        condim="3"
-        friction="1 .03 .003"
+        condim="4"
+        friction="2 .03 .003"
         rgba="0.15 0.75 0.15 1"
         contype="2"
         conaffinity="1"
-        solref="0.01 1"/>
+        solref="0.005 2"
+        solimp="0.99 0.995 0.0005"/>
     </body>
     <body mocap="true" name="mocap_target">
       <geom
