@@ -135,22 +135,22 @@ class Go1Env(mjx_env.MjxEnv):
     n_dofs = self._mjx_model.nv - 6
     return (
         jp.concatenate([
-            jp.array([0.4]),
+            jp.array([0.3]),
             jp.full((n_dofs,), 0.9),
             jp.full((n_dofs,), 1.0),
             jp.full((3,), -0.05),
             jp.full((self._mjx_model.nbody,), 0.9),
             jp.array([-1.0]),
-            jp.full((n_dofs,), -0.05),
+            jp.full((n_dofs,), -0.0005),
         ]),
         jp.concatenate([
-            jp.array([1.0]),
+            jp.array([6.0]),
             jp.full((n_dofs,), 1.1),
             jp.full((n_dofs,), 1.05),
             jp.full((3,), 0.05),
             jp.full((self._mjx_model.nbody,), 1.1),
             jp.array([1.0]),
-            jp.full((n_dofs,), 0.05),
+            jp.full((n_dofs,), 0.0005),
         ]),
     )
 

@@ -59,7 +59,7 @@ def locomotion_ppo_config(env_name: str) -> config_dict.ConfigDict:
     )
 
   elif env_name in ("Go1Handstand", "Go1Footstand"):
-    rl_config.num_timesteps = 100_000_000
+    rl_config.num_timesteps = 200_000_000
     rl_config.num_evals = 5
     rl_config.network_factory = config_dict.create(
         policy_hidden_layer_sizes=(512, 256, 128),

@@ -101,6 +101,8 @@ CAMERAS = {
     "PandaStackCube" : None,
     "PandaNutThread" : None,
     "PandaOpenCabinet" : None,
+    "Go1Footstand" : None,
+    "Go1Handstand" : None,
 }
 
 def _save_policy_checkpoint(current_step, make_policy, params, ckpt_path: epath.Path):
