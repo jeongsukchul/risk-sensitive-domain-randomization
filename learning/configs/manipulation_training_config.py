@@ -118,7 +118,7 @@ def manipulation_ppo_config(env_name: str) -> config_dict.ConfigDict:
     )
   elif env_name == "PandaNutThread":
     rl_config.num_timesteps = 200_000_000
-    rl_config.num_evals = 4
+    rl_config.num_evals = 7
     rl_config.unroll_length = 20
     rl_config.num_minibatches = 32
     rl_config.num_updates_per_batch = 8

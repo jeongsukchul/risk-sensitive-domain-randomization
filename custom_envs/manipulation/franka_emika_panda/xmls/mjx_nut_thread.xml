@@ -15,10 +15,10 @@
         type="box"
         pos="-0.0555 0 0"
         size="0.0165 0.072 0.024"
-        density="50"
+        density="10"
         friction="4 0.03 0.003"
         condim="4"
-        solref="0.005 1"
+        solref="0.001 1"
         rgba="0.79 0.59 0.22 1"
         material="nut_brass"/>
       <geom
@@ -26,10 +26,10 @@
         type="box"
         pos="0.0555 0 0"
         size="0.0165 0.072 0.024"
-        density="50"
+        density="10"
         friction="4 0.03 0.003"
         condim="4"
-        solref="0.005 1"
+        solref="0.001 1"
         rgba="0.79 0.59 0.22 1"
         material="nut_brass"/>
       <geom
@@ -37,10 +37,10 @@
         type="box"
         pos="0 0.0555 0"
         size="0.0555 0.0165 0.024"
-        density="50"
+        density="10"
         friction="4 0.03 0.003"
         condim="4"
-        solref="0.005 1"
+        solref="0.001 1"
         rgba="0.79 0.59 0.22 1"
         material="nut_brass"/>
       <geom
@@ -48,10 +48,10 @@
         type="box"
         pos="0 -0.0555 0"
         size="0.0555 0.0165 0.024"
-        density="50"
+        density="10"
         friction="4 0.03 0.003"
         condim="4"
-        solref="0.005 1"
+        solref="0.001 1"
         rgba="0.79 0.59 0.22 1"
         material="nut_brass"/>
       <geom
@@ -59,10 +59,10 @@
         type="box"
         pos="0.099 0 0"
         size="0.033 0.024 0.024"
-        density="50"
+        density="10"
         friction="4 0.03 0.003"
         condim="4"
-        solref="0.005 1"
+        solref="0.001 1"
         rgba="0.79 0.59 0.22 1"
         material="nut_brass"/>
       <site name="nut_center" pos="0 0 0" size="0.012" rgba="1 0 0 1"/>
@@ -85,10 +85,10 @@
         name="peg"
         type="box"
         pos="0 0 0.114"
-        size="0.02 0.02 0.114"
+        size="0.032 0.032 0.114"
         friction="1 0.03 0.003"
         condim="4"
-        solref="0.005 1"
+        solref="0.001 1"
         contype="1"
         conaffinity="1"
         rgba="0.35 0.38 0.43 1"
@@ -136,6 +136,48 @@
       name="nut_handle_hand_found"
       geom1="nut_handle"
       geom2="hand_capsule"
+      reduce="mindist"
+      num="1"
+      data="found"/>
+    <contact
+      name="left_finger_pad_peg_found"
+      geom1="left_finger_pad"
+      geom2="peg"
+      reduce="mindist"
+      num="1"
+      data="found"/>
+    <contact
+      name="right_finger_pad_peg_found"
+      geom1="right_finger_pad"
+      geom2="peg"
+      reduce="mindist"
+      num="1"
+      data="found"/>
+    <contact
+      name="hand_capsule_peg_found"
+      geom1="hand_capsule"
+      geom2="peg"
+      reduce="mindist"
+      num="1"
+      data="found"/>
+    <contact
+      name="left_finger_pad_peg_base_found"
+      geom1="left_finger_pad"
+      geom2="peg_base"
+      reduce="mindist"
+      num="1"
+      data="found"/>
+    <contact
+      name="right_finger_pad_peg_base_found"
+      geom1="right_finger_pad"
+      geom2="peg_base"
+      reduce="mindist"
+      num="1"
+      data="found"/>
+    <contact
+      name="hand_capsule_peg_base_found"
+      geom1="hand_capsule"
+      geom2="peg_base"
       reduce="mindist"
       num="1"
       data="found"/>

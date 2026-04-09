@@ -37,16 +37,16 @@
             </default>
         </default>
         <default class="yaw_act">
-            <position kp="35" inheritrange="1" forcerange="-23.7 23.7"/>
+            <position kp="25" inheritrange="1" forcerange="-23.7 23.7"/>
         </default>
         <default class="pitch_act">
-            <position kp="35" inheritrange="1" forcerange="-35.55 35.55"/>
+            <position kp="25" inheritrange="1" forcerange="-35.55 35.55"/>
         </default>
         <default class="knee_act">
-            <position kp="35" inheritrange="1" forcerange="-35.55 35.55"/>
+            <position kp="25" inheritrange="1" forcerange="-35.55 35.55"/>
         </default>
         <default class="ankle_act">
-            <position kp="35" inheritrange="1" forcerange="-23.7 23.7"/>
+            <position kp="25" inheritrange="1" forcerange="-23.7 23.7"/>
         </default>
     </default>
     <worldbody>

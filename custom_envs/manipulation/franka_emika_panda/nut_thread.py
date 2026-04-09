@@ -17,11 +17,11 @@ from mujoco_playground._src.mjx_env import State  # pylint: disable=g-importing-
 
 _MODEL_PARAM_SIZE = 29
 _NUT_HALF_HEIGHT = 0.024
-_SUCCESS_XY = 0.005
+_SUCCESS_XY = 0.01
 _SUCCESS_Z = 0.036
-_SUCCESS_ROT = 0.35
 _RELEASE_DISTANCE = 0.15
 _RELEASE_OPEN_SUM = 0.055
+_ORIENTATION_EPS = 1e-6
 
 _XML_PATH = (
     mjx_env.ROOT_PATH
@@ -50,15 +50,15 @@ def default_config() -> config_dict.ConfigDict:
       action_scale=0.04,
       reward_config=config_dict.create(
           scales=config_dict.create(
-              gripper_nut=1.5 /4,
-              nut_lift=1.0 /4,
-              nut_align=2.0 /4,
-              nut_orientation=1.0 /4,
-              nut_thread=6.0 /4,
-              release=2.0 /4,
-              no_floor_collision=0.1/4,
-              robot_target_qpos=0.1/4,
-              success=8.0/4,
+              gripper_nut=1.5 /5,
+              nut_lift=1.0/5,
+              nut_align=2.0/5,
+              nut_thread=8.0/5,
+              release=2.0/5,
+              no_floor_collision=0.1/5,
+              peg_collision_cost=-2./5,
+              robot_target_qpos=0.1/5,
+              success=8.0/5,
           )
       ),
       impl="jax",
@@ -84,14 +84,16 @@ class PandaNutThread(panda.PandaBase):
     self._peg_top_site = self._mj_model.site("peg_top_site").id
     self._peg_hover_site = self._mj_model.site("peg_hover_site").id
     self._peg_body = self._mj_model.body("peg").id
-    # self._peg_qposadr = self._mj_model.jnt_qposadr[
-    #     self._mj_model.joint("peg_x").id
-    # ]
     self._nut_dofadr = self._mj_model.jnt_dofadr[
         self._mj_model.body("nut").jntadr[0]
     ]
     self._floor_hand_found_sensor = [
         self._mj_model.sensor(f"{geom}_floor_found").id
+        for geom in ["left_finger_pad", "right_finger_pad", "hand_capsule"]
+    ]
+    self._peg_collision_sensor = [
+        self._mj_model.sensor(f"{geom}_{target}_found").id
+        for target in ["peg", "peg_base"]
         for geom in ["left_finger_pad", "right_finger_pad", "hand_capsule"]
     ]
     self._peg_base_xy = jp.array(self._mj_model.body("peg").pos[:2], dtype=jp.float32)
@@ -114,7 +116,6 @@ class PandaNutThread(panda.PandaBase):
     init_q = jp.array(self._init_q)
     init_q = init_q.at[self._obj_qposadr : self._obj_qposadr + 3].set(nut_pos)
     init_q = init_q.at[self._obj_qposadr + 3 : self._obj_qposadr + 7].set(nut_quat)
-    # init_q = init_q.at[self._peg_qposadr : self._peg_qposadr + 2].set(peg_offset)
 
     data = mjx_env.make_data(
         self._mj_model,
@@ -179,25 +180,26 @@ class PandaNutThread(panda.PandaBase):
     xy_err = jp.linalg.norm((nut_pos - peg_pos)[:2])
     thread_z_err = jp.abs(nut_pos[2] - peg_pos[2])
     hover_err = jp.linalg.norm(nut_pos - peg_hover)
-    rot_err = jp.linalg.norm(nut_mat[:, :2] - peg_mat[:, :2])
+    orient_err = self._orientation_error(nut_mat, peg_mat)
+    orient_reward = 1.0 - jp.tanh(.1 * orient_err)
 
     gripper_nut = 1.0 - jp.tanh(8.0 * handle_dist)
-    nut_lift = 1.0 - jp.tanh(12.0 * jp.abs(nut_pos[2] - peg_hover[2]))
-    nut_align = 1.0 - jp.tanh(10.0 * (1.5 * xy_err + 0.25 * hover_err + 0.2 * rot_err))
-    nut_orientation = 1.0 - jp.tanh(3.0 * rot_err)
-    nut_thread = 1.0 - jp.tanh(20.0 * (3.0 * xy_err + thread_z_err + 0.2 * rot_err))
+    lift_height_reward = 1.0 - jp.tanh(12.0 * jp.abs(nut_pos[2] - peg_hover[2]))
+    nut_lift = lift_height_reward * orient_reward
+    nut_align = (
+        1.0 - jp.tanh(10.0 * (1.5 * xy_err + 0.25 * hover_err + 0.05 * orient_err))
+    ) * orient_reward
+    nut_thread = 1.0 - jp.tanh(20.0 * (3.0 * xy_err + thread_z_err))
 
     is_nut_grasped = self._is_nut_grasped(data, nut_pos, gripper_pos).astype(float)
     pre_insert_aligned = (
         (xy_err < 1.5 * _SUCCESS_XY)
         & (nut_pos[2] < peg_hover[2] + 0.015)
         & (nut_pos[2] > peg_pos[2] - 0.01)
-        & (rot_err < 2.0 * _SUCCESS_ROT)
     ).astype(float)
     success = (
         (xy_err < _SUCCESS_XY)
         & (thread_z_err < _SUCCESS_Z)
-        & (rot_err < _SUCCESS_ROT)
         & (~self._is_nut_grasped(data, nut_pos, gripper_pos))
     ).astype(float)
     gripper_clear = jp.tanh(10.0 * jp.linalg.norm(gripper_pos - nut_pos))
@@ -207,7 +209,12 @@ class PandaNutThread(panda.PandaBase):
         data.sensordata[self._mj_model.sensor_adr[sensor_id]] > 0
         for sensor_id in self._floor_hand_found_sensor
     ]
+    peg_collision = [
+        data.sensordata[self._mj_model.sensor_adr[sensor_id]] > 0
+        for sensor_id in self._peg_collision_sensor
+    ]
     no_floor_collision = (1 - (sum(hand_floor_collision) > 0)).astype(float)
+    peg_collision_cost = (sum(peg_collision) > 0).astype(float)
     robot_target_qpos = 1 - jp.tanh(
         jp.linalg.norm(
             data.qpos[self._robot_arm_qposadr]
@@ -219,14 +226,23 @@ class PandaNutThread(panda.PandaBase):
         "gripper_nut": gripper_nut,
         "nut_lift": nut_lift * is_nut_grasped,
         "nut_align": nut_align * jp.maximum(is_nut_grasped, nut_lift > 0.25),
-        "nut_orientation": nut_orientation * jp.maximum(is_nut_grasped, nut_lift > 0.25),
         "nut_thread": nut_thread * (is_nut_grasped * pre_insert_aligned),
         "release": release,
         "no_floor_collision": no_floor_collision,
+        "peg_collision_cost": peg_collision_cost,
         "robot_target_qpos": robot_target_qpos,
         "success": success,
         "is_nut_grasped": is_nut_grasped,
     }
+
+  def _orientation_error(
+      self, nut_mat: jax.Array, peg_mat: jax.Array
+  ) -> jax.Array:
+    """Returns the geodesic rotation error between nut and peg frames."""
+    rel_mat = nut_mat @ peg_mat.T
+    trace = jp.trace(rel_mat)
+    cos_theta = jp.clip((trace - 1.0) * 0.5, -1.0 + _ORIENTATION_EPS, 1.0 - _ORIENTATION_EPS)
+    return jp.arccos(cos_theta)
 
   def _get_obs(self, data: mjx.Data, info: dict[str, Any]) -> dict[str, jax.Array]:
     del info
@@ -291,9 +307,9 @@ class PandaNutThread(panda.PandaBase):
     low = []
     high = []
     low.append(jp.array([0.3]))
-    high.append(jp.array([3.0]))
+    high.append(jp.array([8.0]))
     low.append(jp.array([0.25]))
-    high.append(jp.array([4.0]))
+    high.append(jp.array([10.0]))
     low.append(jp.full((11,), 0.8))
     high.append(jp.full((11,), 1.2))
     low.append(jp.full((9,), 0.8))

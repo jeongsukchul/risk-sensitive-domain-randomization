@@ -985,7 +985,7 @@ def train(
           body,
           (fwd_state, bwd_state),
           (),
-          length=1,
+          length=n_sampler_iters,
       )
       return ((fwd_state_new, bwd_state_new), 1.)
     def update_adr(autodr_state, returns):

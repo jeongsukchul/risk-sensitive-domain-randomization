@@ -38,6 +38,12 @@ _STATIC_LIN_THRESH = 1e-2
 _STATIC_ANG_THRESH = 0.5
 _RETREAT_Z_OFFSET = 0.12
 _RETREAT_Z_TOL = 0.01
+_RESET_RADIUS_RANGE = (0.43, 0.51)
+_RESET_STACK_ANGLE = -2.0 * jp.pi / 4.0
+_RESET_SUPPORT_ANGLE_RANGE = (
+    11.0 * jp.pi / 36.0,
+    13.0 * jp.pi / 36.0,
+)
 
 _XML_PATH = (
     mjx_env.ROOT_PATH
@@ -67,13 +73,13 @@ def default_config() -> config_dict.ConfigDict:
       action_scale=0.04,
       reward_config=config_dict.create(
           scales=config_dict.create(
-              gripper_box=2.0,
-              box_goal=4.0,
-              release=1.0,
-              static=1.0,
-              no_floor_collision=0.25,
-              robot_target_qpos=0.1,
-              success=2.0,
+              gripper_box=2.0/5,
+              box_goal=4.0/5,
+              release=1.0/5,
+              static=1.0/5,
+              no_floor_collision=0.5/5,
+              robot_target_qpos=0.1/5,
+              success=2.0/5,
           )
       ),
       impl="jax",
@@ -94,6 +100,7 @@ class PandaStackCube(panda.PandaBase):
     self._post_init(obj_name="box", keyframe="home")
 
     self._support_body = self._mj_model.body("cubeB").id
+    self._robot_base_body = self._mj_model.body("link0").id
     self._support_qposadr = self._mj_model.jnt_qposadr[
         self._mj_model.body("cubeB").jntadr[0]
     ]
@@ -104,35 +111,42 @@ class PandaStackCube(panda.PandaBase):
         self._init_q[self._support_qposadr : self._support_qposadr + 3],
         dtype=jp.float32,
     )
+    base_quat = jp.array(
+        self._mj_model.body_quat[self._robot_base_body], dtype=jp.float32
+    )
+    self._robot_base_yaw = jp.arctan2(
+        2.0 * (base_quat[0] * base_quat[3] + base_quat[1] * base_quat[2]),
+        1.0 - 2.0 * (base_quat[2] ** 2 + base_quat[3] ** 2),
+    )
     self._floor_hand_found_sensor = [
         self._mj_model.sensor(f"{geom}_floor_found").id
         for geom in ["left_finger_pad", "right_finger_pad", "hand_capsule"]
     ]
 
   def reset(self, rng: jax.Array) -> State:
-    rng, rng_anchor, rng_radius, rng_angle, rng_yaw_a, rng_yaw_b = (
-        jax.random.split(rng, 6)
+    rng, rng_radius, rng_support_angle, rng_yaw_a, rng_yaw_b = jax.random.split(
+        rng, 5
     )
 
-    anchor = jax.random.uniform(
-        rng_anchor,
-        (2,),
-        minval=jp.array([-0.02, -0.04]),
-        maxval=jp.array([0.02, 0.04]),
+    radius = jax.random.uniform(
+        rng_radius,
+        (),
+        minval=_RESET_RADIUS_RANGE[0],
+        maxval=_RESET_RADIUS_RANGE[1],
     )
-    radius = jax.random.uniform(rng_radius, (), minval=0.07, maxval=0.11)
-    angle = jax.random.uniform(rng_angle, (), minval=-jp.pi, maxval=jp.pi)
-    offset = radius * jp.array([jp.cos(angle), jp.sin(angle)])
-
-    box_xy = self._init_obj_pos[:2] + anchor + 0.5 * offset
-    support_xy = self._support_init_pos[:2] + anchor - 0.5 * offset
-    box_xy = jp.clip(box_xy, jp.array([0.35, -0.20]), jp.array([0.65, 0.20]))
-    support_xy = jp.clip(
-        support_xy, jp.array([0.35, -0.20]), jp.array([0.65, 0.20])
+    support_angle = self._robot_base_yaw + jax.random.uniform(
+        rng_support_angle,
+        (),
+        minval=_RESET_SUPPORT_ANGLE_RANGE[0],
+        maxval=_RESET_SUPPORT_ANGLE_RANGE[1],
     )
+    box_angle = support_angle + _RESET_STACK_ANGLE
 
-    box_pos = jp.array([box_xy[0], box_xy[1], _CUBE_HALF_SIZE])
-    support_pos = jp.array([support_xy[0], support_xy[1], _CUBE_HALF_SIZE])
+    goal_xy = radius * jp.array([jp.cos(support_angle), jp.sin(support_angle)])
+    base_xy = radius * jp.array([jp.cos(box_angle), jp.sin(box_angle)])
+
+    box_pos = jp.array([goal_xy[0], goal_xy[1], _CUBE_HALF_SIZE])
+    support_pos = jp.array([base_xy[0], base_xy[1], _CUBE_HALF_SIZE])
     box_quat = math.axis_angle_to_quat(
         jp.array([0.0, 0.0, 1.0]),
         jax.random.uniform(rng_yaw_a, (), minval=-jp.pi, maxval=jp.pi),
@@ -419,13 +433,13 @@ class PandaStackCube(panda.PandaBase):
     low = []
     high = []
     low.append(jp.array([0.3]))
-    high.append(jp.array([3.0]))
+    high.append(jp.array([10.0]))
     low.append(jp.array([0.1]))
-    high.append(jp.array([8.0]))
+    high.append(jp.array([10.0]))
     low.append(jp.array([0.1]))
-    high.append(jp.array([8.0]))
-    low.append(jp.full((11,), 0.8))
-    high.append(jp.full((11,), 1.2))
+    high.append(jp.array([10.0]))
+    low.append(jp.full((11,), 0.7))
+    high.append(jp.full((11,), 1.3))
     low.append(jp.full((9,), 0.8))
     high.append(jp.full((9,), 1.2))
     low.append(jp.full((7,), 0.9))

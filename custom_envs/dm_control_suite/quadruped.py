@@ -34,7 +34,7 @@ _REF_MJ_MODEL = mujoco.MjModel.from_xml_string(
 )
 
 WALK_SPEED = 0.5
-RUN_SPEED = 5.0
+RUN_SPEED = 2.0
 _STAND_HEIGHT = 0.55
 
 _FLOOR_GEOM_ID = 0
@@ -49,6 +49,7 @@ def default_config() -> config_dict.ConfigDict:
       episode_length=1000,
       action_repeat=1,
       action_scale=0.5,
+      action_rate_weight=1.0,
       vision=False,
       impl="jax",
       nconmax=150_000,
@@ -162,12 +163,14 @@ class Quadruped(mjx_env.MjxEnv):
         "reward/upright": jp.zeros(()),
         "reward/stand": jp.zeros(()),
         "reward/small_control": jp.zeros(()),
+        "reward/action_rate": jp.zeros(()),
         "reward/move": jp.zeros(()),
     }
     info = {
         "rng": rng,
         "qpos_history": jp.tile(qpos[7:], self._config.history_len),
         "qvel_history": jp.tile(qvel[6:], self._config.history_len),
+        "prev_action": self._default_pose,
     }
 
     reward_value, done = jp.zeros(2)
@@ -181,6 +184,7 @@ class Quadruped(mjx_env.MjxEnv):
     action = jp.clip(action, lower, upper)
     data = mjx_env.step(self.mjx_model, state.data, action, self.n_substeps)
     reward_value = self._get_reward(data, action, state.info, state.metrics)
+    state.info["prev_action"] = action
     obs = self._get_obs(data, state.info)
     done = jp.isnan(data.qpos).any() | jp.isnan(data.qvel).any()
     done = done.astype(float)
@@ -231,7 +235,6 @@ class Quadruped(mjx_env.MjxEnv):
       info: dict[str, Any],
       metrics: dict[str, Any],
   ) -> jax.Array:
-    del info
     torso_height = data.xpos[self._torso_body_id, -1]
     standing = reward.tolerance(
         torso_height,
@@ -258,6 +261,15 @@ class Quadruped(mjx_env.MjxEnv):
     small_control = (4.0 + small_control) / 5.0
     metrics["reward/small_control"] = small_control
 
+    action_rate = reward.tolerance(
+        action - info["prev_action"],
+        margin=1.0,
+        value_at_margin=0.0,
+        sigmoid="quadratic",
+    ).mean()
+    action_rate = (4.0 + action_rate) / 5.0
+    metrics["reward/action_rate"] = action_rate
+
     move_reward = reward.tolerance(
         self._torso_velocity(data)[0],
         bounds=(self._desired_speed, float("inf")),
@@ -266,7 +278,12 @@ class Quadruped(mjx_env.MjxEnv):
         value_at_margin=0.0,
     )
     metrics["reward/move"] = move_reward
-    return stand_reward * move_reward * small_control
+    return (
+        stand_reward
+        * move_reward
+        * small_control
+        * (1.0 + self._config.action_rate_weight * (action_rate - 1.0))
+    )
 
   def _egocentric_state(self, data: mjx.Data) -> jax.Array:
     return jp.concatenate([data.qpos[7:], data.qvel[6:], data.act])
@@ -330,7 +347,7 @@ class Quadruped(mjx_env.MjxEnv):
         jp.full((_BODY_PARAM_DIM,), -5e-2),
     ])
     high = jp.concatenate([
-        jp.array([3.]),
+        jp.array([5.]),
         self.mjx_model.body_mass[1:] * 1.5,
         jp.full((_BODY_PARAM_DIM,), 5e-2),
     ])
