@@ -292,7 +292,6 @@ def train(
     sampler_visualization: bool = False,
     dr_config_task: Optional[str] = None,
     sampler_update_freq=10,
-    sampler_batch_size: Optional[int] = 512,
     gamma = 0.5,
     beta = 1.0,
     sampler_choice : str = "NODR", #(NODR, UDR, AutoDR, DORAEMON, FLOW_NS, FLOW_REALNVP, GMM, GBS)
@@ -400,6 +399,8 @@ def train(
           * max(num_resets_per_eval, 1)
       )
   ).astype(int)
+  num_training_steps = num_training_steps_per_epoch * num_evals_after_init
+
   print("num training steps per epoch", num_training_steps_per_epoch)
   print("num training steps", num_training_steps_per_epoch * num_evals_after_init)
   key = jax.random.PRNGKey(seed)
@@ -418,36 +419,8 @@ def train(
   gbs_batch_size = local_num_envs
   gbs_num_updates = 1
   if sampler_choice == "GBS":
-    if sampler_batch_size is None:
-      sampler_batch_size = num_envs
-    if not float(sampler_batch_size).is_integer():
-      raise ValueError(
-          f"sampler_batch_size must be an integer, got {sampler_batch_size}"
-      )
-    sampler_batch_size = int(sampler_batch_size)
-    if sampler_batch_size < 1:
-      raise ValueError(
-          f"sampler_batch_size must be >= 1, got {sampler_batch_size}"
-      )
-    if num_envs % sampler_batch_size != 0:
-      raise ValueError(
-          "For GBS, num_envs must be divisible by sampler_batch_size: "
-          f"{num_envs} % {sampler_batch_size} != 0"
-      )
-    if sampler_batch_size % device_count != 0:
-      raise ValueError(
-          "For GBS, sampler_batch_size must be divisible by the device count "
-          f"for pmap sharding: {sampler_batch_size} % {device_count} != 0"
-      )
-    gbs_batch_size = sampler_batch_size // device_count
-    if local_num_envs % gbs_batch_size != 0:
-      raise ValueError(
-          "For GBS, per-device num_envs must be divisible by the per-device "
-          f"sampler batch size: {local_num_envs} % {gbs_batch_size} != 0"
-      )
-    gbs_num_updates = local_num_envs // gbs_batch_size
-  else:
-    sampler_batch_size = local_num_envs
+    gbs_batch_size = local_num_envs
+    gbs_num_updates = 1
   import copy
   env = copy.deepcopy(environment)
   nominal_dynamics_params_full = jnp.asarray(env.nominal_params)
@@ -794,11 +767,6 @@ def train(
     )
     return state, data, reset_happened
 
-  def _split_into_gbs_batches(x: jnp.ndarray) -> jnp.ndarray:
-    return jnp.reshape(
-        x, (gbs_num_updates, gbs_batch_size) + x.shape[1:]
-    )
-
   def training_step(
       carry: Tuple[TrainingState, envs.State, PRNGKey], unused_t
   ) -> Tuple[Tuple[TrainingState, envs.State, PRNGKey], Metrics]:
@@ -1029,7 +997,6 @@ def train(
       return (flow_state_new, flow_opt_state_new, 1.)
     def update_gbs(gbs_state, sample_keys):
       target_lnpdf = _beta * cumulated_values/sampler_update_freq
-      target_batches = _split_into_gbs_batches(target_lnpdf)
       fwd_state, bwd_state = gbs_state
       def _one_update(carry, xs):
         fwd_state_carry, bwd_state_carry = carry
@@ -1044,8 +1011,8 @@ def train(
       (fwd_state_new, bwd_state_new), _ = jax.lax.scan(
           _one_update,
           (fwd_state, bwd_state),
-          (sample_keys, target_batches),
-          length=gbs_num_updates,
+          (),
+          length=n_sampler_iters,
       )
       return ((fwd_state_new, bwd_state_new), 1.)
     def update_adr(autodr_state, returns):

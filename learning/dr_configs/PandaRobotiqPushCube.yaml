@@ -7,11 +7,11 @@ parameters:
   - {name: object_ipos_x, group: dynamics, low: -0.01, high: 0.01, learnable: true}
   - {name: object_ipos_y, group: dynamics, low: -0.01, high: 0.01, learnable: true}
   - {name: object_ipos_z, group: dynamics, low: -0.01, high: 0.01, learnable: true}
-  - {name: box_pos_x, group: reset, low: 0.4, high: 0.65, learnable: true}
-  - {name: box_pos_y, group: reset, low: -0.2, high: 0.2, learnable: true}
+  - {name: box_pos_x, group: reset, low: 0.55284, high: 0.58284, learnable: true}
+  - {name: box_pos_y, group: reset, low: -0.0653974, high: 0.0146026, learnable: true}
   - {name: box_yaw, group: reset, low: 0.0, high: 6.283184307179586, learnable: true}
-  - {name: target_pos_x, group: reset, low: 0.54784, high: 0.58783996, learnable: true}
-  - {name: target_pos_y, group: reset, low: -0.0753974, high: 0.0246026, learnable: true}
+  - {name: target_pos_x, group: reset, low: 0.55284, high: 0.58284, learnable: true}
+  - {name: target_pos_y, group: reset, low: -0.0653974, high: 0.0146026, learnable: true}
   - {name: target_pos_z, group: reset, low: 0.0256525, high: 0.0356525, learnable: true}
   - {name: target_delta_yaw, group: reset, low: 0.0, high: 0.7853981633974483, learnable: true}
   - {name: arm_offset_0, group: reset, low: -0.173838, high: 0.173838, learnable: true}

@@ -183,6 +183,7 @@ class PandaStackCube(panda.PandaBase):
         naccdmax=self._config.naccdmax,
         njmax=self._config.njmax,
     )
+    data = mjx.forward(self._mjx_model, data)
     data = self._update_target_marker(data)
 
     metrics = {

@@ -94,6 +94,9 @@ class AdVmapWrapper(Wrapper):
     self.full_dr_range_high = (
         dr_range_high if full_dr_range_high is None else full_dr_range_high
     )
+    self.nominal_params_full = None
+    if hasattr(self.env.unwrapped, "nominal_params"):
+      self.nominal_params_full = jnp.asarray(self.env.unwrapped.nominal_params)
     self.learnable_mask = None
     if learnable_mask is not None:
       self.learnable_mask = jnp.asarray(learnable_mask, dtype=bool)
@@ -114,17 +117,24 @@ class AdVmapWrapper(Wrapper):
           maxval=self.dr_range_high,
       )
 
-    full_params = jax.random.uniform(
-        rng,
-        (self.full_dr_range_low.shape[0],),
-        minval=self.full_dr_range_low,
-        maxval=self.full_dr_range_high,
-    )
+    if self.nominal_params_full is None:
+      raise ValueError(
+          "learnable_mask requires env.nominal_params so disabled DR dimensions "
+          "can stay at their nominal values."
+      )
     if params is None:
-      return full_params
+      sampled_learnable_params = jax.random.uniform(
+          rng,
+          (self.param_size,),
+          minval=self.dr_range_low,
+          maxval=self.dr_range_high,
+      )
+      return self.nominal_params_full.at[self.learnable_mask].set(
+          sampled_learnable_params
+      )
     if params.shape[-1] == self.full_dr_range_low.shape[0]:
       return params
-    return full_params.at[self.learnable_mask].set(params)
+    return self.nominal_params_full.at[self.learnable_mask].set(params)
 
   @contextlib.contextmanager
   def v_env_fn(self, mjx_model: mjx.Model):

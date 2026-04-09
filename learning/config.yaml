@@ -13,7 +13,7 @@ exp_name : test
 checkpoint: ???
 impl : warp # jax or warp
 eval_with_training_env : false #added
-num_evals : 20
+num_evals : ???
 
 #policy
 policy : ppo
@@ -48,7 +48,6 @@ scheduler_mode : 'linear'  # 'linear' or 'exp'
 
 #sampler cfg
 sampler_update_freq : 1           #set 10 to take long horizon information despite of policy_updates.
-sampler_batch_size:
 n_sampler_iters : 1                #need to consider in flow 
 success_threshold : .6
 success_rate_condition : 0.7

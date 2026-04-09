@@ -1,8 +1,8 @@
-task: PandaPickCubeOrientation
+task: PandaNutThread
 
 parameters:
-  - {name: finger_friction, group: dynamics, low: 0.5, high: 3., learnable: true}
-  - {name: cube_mass_scale, group: dynamics, low: 0.5, high: 8., learnable: true}
+  - {name: finger_friction, group: dynamics, low: 0.3, high: 8.0, learnable: true}
+  - {name: nut_mass_scale, group: dynamics, low: 0.25, high: 10.0, learnable: true}
   - {name: link_mass_scale_00, group: dynamics, low: 0.8, high: 1.2, learnable: true}
   - {name: link_mass_scale_01, group: dynamics, low: 0.8, high: 1.2, learnable: true}
   - {name: link_mass_scale_02, group: dynamics, low: 0.8, high: 1.2, learnable: true}
@@ -30,12 +30,8 @@ parameters:
   - {name: kp_scale_04, group: dynamics, low: 0.9, high: 1.1, learnable: true}
   - {name: kp_scale_05, group: dynamics, low: 0.9, high: 1.1, learnable: true}
   - {name: kp_scale_06, group: dynamics, low: 0.9, high: 1.1, learnable: true}
-  - {name: box_dx, group: reset, low: -0.2, high: 0.2, learnable: true}
-  - {name: box_dy, group: reset, low: -0.2, high: 0.2, learnable: true}
-  - {name: target_dx, group: reset, low: -0.2, high: 0.2, learnable: true}
-  - {name: target_dy, group: reset, low: -0.2, high: 0.2, learnable: true}
-  - {name: target_dz, group: reset, low: 0.2, high: 0.4, learnable: true}
-  - {name: ori_axis_x, group: reset, low: -1.0, high: 1.0, learnable: true}
-  - {name: ori_axis_y, group: reset, low: -1.0, high: 1.0, learnable: true}
-  - {name: ori_axis_z, group: reset, low: -1.0, high: 1.0, learnable: true}
-  - {name: ori_theta, group: reset, low: 0.0, high: 0.7853981633974483, learnable: true}
+  - {name: nut_dx, group: reset, low: -0.04, high: 0.04, learnable: true}
+  - {name: nut_dy, group: reset, low: -0.06, high: 0.06, learnable: true}
+  - {name: peg_x, group: reset, low: 0.56, high: 0.64, learnable: true}
+  - {name: peg_y, group: reset, low: -0.10, high: 0.10, learnable: true}
+  - {name: nut_yaw, group: reset, low: -3.141592653589793, high: 3.141592653589793, learnable: true}

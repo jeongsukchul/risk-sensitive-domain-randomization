@@ -96,7 +96,7 @@ def manipulation_ppo_config(
     rl_config.network_factory.policy_hidden_layer_sizes = (256, 256)
     rl_config.num_resets_per_eval = 1
     rl_config.max_grad_norm = 1.0
-  elif env_name.startswith("PandaPickCube") or env_name == "PandaStackCube":
+  elif env_name.startswith("PandaPickCube"):
     rl_config.num_timesteps = 200_000_000
     rl_config.num_evals = 4
     rl_config.unroll_length = 10
@@ -106,7 +106,7 @@ def manipulation_ppo_config(
     rl_config.learning_rate = 1e-3
     rl_config.reward_scaling = 10.
     rl_config.entropy_cost = 2e-2
-    rl_config.num_envs = 4096
+    rl_config.num_envs = 1024
     rl_config.batch_size = 1024
     rl_config.network_factory = config_dict.create(
         policy_hidden_layer_sizes=(32, 32, 32, 32),
@@ -169,6 +169,42 @@ def manipulation_ppo_config(
         value_obs_key="privileged_state",
     )
     rl_config.num_resets_per_eval = 1
+  elif env_name == "PandaStackCube":
+    rl_config.num_timesteps = 400_000_000
+    rl_config.num_evals = 4
+    rl_config.unroll_length = 40
+    rl_config.num_minibatches = 32
+    rl_config.num_updates_per_batch = 8
+    rl_config.discounting = 0.97
+    rl_config.learning_rate = 1e-3
+    rl_config.entropy_cost = 2e-2
+    rl_config.num_envs = 2048
+    rl_config.reward_scaling = 10.
+    rl_config.batch_size = 512
+    rl_config.network_factory = config_dict.create(
+        policy_hidden_layer_sizes=(32, 32, 32, 32),
+        value_hidden_layer_sizes=(256, 256, 256, 256, 256),
+        policy_obs_key="state",
+        value_obs_key="privileged_state",
+    )
+  elif env_name == "PandaNutThread":
+    rl_config.num_timesteps = 400_000_000
+    rl_config.num_evals = 4
+    rl_config.unroll_length = 40
+    rl_config.num_minibatches = 32
+    rl_config.num_updates_per_batch = 8
+    rl_config.discounting = 0.97
+    rl_config.learning_rate = 1e-3
+    rl_config.entropy_cost = 2e-2
+    rl_config.num_envs = 2048
+    rl_config.reward_scaling = 10.
+    rl_config.batch_size = 512
+    rl_config.network_factory = config_dict.create(
+        policy_hidden_layer_sizes=(32, 32, 32, 32),
+        value_hidden_layer_sizes=(256, 256, 256, 256, 256),
+        policy_obs_key="state",
+        value_obs_key="privileged_state",
+    )
   elif env_name == "AeroCubeRotateZAxis":
     rl_config.num_timesteps = 300_000_000
     rl_config.num_evals = 10

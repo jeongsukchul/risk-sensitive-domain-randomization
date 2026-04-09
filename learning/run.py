@@ -94,6 +94,7 @@ CAMERAS = {
     "LeapCubeReorient" :"side",
     "PandaPickCube" :None,
     "PandaPickCubeOrientation" :None,
+    "PandaNutThread" :None,
     "PandaStackCube" :None,
     "PandaOpenCabinet" :None,
     "AlohaSinglePegInsertion" : "collaborator_pov",
@@ -278,9 +279,13 @@ def train_ppo(cfg:dict, randomization_fn, env, eval_env=None):
         group+=f" [gamma={cfg.gamma}_beta={cfg.beta}_iters={cfg.n_sampler_iters}]"
     elif cfg.policy=='gbsppo':
         sampler_choice = 'GBS'
-        wandb_name+= f" [beta={cfg.beta}_iters={cfg.n_sampler_iters}]"
         group = sampler_choice
-        group+=f" [beta={cfg.beta}_iters={cfg.n_sampler_iters}]"
+        if cfg.use_scheduling:
+            wandb_name+= f" {cfg.scheduler_mode} scheduling[{cfg.start_beta}, {cfg.end_beta}_n_iters={cfg.n_sampler_iters}]"
+            group+=f" {cfg.scheduler_mode} scheduling[{cfg.start_beta}, {cfg.end_beta}_n_iters={cfg.n_sampler_iters}]"
+        else:
+            wandb_name+= f" [beta={cfg.beta}]_sampler_update_freq={cfg.sampler_update_freq}_n_iters={cfg.n_sampler_iters}"
+            group+=f" [beta={cfg.beta}]_sampler_update_freq={cfg.sampler_update_freq}_n_iters={cfg.n_sampler_iters}"
     elif cfg.policy=='gmmppo':
         sampler_choice = 'GMM'
         group = sampler_choice
@@ -312,7 +317,6 @@ def train_ppo(cfg:dict, randomization_fn, env, eval_env=None):
             dir=make_dir(cfg.work_dir),
             config=_build_wandb_config(cfg),
         )
-    ppo_params.num_evals = cfg.num_evals
     network_factory = samplerppo_networks.make_samplerppo_networks
     train_fn = sampler_ppo.train
     for param in ppo_params.keys():
@@ -343,7 +347,6 @@ def train_ppo(cfg:dict, randomization_fn, env, eval_env=None):
         gamma = train_gamma,
         beta = cfg.beta,
         sampler_update_freq =cfg.sampler_update_freq,
-        sampler_batch_size=getattr(cfg, "sampler_batch_size", None),
         n_sampler_iters = cfg.n_sampler_iters,
         sampler_visualization=getattr(cfg, "sampler_visualization", False),
         dr_config_task=cfg.task,

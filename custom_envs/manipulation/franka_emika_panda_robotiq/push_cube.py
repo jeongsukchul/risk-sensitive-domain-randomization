@@ -34,6 +34,11 @@ WORKSPACE_MIN = (0.3, -0.5, 0.0)
 WORKSPACE_MAX = (0.75, 0.7, 0.5)
 OBJ_SAMPLE_MIN = (0.4, -0.2, -0.005)
 OBJ_SAMPLE_MAX = (0.65, 0.2, 0.04)
+BOX_RESET_X_OFFSET = 0.015
+BOX_RESET_Y_OFFSET = 0.04
+TARGET_RESET_X_OFFSET = 0.015
+TARGET_RESET_Y_OFFSET = 0.04
+RESET_Z_OFFSET = 0.005
 _UNIT_INTERVAL_EPS = 1e-6
 _MODEL_PARAM_SIZE = 1 + 1 + 1 + 3
 _RESET_PARAM_SIZE = 2 + 1 + 3 + 1 + 7
@@ -138,6 +143,23 @@ class PandaRobotiqPushCube(panda_robotiq.PandaRobotiqBase):
     pos = jax.random.uniform(rng, (3,), minval=min_pos, maxval=max_pos)
     return jp.clip(pos, np.array(OBJ_SAMPLE_MIN), np.array(OBJ_SAMPLE_MAX))
 
+  def _sample_reset_pos(
+      self,
+      rng: jax.Array,
+      x_offset: float,
+      y_offset: float,
+      z_offset: float = RESET_Z_OFFSET,
+  ) -> jax.Array:
+    min_pos = (
+        jp.array([-x_offset, -y_offset, -z_offset], dtype=float)
+        + self._init_obj_pos
+    )
+    max_pos = (
+        jp.array([x_offset, y_offset, z_offset], dtype=float) + self._init_obj_pos
+    )
+    pos = jax.random.uniform(rng, (3,), minval=min_pos, maxval=max_pos)
+    return jp.clip(pos, np.array(OBJ_SAMPLE_MIN), np.array(OBJ_SAMPLE_MAX))
+
   def _get_rand_target_quat(
       self, rng: jax.Array, max_angle: jax.Array
   ) -> jax.Array:
@@ -160,11 +182,15 @@ class PandaRobotiqPushCube(panda_robotiq.PandaRobotiqBase):
           jax.random.split(rng, 6)
       )
 
-      box_pos = self._get_rand_target_pos(rng_box1, jp.array(0.15))
+      box_pos = self._sample_reset_pos(
+          rng_box1, BOX_RESET_X_OFFSET, BOX_RESET_Y_OFFSET
+      )
       box_pos = box_pos.at[2].set(self._init_obj_pos[2])
       box_quat = self._get_rand_target_quat(rng_box2, jp.array(360))
 
-      target_pos = self._get_rand_target_pos(rng_target, jp.array(0.05))
+      target_pos = self._sample_reset_pos(
+          rng_target, TARGET_RESET_X_OFFSET, TARGET_RESET_Y_OFFSET
+      )
 
       target_quat = self._get_rand_target_quat(rng_theta, jp.array(45))
       target_quat = math.quat_mul(box_quat, target_quat)
@@ -647,12 +673,18 @@ class PandaRobotiqPushCube(panda_robotiq.PandaRobotiqBase):
 
   def _target_pos_bounds(self):
     low = jp.clip(
-        jp.array(self._init_obj_pos) + jp.array([-0.02, -0.05, -0.005]),
+        jp.array(self._init_obj_pos)
+        + jp.array(
+            [-TARGET_RESET_X_OFFSET, -TARGET_RESET_Y_OFFSET, -RESET_Z_OFFSET]
+        ),
         jp.array(OBJ_SAMPLE_MIN),
         jp.array(OBJ_SAMPLE_MAX),
     )
     high = jp.clip(
-        jp.array(self._init_obj_pos) + jp.array([0.02, 0.05, 0.005]),
+        jp.array(self._init_obj_pos)
+        + jp.array(
+            [TARGET_RESET_X_OFFSET, TARGET_RESET_Y_OFFSET, RESET_Z_OFFSET]
+        ),
         jp.array(OBJ_SAMPLE_MIN),
         jp.array(OBJ_SAMPLE_MAX),
     )
