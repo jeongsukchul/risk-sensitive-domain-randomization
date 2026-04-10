@@ -56,7 +56,7 @@ def default_config() -> config_dict.ConfigDict:
       action_repeat=1,
       action_scale=0.04,
       impl='jax',
-      naconmax=12 * 8192,
+      nconmax=12 * 8192,
       njmax=44,
   )
 

@@ -54,8 +54,7 @@ def default_config() -> config_dict.ConfigDict:
           )
       ),
       impl="jax",
-      naconmax=24 * 4096,
-      naccdmax=24 * 4096,
+      nconmax=24 * 4096,
       njmax=128,
   )
 
@@ -179,8 +178,7 @@ class PandaStackCube(panda.PandaBase):
         qvel=jp.zeros(self._mjx_model.nv, dtype=float),
         ctrl=self._init_ctrl,
         impl=self._mjx_model.impl.value,
-        naconmax=self._config.naconmax,
-        naccdmax=self._config.naccdmax,
+        nconmax=self._config.nconmax,
         njmax=self._config.njmax,
     )
     data = mjx.forward(self._mjx_model, data)

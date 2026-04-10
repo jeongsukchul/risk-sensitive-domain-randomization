@@ -77,7 +77,7 @@ def default_config() -> config_dict.ConfigDict:
       gaits=["trot", "walk", "pace", "bound", "pronk"],
       foot_height=[0.08, 0.4],
       impl="jax",
-      naconmax=4 * 8192,
+      nconmax=4 * 8192,
       njmax=12 + 4 * 4,
   )
 
@@ -132,7 +132,7 @@ class JoystickGaitTracking(spot_base.SpotEnv):
         qpos=self._init_q,
         qvel=jp.zeros(self.mjx_model.nv),
         impl=self.mjx_model.impl.value,
-        naconmax=self._config.naconmax,
+        nconmax=self._config.nconmax,
         njmax=self._config.njmax,
     )
     data = mjx.forward(self.mjx_model, data)

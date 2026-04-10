@@ -57,7 +57,7 @@ def default_config() -> config_dict.ConfigDict:
           ),
       ),
       impl="jax",
-      naconmax=30 * 8192,
+      nconmax=30 * 8192,
       njmax=12 + 30 * 4,
   )
 
@@ -124,7 +124,7 @@ class Getup(spot_base.SpotEnv):
         qpos=qpos,
         qvel=jp.zeros(self.mjx_model.nv),
         impl=self.mjx_model.impl.value,
-        naconmax=self._config.naconmax,
+        nconmax=self._config.nconmax,
         njmax=self._config.njmax,
     )
     data = mjx.forward(self.mjx_model, data)

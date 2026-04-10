@@ -80,8 +80,7 @@ def default_config() -> config_dict.ConfigDict:
           )
       ),
       impl="jax",
-      naconmax=96 * 2048,
-      naccdmax=96 * 2048,
+      nconmax=96 * 2048,
       njmax=400,
   )
 
@@ -170,8 +169,7 @@ class PandaNutThread(panda.PandaBase):
         qvel=jp.zeros(active_mjx_model.nv, dtype=float),
         ctrl=self._init_ctrl,
         impl=active_mjx_model.impl.value,
-        naconmax=self._config.naconmax,
-        naccdmax=self._config.naccdmax,
+        nconmax=self._config.nconmax,
         njmax=self._config.njmax,
     )
     data = mjx.forward(active_mjx_model, data)

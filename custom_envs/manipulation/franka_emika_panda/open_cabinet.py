@@ -49,7 +49,7 @@ def default_config() -> config_dict.ConfigDict:
           )
       ),
       impl="jax",
-      naconmax=12 * 2048,
+      nconmax=12 * 2048,
       njmax=96,
   )
 
@@ -118,7 +118,7 @@ class PandaOpenCabinet(panda.PandaBase):
         qvel=jp.zeros(self._mjx_model.nv),
         ctrl=init_ctrl,
         impl=self._mjx_model.impl.value,
-        naconmax=self._config.naconmax,
+        nconmax=self._config.nconmax,
         njmax=self._config.njmax,
     )
 

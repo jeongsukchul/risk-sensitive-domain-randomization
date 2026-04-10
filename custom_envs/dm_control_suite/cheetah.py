@@ -45,7 +45,7 @@ def default_config() -> config_dict.ConfigDict:
       action_repeat=1,
       vision=False,
       impl="jax",
-      naconmax=100_000,
+      nconmax=100_000,
       njmax=100,
   )
 
@@ -95,7 +95,7 @@ class Run(mjx_env.MjxEnv):
         self.mj_model,
         qpos=qpos,
         impl=self.mjx_model.impl.value,
-        naconmax=self._config.naconmax,
+        nconmax=self._config.nconmax,
         njmax=self._config.njmax,
     )
     data = mjx.forward(self.mjx_model, data)

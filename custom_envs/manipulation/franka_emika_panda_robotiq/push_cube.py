@@ -97,8 +97,7 @@ def default_config():
       dynamics_randomization_in_domain_randomization=True,
       reset_randomization_in_domain_randomization=True,
       impl="jax",
-      naconmax=32 * 8192,
-      naccdmax=32 * 8192,
+      nconmax=32 * 8192,
       njmax=256,
       scale_for_sampler = 150,
   )
@@ -238,8 +237,7 @@ class PandaRobotiqPushCube(panda_robotiq.PandaRobotiqBase):
         mocap_pos=jp.array([target_pos]),
         mocap_quat=jp.array([target_quat]),
         impl=self._mjx_model.impl.value,
-        naconmax=self._config.naconmax,
-        naccdmax=self._config.naccdmax,
+        nconmax=self._config.nconmax,
         njmax=self._config.njmax,
     )
 

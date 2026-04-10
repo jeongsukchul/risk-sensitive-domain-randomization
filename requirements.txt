@@ -10,7 +10,9 @@ hydra-core
 numpyro
 mergedeep
 einops
-warp-lang
+mujoco==3.4.0
+mujoco-mjx==3.4.0
+warp-lang==1.10.1
 pandas
 wandb
 bijx

@@ -83,8 +83,7 @@ def default_config() -> config_dict.ConfigDict:
           )
       ),
       impl="jax",
-      naconmax=48 * 2048,
-      naccdmax=48 * 2048,
+      nconmax=48 * 2048,
       njmax=192,
   )
 
@@ -175,8 +174,7 @@ class PandaStackCube(panda.PandaBase):
         qvel=jp.zeros(self._mjx_model.nv, dtype=float),
         ctrl=self._init_ctrl,
         impl=self._mjx_model.impl.value,
-        naconmax=self._config.naconmax,
-        naccdmax=self._config.naccdmax,
+        nconmax=self._config.nconmax,
         njmax=self._config.njmax,
     )
     data = self._update_target_marker(data)

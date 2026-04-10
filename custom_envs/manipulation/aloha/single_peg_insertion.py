@@ -60,8 +60,7 @@ def default_config() -> config_dict.ConfigDict:
       dynamics_randomization_in_domain_randomization=True,
       reset_randomization_in_domain_randomization=True,
       impl="jax",
-      naconmax=24 * 4096,
-      naccdmax=24 * 4096,
+      nconmax=24 * 4096,
       njmax=400,
   )
 
@@ -124,8 +123,7 @@ class SinglePegInsertion(aloha_base.AlohaEnv):
         qvel=jp.zeros(self._mjx_model.nv, dtype=float),
         ctrl=self._init_ctrl,
         impl=self._mjx_model.impl.value,
-        naconmax=self._config.naconmax,
-        naccdmax=self._config.naccdmax,
+        nconmax=self._config.nconmax,
         njmax=self._config.njmax,
     )
 

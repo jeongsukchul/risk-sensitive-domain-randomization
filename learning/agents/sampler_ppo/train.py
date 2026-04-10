@@ -995,24 +995,23 @@ def train(
         return (fs_n, fos_n, current_sample, current_logq), None
       (flow_state_new, flow_opt_state_new, _, _), _  = jax.lax.scan(body, (flow_state, flow_opt_state, prev_sample, prev_logq), (), length=n_sampler_iters)
       return (flow_state_new, flow_opt_state_new, 1.)
-    def update_gbs(gbs_state, sample_keys):
+    def update_gbs(gbs_state, update_key):
       target_lnpdf = _beta * cumulated_values/sampler_update_freq
       fwd_state, bwd_state = gbs_state
-      def _one_update(carry, xs):
+      gbs_update_keys = jax.random.split(update_key, n_sampler_iters)
+      def _one_update(carry, sample_key):
         fwd_state_carry, bwd_state_carry = carry
-        sample_key, target_batch = xs
         fwd_state_new, bwd_state_new, _ = gbs_train_step_jit(
             sample_key,
             fwd_state_carry,
             bwd_state_carry,
-            target_batch,
+            target_lnpdf,
         )
         return (fwd_state_new, bwd_state_new), None
       (fwd_state_new, bwd_state_new), _ = jax.lax.scan(
           _one_update,
           (fwd_state, bwd_state),
-          (),
-          length=n_sampler_iters,
+          gbs_update_keys,
       )
       return ((fwd_state_new, bwd_state_new), 1.)
     def update_adr(autodr_state, returns):
@@ -1058,7 +1057,7 @@ def train(
     elif sampler_choice=="GBS":
         flow_state, update_signal = jax.lax.cond(
             training_state.update_steps % sampler_update_freq == 0,
-            lambda: update_gbs(training_state.flow_state, gbs_sample_keys),
+            lambda: update_gbs(training_state.flow_state, key_update),
             lambda: (training_state.flow_state, 0.),
         )
     elif sampler_choice=="GMM":

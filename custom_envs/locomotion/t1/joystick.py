@@ -95,7 +95,7 @@ def default_config() -> config_dict.ConfigDict:
       lin_vel_y=[-0.8, 0.8],
       ang_vel_yaw=[-1.0, 1.0],
       impl="jax",
-      naconmax=8 * 8192,
+      nconmax=8 * 8192,
       njmax=80,
   )
 
@@ -235,7 +235,7 @@ class Joystick(t1_base.T1Env):
         qvel=qvel,
         ctrl=qpos[7:],
         impl=self.mjx_model.impl.value,
-        naconmax=self._config.naconmax,
+        nconmax=self._config.nconmax,
         njmax=self._config.njmax,
     )
     data = mjx.forward(self.mjx_model, data)

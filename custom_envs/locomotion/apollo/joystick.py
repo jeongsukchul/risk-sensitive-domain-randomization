@@ -72,7 +72,7 @@ def default_config() -> config_dict.ConfigDict:
           zero_prob=[0.9, 0.25, 0.5],
       ),
       impl="jax",
-      naconmax=8 * 8192,
+      nconmax=8 * 8192,
       njmax=32 + 8 * 4,
   )
 
@@ -141,7 +141,7 @@ class Joystick(base.ApolloEnv):
         qpos=qpos,
         qvel=qvel,
         impl=self.mjx_model.impl.value,
-        naconmax=self._config.naconmax,
+        nconmax=self._config.nconmax,
         njmax=self._config.njmax,
     )
     data = mjx.forward(self.mjx_model, data)

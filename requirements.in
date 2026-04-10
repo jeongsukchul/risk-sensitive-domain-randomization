@@ -13,7 +13,8 @@ jax==0.6.2
 matplotlib==3.10.6
 mediapy==1.2.4
 ml_collections==1.1.0
-mujoco==3.3.6
+mujoco==3.4.0
+mujoco-mjx==3.4.0
 numpy==2.3.2
 nvidia_ml_py3==7.352.0
 omegaconf==2.3.0
@@ -22,4 +23,4 @@ orbax==0.1.9
 pandas==2.3.2
 psutil==7.0.0
 termcolor==3.1.0
-
+warp-lang==1.10.1

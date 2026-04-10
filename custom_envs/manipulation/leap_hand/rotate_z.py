@@ -164,7 +164,6 @@ class CubeRotateZAxis(leap_hand_base.LeapHandEnv):
         mocap_pos=jp.array([-100.0, -100.0, -100.0]),  # Hide goal for task.
         impl=self._mjx_model.impl.value,
         nconmax=self._config.nconmax,
-        # naccdmax=self._config.naccdmax,
         njmax=self._config.njmax,
     )
 
