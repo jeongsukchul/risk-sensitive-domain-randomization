@@ -28,6 +28,7 @@ from learning.module.gbs.sinkhorn_metrics import (
 )
 from learning.module.gbs.target4_family import (
     Target4HarmonicParams,
+    Target4ShiftedHarmonicParams,
     get_target4_harmonic_params,
     sample_target4_product,
     target4_energy_values,
@@ -52,11 +53,12 @@ def tanh_box_logabsdet(z, low, high):
 def target4_logprob(
     z,
     lam,
-    target_params: Target4HarmonicParams | None = None,
+    target_params: Target4HarmonicParams | Target4ShiftedHarmonicParams | None = None,
+    policy_p=None,
 ):
     z = jnp.atleast_2d(z)
-    params = get_target4_harmonic_params(z.shape[-1], target_params)
-    log_unnorm = jnp.asarray(lam, dtype=jnp.float32) * target4_energy_values(z, params)
+    params = get_target4_harmonic_params(z.shape[-1], target_params, policy_p=policy_p)
+    log_unnorm = jnp.asarray(lam, dtype=jnp.float32) * target4_energy_values(z, params, policy_p=policy_p)
     return (log_unnorm - target4_log_normalizer(lam, params)).squeeze()
 
 
@@ -64,11 +66,12 @@ def update_p_from_samples(
     x,
     tau,
     q,
-    target_params: Target4HarmonicParams | None = None,
+    target_params: Target4HarmonicParams | Target4ShiftedHarmonicParams | None = None,
+    policy_p=None,
 ):
     x = jnp.atleast_2d(jnp.asarray(x, dtype=jnp.float32))
-    params = get_target4_harmonic_params(x.shape[-1], target_params)
-    sample_mean_g = jnp.mean(target4_energy_values(x, params))
+    params = get_target4_harmonic_params(x.shape[-1], target_params, policy_p=policy_p)
+    sample_mean_g = jnp.mean(target4_energy_values(x, params, policy_p=policy_p))
     p = jax.nn.sigmoid(tau * (sample_mean_g - q))
     return p, sample_mean_g
 
@@ -89,12 +92,9 @@ def optimal_p_from_target_mean(
     lam,
     tau,
     q,
-    target_params: Target4HarmonicParams | None = None,
+    target_params: Target4HarmonicParams | Target4ShiftedHarmonicParams | None = None,
 ):
-    params = get_target4_harmonic_params(
-        len(target_params.a) if target_params is not None else 1,
-        target_params,
-    )
+    params = get_target4_harmonic_params(len(target_params.a) if target_params is not None else 1, target_params)
     target_mean = float(target4_expected_energy(lam, params))
     optimal_p = 1.0 / (1.0 + np.exp(-tau * (target_mean - q)))
     return float(optimal_p), float(target_mean)
@@ -104,32 +104,34 @@ def sample_truncated_exponential(
     key,
     lam,
     shape,
-    target_params: Target4HarmonicParams | None = None,
+    target_params: Target4HarmonicParams | Target4ShiftedHarmonicParams | None = None,
+    policy_p=None,
 ):
     if len(shape) != 2:
         raise ValueError(f"shape must be rank-2, got {shape}")
-    params = get_target4_harmonic_params(shape[1], target_params)
-    return sample_target4_product(key, lam, shape, params)
+    params = get_target4_harmonic_params(shape[1], target_params, policy_p=policy_p)
+    return sample_target4_product(key, lam, shape, params, policy_p=policy_p)
 
 
 def compute_target4_metrics(
     samples,
     lam,
-    target_params: Target4HarmonicParams | None = None,
+    target_params: Target4HarmonicParams | Target4ShiftedHarmonicParams | None = None,
     num_bins=128,
     eps=1e-8,
     key=None,
+    policy_p=None,
 ):
     samples = np.asarray(samples, dtype=np.float64)
     if samples.ndim != 2:
         raise ValueError(f"samples must be rank-2, got {samples.shape}")
     dim = samples.shape[1]
-    params = get_target4_harmonic_params(dim, target_params)
+    params = get_target4_harmonic_params(dim, target_params, policy_p=policy_p)
     edges = np.linspace(0.0, 1.0, num_bins + 1)
     grid = np.arange(num_bins, dtype=np.float64)
     mids = (grid + 0.5) / num_bins
     comp = np.asarray(
-        target4_energy_values(jnp.asarray(mids[:, None].repeat(dim, axis=1)), params)
+        target4_energy_values(jnp.asarray(mids[:, None].repeat(dim, axis=1)), params, policy_p=policy_p)
     )
     del comp
     forward_terms = []
@@ -147,7 +149,9 @@ def compute_target4_metrics(
             phi=params.phi[i : i + 1],
         )
         logw = np.asarray(
-            target4_logprob(x_mid, jnp.asarray(lam, dtype=jnp.float32), target_params=single_params)
+            target4_logprob(
+                x_mid, jnp.asarray(lam, dtype=jnp.float32), target_params=single_params, policy_p=policy_p
+            )
         )
         p_probs = np.exp(logw - scipy_special_logsumexp_np(logw))
         p_probs = np.maximum(p_probs, eps)
@@ -167,7 +171,7 @@ def compute_target4_metrics(
             (1, dim),
         )
     else:
-        ref = np.asarray(sample_truncated_exponential(key, lam, samples.shape, params))
+        ref = np.asarray(sample_truncated_exponential(key, lam, samples.shape, params, policy_p=policy_p))
     wasserstein = float(
         np.mean(
             np.abs(
@@ -182,6 +186,20 @@ def compute_target4_metrics(
 def scipy_special_logsumexp_np(values: np.ndarray) -> float:
     vmax = float(np.max(values))
     return vmax + float(np.log(np.sum(np.exp(values - vmax))))
+
+
+def should_compute_interatomic_w2(n_particles: int, max_pairs: int = 4096) -> bool:
+    if n_particles <= 1:
+        return False
+    return (n_particles * (n_particles - 1)) // 2 <= max_pairs
+
+
+def build_eval_iters(total_iters: int, max_eval_points: int | None) -> set[int]:
+    if max_eval_points is None or max_eval_points <= 0 or max_eval_points >= total_iters:
+        return set(range(total_iters))
+    eval_iters = {int(v) for v in np.linspace(0, total_iters - 1, max_eval_points)}
+    eval_iters.add(total_iters - 1)
+    return eval_iters
 
 
 def run_gbs_toy_target4(
@@ -215,10 +233,16 @@ def run_gbs_toy_target4(
     model_num_hid=64,
     final_sample_size=2**14,
     max_rnd=1e8,
-    target_params: Target4HarmonicParams | None = None,
+    target_params: Target4HarmonicParams | Target4ShiftedHarmonicParams | None = None,
+    return_snapshots: bool = False,
+    snapshot_sample_size: int | None = None,
+    max_metric_eval_points: int | None = None,
 ):
     if snap_iters is None:
         snap_iters = []
+    if snapshot_sample_size is None:
+        snapshot_sample_size = final_sample_size
+    metric_eval_iters = build_eval_iters(T, max_metric_eval_points)
     save_dir = Path(save_dir)
     save_dir.mkdir(parents=True, exist_ok=True)
 
@@ -251,18 +275,16 @@ def run_gbs_toy_target4(
         raise ValueError(
             f"n_particles * n_spatial_dim must equal dim, got {n_particles} * {n_spatial_dim} != {dim}"
         )
-    target_params = get_target4_harmonic_params(dim, target_params)
-
     # Optional tanh bijection: train in unconstrained latent space z and map to the
     # bounded box only when requested.
     if use_tanh_bijection:
         def to_box(z):
             return tanh_box_bijector(z, low=low, high=high)
 
-        def target4_logprob_latent(z, lam):
+        def target4_logprob_latent(z, lam, policy_p):
             x_box = to_box(z)
             return (
-                target4_logprob(x_box, lam, target_params=target_params)
+                target4_logprob(x_box, lam, target_params=target_params, policy_p=policy_p)
                 + tanh_box_logabsdet(z, low=low, high=high)
             )
 
@@ -270,7 +292,9 @@ def run_gbs_toy_target4(
         process_center = jnp.zeros(dim, dtype=jnp.float32)
     else:
         to_box = lambda z: z
-        target4_logprob_latent = lambda z, lam: target4_logprob(z, lam, target_params=target_params)
+        target4_logprob_latent = lambda z, lam, policy_p: target4_logprob(
+            z, lam, target_params=target_params, policy_p=policy_p
+        )
         latent_prior_loc = 0.5 * (low + high)
         process_center = latent_prior_loc
 
@@ -310,7 +334,7 @@ def run_gbs_toy_target4(
     if loss_mode == "tr_lv":
         rnd_jit = jax.jit(rnd_time_reversal_lv_no_target, static_argnums=(3, 4, 5, 6, 7))
 
-        def loss_wrapped(key, model_state, fwd_params, bwd_params, lam):
+        def loss_wrapped(key, model_state, fwd_params, bwd_params, lam, policy_p):
             x0, xT, rnd_running = rnd_time_reversal_lv_no_target(
                 key,
                 model_state,
@@ -322,7 +346,7 @@ def run_gbs_toy_target4(
                 True,
                 process_center=process_center,
             )
-            target_lp_vals = jnp.asarray(target4_logprob_latent(xT, lam)).reshape(-1)
+            target_lp_vals = jnp.asarray(target4_logprob_latent(xT, lam, policy_p)).reshape(-1)
             rnd_total = prior_log_prob(x0) + rnd_running - target_lp_vals
             loss, aux, _ = lv_loss_from_rnd(rnd_total, xT=xT, max_rnd=max_rnd)
             return loss, aux
@@ -337,7 +361,7 @@ def run_gbs_toy_target4(
             raise ValueError("loss_mode='tr_lv_subtraj' requires model_type='potential'.")
         rnd_jit = jax.jit(rnd_time_reversal_lv_no_target, static_argnums=(3, 4, 5, 6, 7))
 
-        def loss_wrapped(key, model_state, fwd_params, bwd_params, lam):
+        def loss_wrapped(key, model_state, fwd_params, bwd_params, lam, policy_p):
             del bwd_params
             use_subtraj = jax.random.uniform(jax.random.fold_in(key, 23)) < 0.5
 
@@ -362,7 +386,7 @@ def run_gbs_toy_target4(
                         process_center,
                     )
                 )
-                target_lp_vals = jnp.asarray(target4_logprob_latent(xT, lam)).reshape(-1)
+                target_lp_vals = jnp.asarray(target4_logprob_latent(xT, lam, policy_p)).reshape(-1)
                 loss, aux, _ = lv_subtraj_loss(
                     fwd_state=model_state[0],
                     fwd_params=fwd_params,
@@ -390,7 +414,7 @@ def run_gbs_toy_target4(
                     True,
                     process_center=process_center,
                 )
-                target_lp_vals = jnp.asarray(target4_logprob_latent(xT, lam)).reshape(-1)
+                target_lp_vals = jnp.asarray(target4_logprob_latent(xT, lam, policy_p)).reshape(-1)
                 rnd_total = prior_log_prob(x0) + rnd_running - target_lp_vals
                 loss, aux, _ = lv_loss_from_rnd(rnd_total, xT=xT, max_rnd=max_rnd)
                 aux = add_subtraj_aux_defaults(
@@ -420,7 +444,7 @@ def run_gbs_toy_target4(
     elif loss_mode == "dis":
         rnd_jit = jax.jit(rnd_no_target, static_argnums=(4, 5, 6, 7, 8))
 
-        def loss_wrapped(key, model_state, fwd_params, bwd_params, lam):
+        def loss_wrapped(key, model_state, fwd_params, bwd_params, lam, policy_p):
             x0, xT, log_ratio = rnd_no_target(
                 key,
                 model_state,
@@ -433,7 +457,7 @@ def run_gbs_toy_target4(
                 True,
                 process_center=process_center,
             )
-            target_lp_vals = jnp.asarray(target4_logprob_latent(xT, lam)).reshape(-1)
+            target_lp_vals = jnp.asarray(target4_logprob_latent(xT, lam, policy_p)).reshape(-1)
             loss, aux = lv_loss_from_values(
                 x0, xT, log_ratio, prior_log_prob, target_lp_vals, max_rnd=max_rnd
             )
@@ -473,9 +497,11 @@ def run_gbs_toy_target4(
     )
 
     frames = []
+    snapshot_records = []
 
     for t in trange(T):
         current_lambda = beta * p
+        current_policy_p = p
         key, k_step = jax.random.split(key)
         model_state = (fwd_state, bwd_state)
 
@@ -500,7 +526,12 @@ def run_gbs_toy_target4(
         xT = to_box(xT_latent)
 
         (fwd_grads, bwd_grads), aux = loss_grad(
-            k_step, model_state, fwd_state.params, bwd_state.params, jnp.asarray(current_lambda)
+            k_step,
+            model_state,
+            fwd_state.params,
+            bwd_state.params,
+            jnp.asarray(current_lambda),
+            jnp.asarray(current_policy_p, dtype=jnp.float32),
         )
         fwd_state = fwd_state.apply_gradients(grads=fwd_grads)
         bwd_state = bwd_state.apply_gradients(grads=bwd_grads)
@@ -509,36 +540,54 @@ def run_gbs_toy_target4(
             if k in hist:
                 hist[k].append(float(aux[k]))
 
-        sample_mean_g = float(jnp.mean(target4_energy_values(xT, target_params)))
+        sample_mean_g = float(jnp.mean(target4_energy_values(xT, target_params, policy_p=current_policy_p)))
         key, k_metric, k_update = jax.random.split(key, 3)
-        forward_kl, reverse_kl, wasserstein = compute_target4_metrics(
-            xT, current_lambda, target_params=target_params, num_bins=metric_num_bins, key=k_metric
-        )
-        key, k_sink = jax.random.split(key)
-        sinkhorn_target = sample_truncated_exponential(
-            k_sink, current_lambda, xT.shape, target_params=target_params
-        )
-        n_sink = min(int(sinkhorn_num_samples), int(xT.shape[0]))
-        sinkhorn = sinkhorn_distance(xT[:n_sink], sinkhorn_target[:n_sink])
-        ess = effective_sample_size_from_log_weights(
-            target4_logprob(xT, current_lambda, target_params=target_params)
-        )
-        energy_w2 = float(
-            energy_wasserstein_1d(
-                xT[:n_sink],
-                sinkhorn_target[:n_sink],
+        if t in metric_eval_iters:
+            forward_kl, reverse_kl, wasserstein = compute_target4_metrics(
+                xT,
                 current_lambda,
                 target_params=target_params,
+                num_bins=metric_num_bins,
+                key=k_metric,
+                policy_p=current_policy_p,
             )
-        )
-        interatomic_w2 = float(
-            interatomic_wasserstein_1d(
-                xT[:n_sink],
-                sinkhorn_target[:n_sink],
-                n_particles=n_particles,
-                n_spatial_dim=n_spatial_dim,
+            key, k_sink = jax.random.split(key)
+            sinkhorn_target = sample_truncated_exponential(
+                k_sink, current_lambda, xT.shape, target_params=target_params, policy_p=current_policy_p
             )
-        )
+            n_sink = min(int(sinkhorn_num_samples), int(xT.shape[0]))
+            sinkhorn = sinkhorn_distance(xT[:n_sink], sinkhorn_target[:n_sink])
+            ess = effective_sample_size_from_log_weights(
+                target4_logprob(xT, current_lambda, target_params=target_params, policy_p=current_policy_p)
+            )
+            energy_w2 = float(
+                energy_wasserstein_1d(
+                    xT[:n_sink],
+                    sinkhorn_target[:n_sink],
+                    current_lambda,
+                    target_params=target_params,
+                    policy_p=current_policy_p,
+                )
+            )
+            if should_compute_interatomic_w2(n_particles):
+                interatomic_w2 = float(
+                    interatomic_wasserstein_1d(
+                        xT[:n_sink],
+                        sinkhorn_target[:n_sink],
+                        n_particles=n_particles,
+                        n_spatial_dim=n_spatial_dim,
+                    )
+                )
+            else:
+                interatomic_w2 = float("nan")
+        else:
+            forward_kl = float("nan")
+            reverse_kl = float("nan")
+            wasserstein = float("nan")
+            sinkhorn = float("nan")
+            ess = float("nan")
+            energy_w2 = float("nan")
+            interatomic_w2 = float("nan")
         optimal_p, target_mean = optimal_p_from_target_mean(
             current_lambda,
             tau,
@@ -580,6 +629,41 @@ def run_gbs_toy_target4(
 
         if gif_path and (t in snap_iters):
             frames.append(np.asarray(xT))
+        if return_snapshots and (t in snap_iters):
+            key, k_snap = jax.random.split(key)
+            if loss_mode in ("tr_lv", "tr_lv_subtraj"):
+                _, xT_snap_latent, _ = rnd_time_reversal_lv_no_target(
+                    k_snap,
+                    (fwd_state, bwd_state),
+                    fwd_state.params,
+                    snapshot_sample_size,
+                    prior_sampler,
+                    num_steps,
+                    proc,
+                    True,
+                    process_center=process_center,
+                )
+            else:
+                _, xT_snap_latent, _ = rnd_no_target(
+                    k_snap,
+                    (fwd_state, bwd_state),
+                    fwd_state.params,
+                    bwd_state.params,
+                    snapshot_sample_size,
+                    prior_sampler,
+                    num_steps,
+                    proc,
+                    True,
+                    process_center=process_center,
+                )
+            xT_snap = to_box(xT_snap_latent)
+            snapshot_records.append(
+                {
+                    "iter": int(t),
+                    "p": float(p),
+                    "samples": np.asarray(xT_snap),
+                }
+            )
 
     if gif_path and frames:
         rendered = []
@@ -611,4 +695,7 @@ def run_gbs_toy_target4(
     xT_final = to_box(xT_final_latent)
     np.save((save_dir / "gbs_samples.npy").as_posix(), np.array(xT_final))
 
-    return fwd_state, bwd_state, hist, np.asarray(xT_final)
+    result = (fwd_state, bwd_state, hist, np.asarray(xT_final))
+    if return_snapshots:
+        return result + (snapshot_records,)
+    return result

@@ -9,6 +9,7 @@ from ott.solvers import linear
 
 from learning.module.gbs.target4_family import (
     Target4HarmonicParams,
+    Target4ShiftedHarmonicParams,
     get_target4_harmonic_params,
     target4_energy_values as harmonic_target4_energy_values,
 )
@@ -114,12 +115,13 @@ def emd2_1d_uniform(x: jax.Array, y: jax.Array) -> jax.Array:
 def target4_energy_values(
     samples: jax.Array,
     lam: jax.Array,
-    target_params: Target4HarmonicParams | None = None,
+    target_params: Target4HarmonicParams | Target4ShiftedHarmonicParams | None = None,
+    policy_p: jax.Array | float | None = None,
 ) -> jax.Array:
     samples = jnp.asarray(samples, dtype=jnp.float32)
     lam = jnp.asarray(lam, dtype=jnp.float32)
-    params = get_target4_harmonic_params(samples.shape[-1], target_params)
-    return lam * harmonic_target4_energy_values(samples, params)
+    params = get_target4_harmonic_params(samples.shape[-1], target_params, policy_p=policy_p)
+    return lam * harmonic_target4_energy_values(samples, params, policy_p=policy_p)
 
 
 @functools.partial(jax.jit, static_argnames=("n_particles", "n_spatial_dim"))
@@ -139,8 +141,9 @@ def energy_wasserstein_1d(
     samples: jax.Array,
     ref_samples: jax.Array,
     lam: jax.Array,
-    target_params: Target4HarmonicParams | None = None,
+    target_params: Target4HarmonicParams | Target4ShiftedHarmonicParams | None = None,
+    policy_p: jax.Array | float | None = None,
 ) -> jax.Array:
-    gen_energy = target4_energy_values(samples, lam, target_params=target_params)
-    ref_energy = target4_energy_values(ref_samples, lam, target_params=target_params)
+    gen_energy = target4_energy_values(samples, lam, target_params=target_params, policy_p=policy_p)
+    ref_energy = target4_energy_values(ref_samples, lam, target_params=target_params, policy_p=policy_p)
     return emd2_1d_uniform(gen_energy, ref_energy)

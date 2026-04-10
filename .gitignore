@@ -9,3 +9,4 @@ learning/logs
 learning/outputs
 .git/
 external_deps/
+learning/module/gbs/

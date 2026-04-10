@@ -16,10 +16,11 @@ from matplotlib.colors import PowerNorm
 from tqdm import trange
 
 from learning.module.gmmvi.network import GMMTrainingState, create_gmm_network_and_state
-from learning.module.gbs.target4_notebook_utils import (
+from learning.module.gbs.target4_2_notebook_utils import (
     compute_target4_metrics,
     optimal_p_from_target_mean,
     sample_truncated_exponential,
+    should_compute_interatomic_w2,
     target4_logprob,
     update_p_with_ema_and_jump,
 )
@@ -42,6 +43,7 @@ def plot_target4_contour(
     lam: float,
     *,
     target_params=None,
+    policy_p: float | None = None,
     n: int = 200,
     gamma: float = 0.45,
 ) -> None:
@@ -52,19 +54,25 @@ def plot_target4_contour(
     )
     grid = jnp.stack([x.reshape(-1), y.reshape(-1)], axis=-1)
     if target_params is None:
-        params = get_target4_harmonic_params(2)
-    else:
-        params = get_target4_harmonic_params(
-            2,
-            type(target_params)(
-                c=target_params.c,
-                a=target_params.a[:2],
-                k=target_params.k[:2],
-                phi=target_params.phi[:2],
-            ),
+        params_arg = None
+    elif hasattr(target_params, "phi"):
+        params_arg = type(target_params)(
+            c=target_params.c,
+            a=target_params.a[:2],
+            k=target_params.k[:2],
+            phi=target_params.phi[:2],
         )
+    else:
+        params_arg = type(target_params)(
+            c=target_params.c,
+            a=target_params.a[:2],
+            k=target_params.k[:2],
+            mu0=target_params.mu0[:2],
+            b=target_params.b[:2],
+        )
+    params = get_target4_harmonic_params(2, params_arg, policy_p=policy_p)
     z = jnp.exp(
-        jnp.clip(target4_logprob(grid, lam, target_params=params), a_min=-1000.0)
+        jnp.clip(target4_logprob(grid, lam, target_params=params, policy_p=policy_p), a_min=-1000.0)
     ).reshape(n, n)
     contour = ax.contourf(
         np.asarray(x),
@@ -199,9 +207,10 @@ def save_final_sample_plot(
     output_path: Path,
     *,
     target_params=None,
+    policy_p: float | None = None,
 ) -> None:
     fig, ax = plt.subplots(1, 1, figsize=(5, 5))
-    plot_target4_contour(ax, lam=lam, target_params=target_params)
+    plot_target4_contour(ax, lam=lam, target_params=target_params, policy_p=policy_p)
     ax.scatter(samples[:, 0], samples[:, 1], s=2, alpha=0.2, c="r")
     ax.set_title(f"GMMVI final samples vs target4 (lambda={lam:.4f})")
     fig.tight_layout()
@@ -209,18 +218,18 @@ def save_final_sample_plot(
     plt.close(fig)
 
 
-def _target4_scalar_logprob(sample: jax.Array, lam: jax.Array, target_params) -> jax.Array:
-    return target4_logprob(sample[None, :], lam, target_params=target_params).reshape(())
+def _target4_scalar_logprob(sample: jax.Array, lam: jax.Array, target_params, policy_p: jax.Array) -> jax.Array:
+    return target4_logprob(sample[None, :], lam, target_params=target_params, policy_p=policy_p).reshape(())
 
 
 def build_gmmvi_fns(gmm_network, num_envs: int, target_params):
     @jax.jit
-    def gather_samples(train_state: GMMTrainingState, key: chex.Array, lam: jax.Array):
+    def gather_samples(train_state: GMMTrainingState, key: chex.Array, lam: jax.Array, policy_p: jax.Array):
         target_value_and_grad = jax.value_and_grad(_target4_scalar_logprob, argnums=0)
         key, subkey = jax.random.split(key)
         new_samples, mapping = gmm_network.sample_selector.select_samples(train_state.model_state, subkey)
         new_target_lnpdfs, new_target_grads = jax.vmap(
-            lambda sample: target_value_and_grad(sample, lam, target_params)
+            lambda sample: target_value_and_grad(sample, lam, target_params, policy_p)
         )(new_samples)
         new_sample_db_state = gmm_network.sample_selector.save_samples(
             train_state.model_state,
@@ -240,12 +249,12 @@ def build_gmmvi_fns(gmm_network, num_envs: int, target_params):
         )
 
     @jax.jit
-    def train_iter(train_state: GMMTrainingState, key: chex.Array, lam: jax.Array):
+    def train_iter(train_state: GMMTrainingState, key: chex.Array, lam: jax.Array, policy_p: jax.Array):
         target_value_and_grad = jax.value_and_grad(_target4_scalar_logprob, argnums=0)
         key, subkey = jax.random.split(key)
         new_samples, mapping = gmm_network.sample_selector.select_samples(train_state.model_state, subkey)
         new_target_lnpdfs, new_target_grads = jax.vmap(
-            lambda sample: target_value_and_grad(sample, lam, target_params)
+            lambda sample: target_value_and_grad(sample, lam, target_params, policy_p)
         )(new_samples)
         new_sample_db_state = gmm_network.sample_selector.save_samples(
             train_state.model_state,
@@ -413,20 +422,20 @@ def main() -> None:
     current_lambda = args.beta * p
     for _ in range(max(args.batch_size // args.num_envs, 1)):
         key, subkey = jax.random.split(key)
-        state = gather_samples(state, subkey, jnp.asarray(current_lambda))
+        state = gather_samples(state, subkey, jnp.asarray(current_lambda), jnp.asarray(p, dtype=jnp.float32))
 
     for step in trange(args.iters):
         current_lambda = args.beta * p
 
         key, subkey = jax.random.split(key)
-        state = train_iter(state, subkey, jnp.asarray(current_lambda))
+        state = train_iter(state, subkey, jnp.asarray(current_lambda), jnp.asarray(p, dtype=jnp.float32))
 
         key, k_eval, k_metric = jax.random.split(key, 3)
         samples = np.asarray(sample_model(state, k_eval, args.n_eval_samples))
         _ = model_log_density(state, jnp.asarray(samples))
 
         sample_mean = float(
-            np.mean(np.asarray(target4_energy_values(jnp.asarray(samples), target_params)))
+            np.mean(np.asarray(target4_energy_values(jnp.asarray(samples), target_params, policy_p=p)))
         )
         forward_kl, reverse_kl, wasserstein = compute_target4_metrics(
             samples,
@@ -434,6 +443,7 @@ def main() -> None:
             target_params=target_params,
             num_bins=args.metric_num_bins,
             key=k_metric,
+            policy_p=p,
         )
         key, k_sink = jax.random.split(key)
         samples_jax = jnp.asarray(samples)
@@ -442,11 +452,12 @@ def main() -> None:
             current_lambda,
             samples.shape,
             target_params=target_params,
+            policy_p=p,
         )
         n_sink = min(args.sinkhorn_num_samples, samples.shape[0])
         sinkhorn = sinkhorn_distance(samples_jax[:n_sink], sinkhorn_target[:n_sink])
         ess = effective_sample_size_from_log_weights(
-            target4_logprob(samples_jax, current_lambda, target_params=target_params)
+            target4_logprob(samples_jax, current_lambda, target_params=target_params, policy_p=p)
         )
         energy_w2 = float(
             energy_wasserstein_1d(
@@ -454,16 +465,20 @@ def main() -> None:
                 sinkhorn_target[:n_sink],
                 current_lambda,
                 target_params=target_params,
+                policy_p=p,
             )
         )
-        interatomic_w2 = float(
-            interatomic_wasserstein_1d(
-                samples_jax[:n_sink],
-                sinkhorn_target[:n_sink],
-                n_particles=args.n_particles,
-                n_spatial_dim=args.n_spatial_dim,
+        if should_compute_interatomic_w2(args.n_particles):
+            interatomic_w2 = float(
+                interatomic_wasserstein_1d(
+                    samples_jax[:n_sink],
+                    sinkhorn_target[:n_sink],
+                    n_particles=args.n_particles,
+                    n_spatial_dim=args.n_spatial_dim,
+                )
             )
-        )
+        else:
+            interatomic_w2 = float("nan")
         optimal_p, target_mean = optimal_p_from_target_mean(
             current_lambda,
             args.tau,
@@ -534,6 +549,7 @@ def main() -> None:
             final_lambda,
             final_samples_path,
             target_params=target_params,
+            policy_p=final_p,
         )
 
     print(f"Saved outputs to: {save_dir}")
@@ -541,7 +557,12 @@ def main() -> None:
     print(f"target4 c: {float(target_params.c):.6f}")
     print(f"target4 a: {np.asarray(target_params.a)}")
     print(f"target4 k: {np.asarray(target_params.k)}")
-    print(f"target4 phi: {np.asarray(target_params.phi)}")
+    if hasattr(target_params, "phi"):
+        print(f"target4 phi: {np.asarray(target_params.phi)}")
+    if hasattr(target_params, "mu0"):
+        print(f"target4_3 mu0: {np.asarray(target_params.mu0)}")
+    if hasattr(target_params, "b"):
+        print(f"target4_3 b: {np.asarray(target_params.b)}")
     print(f"safe q: {args.safe_q:.6f}")
     print(f"p update frequency: {args.p_update_freq} (0 means fixed p)")
     print(f"p ema alpha: {args.p_ema_alpha:.3f}")

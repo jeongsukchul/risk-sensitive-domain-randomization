@@ -14,10 +14,11 @@ from learning.module.gbs.sinkhorn_metrics import (
     interatomic_wasserstein_1d,
     sinkhorn_distance,
 )
-from learning.module.gbs.target4_notebook_utils import (
+from learning.module.gbs.target4_2_notebook_utils import (
     compute_target4_metrics,
     optimal_p_from_target_mean,
     sample_truncated_exponential,
+    should_compute_interatomic_w2,
     target4_logprob,
 )
 from learning.module.gbs.target4_family import (
@@ -104,7 +105,7 @@ def _target_metrics(
         target_params=target_params,
     )
     metrics["energy_w2"] = float(energy_w2)
-    if n_particles is not None and n_particles > 1:
+    if n_particles is not None and should_compute_interatomic_w2(n_particles):
         interatomic_w2 = interatomic_wasserstein_1d(
             jnp.asarray(samples[:n_sink]),
             ref,

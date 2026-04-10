@@ -16,7 +16,7 @@ import numpy as np
 from matplotlib import pyplot as plt
 from matplotlib.colors import PowerNorm
 
-from learning.module.gbs.target4_notebook_utils import (
+from learning.module.gbs.target4_2_notebook_utils import (
     run_gbs_toy_target4,
     target4_logprob,
 )
@@ -32,6 +32,7 @@ def plot_target4_contour(
     lam: float,
     *,
     target_params=None,
+    policy_p: float | None = None,
     n: int = 200,
     gamma: float = 0.45,
 ) -> None:
@@ -42,19 +43,25 @@ def plot_target4_contour(
     )
     grid = jnp.stack([x.reshape(-1), y.reshape(-1)], axis=-1)
     if target_params is None:
-        params = get_target4_harmonic_params(2)
-    else:
-        params = get_target4_harmonic_params(
-            2,
-            type(target_params)(
-                c=target_params.c,
-                a=target_params.a[:2],
-                k=target_params.k[:2],
-                phi=target_params.phi[:2],
-            ),
+        params_arg = None
+    elif hasattr(target_params, "phi"):
+        params_arg = type(target_params)(
+            c=target_params.c,
+            a=target_params.a[:2],
+            k=target_params.k[:2],
+            phi=target_params.phi[:2],
         )
+    else:
+        params_arg = type(target_params)(
+            c=target_params.c,
+            a=target_params.a[:2],
+            k=target_params.k[:2],
+            mu0=target_params.mu0[:2],
+            b=target_params.b[:2],
+        )
+    params = get_target4_harmonic_params(2, params_arg, policy_p=policy_p)
     z = jnp.exp(
-        jnp.clip(target4_logprob(grid, lam, target_params=params), a_min=-1000.0)
+        jnp.clip(target4_logprob(grid, lam, target_params=params, policy_p=policy_p), a_min=-1000.0)
     ).reshape(n, n)
     contour = ax.contourf(
         np.asarray(x),
@@ -98,6 +105,7 @@ def build_run_tag(args: argparse.Namespace) -> str:
         f"loss{sanitize(args.loss_mode)}",
         f"bij{sanitize(int(args.use_tanh_bijection))}",
         f"model{sanitize(args.model_type)}",
+        f"iters{sanitize(args.iters)}",
     ]
     return "_".join(parts)
 
@@ -182,9 +190,10 @@ def save_final_sample_plot(
     output_path: Path,
     *,
     target_params=None,
+    policy_p: float | None = None,
 ) -> None:
     fig, ax = plt.subplots(1, 1, figsize=(5, 5))
-    plot_target4_contour(ax, lam=lam, target_params=target_params)
+    plot_target4_contour(ax, lam=lam, target_params=target_params, policy_p=policy_p)
     ax.scatter(samples[:, 0], samples[:, 1], s=2, alpha=0.2, c="r")
     ax.set_title(f"Final samples vs target4 (lambda={lam:.4f})")
     fig.tight_layout()
@@ -304,6 +313,7 @@ def main() -> None:
             final_lambda,
             final_samples_path,
             target_params=target_params,
+            policy_p=final_p,
         )
 
     print(f"Saved outputs to: {save_dir}")
@@ -313,7 +323,12 @@ def main() -> None:
     print(f"target4 c: {float(target_params.c):.6f}")
     print(f"target4 a: {np.asarray(target_params.a)}")
     print(f"target4 k: {np.asarray(target_params.k)}")
-    print(f"target4 phi: {np.asarray(target_params.phi)}")
+    if hasattr(target_params, "phi"):
+        print(f"target4 phi: {np.asarray(target_params.phi)}")
+    if hasattr(target_params, "mu0"):
+        print(f"target4_3 mu0: {np.asarray(target_params.mu0)}")
+    if hasattr(target_params, "b"):
+        print(f"target4_3 b: {np.asarray(target_params.b)}")
     print(f"safe q: {args.safe_q:.6f}")
     print(f"p update frequency: {args.p_update_freq} (0 means fixed p)")
     print(f"p ema alpha: {args.p_ema_alpha:.3f}")
