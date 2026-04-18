@@ -73,8 +73,8 @@ def manipulation_ppo_config(env_name: str) -> config_dict.ConfigDict:
     rl_config.discounting = 0.97
     rl_config.learning_rate = 1e-3
     rl_config.entropy_cost = 2e-2
-    rl_config.num_envs = 2048
-    rl_config.batch_size = 512
+    rl_config.num_envs = 1024
+    rl_config.batch_size = 1024
     rl_config.reward_scaling= 10.
     rl_config.num_resets_per_eval = 1
     rl_config.network_factory = config_dict.create(
@@ -107,9 +107,9 @@ def manipulation_ppo_config(env_name: str) -> config_dict.ConfigDict:
     rl_config.discounting = 0.97
     rl_config.learning_rate = 1e-3
     rl_config.entropy_cost = 2e-2
-    rl_config.num_envs = 2048
+    rl_config.num_envs = 1024
     rl_config.reward_scaling = 10.
-    rl_config.batch_size = 512
+    rl_config.batch_size = 1024
     rl_config.network_factory = config_dict.create(
         policy_hidden_layer_sizes=(32, 32, 32, 32),
         value_hidden_layer_sizes=(256, 256, 256, 256, 256),

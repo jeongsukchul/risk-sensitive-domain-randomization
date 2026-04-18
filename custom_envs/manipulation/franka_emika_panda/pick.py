@@ -269,9 +269,9 @@ class PandaPickCube(panda.PandaBase):
         # 4. Robot Armature Scale (9 params)
         # low.append(jp.full((9,), 0.8)); high.append(jp.full((9,), 1.2))
         # 5. Joint Damping Scale (9 params)
-        low.append(jp.full((9,), 0.8)); high.append(jp.full((9,), 1.2))
+        low.append(jp.full((9,), 0.8)); high.append(jp.full((9,), 1.1))
         # 6. Actuator Gain (KP) Scale (7 params)
-        low.append(jp.full((7,), 0.9)); high.append(jp.full((7,), 1.1))
+        low.append(jp.full((7,), 0.9)); high.append(jp.full((7,), 1.2))
 
         return jp.concatenate(low), jp.concatenate(high)
 
@@ -284,6 +284,28 @@ class PandaPickCubeOrientation(PandaPickCube):
       config_overrides: Optional[Dict[str, Union[str, int, list[Any]]]] = None,
   ):
     super().__init__(config, config_overrides, sample_orientation=True)
+  @property
+  def nominal_params(self) -> jax.Array:
+        return jp.ones(29) #jp.ones(38)
+
+  @property
+  def dr_range(self) -> tuple[jax.Array, jax.Array]:
+        """Defines the lower and upper bounds for randomization (38 dimensions)."""
+        low, high = [], []
+        # 1. Gripper Friction (1 param)
+        low.append(jp.array([0.3])); high.append(jp.array([3.0]))
+        # 2. Cube Mass Scale (1 param)
+        low.append(jp.array([0.1])); high.append(jp.array([8.0]))
+        # 3. Franka Link Mass Scale (11 params)
+        low.append(jp.full((11,), .8)); high.append(jp.full((11,), 1.2))
+        # 4. Robot Armature Scale (9 params)
+        # low.append(jp.full((9,), 0.8)); high.append(jp.full((9,), 1.2))
+        # 5. Joint Damping Scale (9 params)
+        low.append(jp.full((9,), 0.8)); high.append(jp.full((9,), 1.2))
+        # 6. Actuator Gain (KP) Scale (7 params)
+        low.append(jp.full((7,), 0.9)); high.append(jp.full((7,), 1.1))
+
+        return jp.concatenate(low), jp.concatenate(high)
 LEFT_FINGER_GEOM = 73
 RIGHT_FINGER_GEOM = 80
 import functools

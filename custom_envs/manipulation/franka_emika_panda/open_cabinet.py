@@ -232,6 +232,7 @@ class PandaOpenCabinet(panda.PandaBase):
         data.qfrc_bias,               # Coriolis, centrifugal, gravity
         data.actuator_force,          # Applied forces
         # We append the actual randomized parameters
+        self.mjx_model.geom_friction[LEFT_FINGER_GEOM, 0:1],
         self.mjx_model.geom_friction[HANDLE_GEOM, 0:1],
         self.mjx_model.body_mass[:],
         self.mjx_model.actuator_gainprm[:, 0], # Current KP
@@ -245,22 +246,24 @@ class PandaOpenCabinet(panda.PandaBase):
     }
   @property
   def nominal_params(self):
-     return jp.concatenate([jp.ones(29)])
+     return jp.concatenate([jp.ones(30)])
   @property
   def dr_range(self):
     """Defines the lower and upper bounds for randomization."""
     low, high = [], []
     # 29d
     # 1. Gripper Friction (1 param): U(0.3, 1.5)
-    low.append(jp.array([0.3])); high.append(jp.array([4.]))
+    low.append(jp.array([0.3])); high.append(jp.array([10.]))
+    # 1. Cabinet Friction (1 param): U(0.3, 1.5)
+    low.append(jp.array([0.3])); high.append(jp.array([10.]))
     # 2. Cabinet Handle/Drawer Mass Scale (1 param): U(0.5, 2.0)
-    low.append(jp.array([0.1])); high.append(jp.array([10.0]))
+    low.append(jp.array([0.1])); high.append(jp.array([20.0]))
     # Franka Mass Scale (11 param)
     low.append(jp.full((11,), 0.8)); high.append(jp.full((11,), 1.2))
     # 3. Joint Damping Scale (9 params): U(0.5, 2.0)
     low.append(jp.full((9,), 0.8)); high.append(jp.full((9,), 1.2))
     # 4. Actuator Gain (KP) Scale (7 params): U(0.9, 1.1)
-    low.append(jp.full((7,), 0.9)); high.append(jp.full((7,), 1.1))
+    low.append(jp.full((7,), 0.7)); high.append(jp.full((7,), 1.3))
 
     return jp.concatenate(low), jp.concatenate(high)
 LEFT_FINGER_GEOM = 73
@@ -286,7 +289,9 @@ def domain_randomize(model: mjx.Model, dr_range: tuple, params: jax.Array = None
     def shift_dynamics(p):
         idx = 0
         # 1. Friction
-        friction = model.geom_friction.at[HANDLE_GEOM, 0].set(p[idx]); idx += 1
+        friction = model.geom_friction.at[LEFT_FINGER_GEOM, 0].set(p[idx])
+        friction = friction.at[RIGHT_FINGER_GEOM, 0].set(p[idx]); idx += 1
+        friction = friction.at[HANDLE_GEOM, 0].set(p[idx]); idx += 1
         # 2. Mass
         mass = model.body_mass.at[handle_body].set(model.body_mass[handle_body] * p[idx]); idx += 1
         mass = mass.at[:11].set(model.body_mass[link_ids] * p[idx:idx+11]); idx += 11
@@ -306,7 +311,9 @@ def domain_randomize(model: mjx.Model, dr_range: tuple, params: jax.Array = None
         p = dist(rng)
         idx = 0
         # 1. Friction
-        friction = model.geom_friction.at[HANDLE_GEOM, 0].set(p[idx]); idx += 1
+        friction = model.geom_friction.at[LEFT_FINGER_GEOM, 0].set(p[idx])
+        friction = friction.at[RIGHT_FINGER_GEOM, 0].set(p[idx]); idx += 1
+        friction = friction.at[HANDLE_GEOM, 0].set(p[idx]); idx += 1
         # 2. Mass
         mass = model.body_mass.at[handle_body].set(model.body_mass[handle_body] * p[idx]); idx += 1
         mass = mass.at[:11].set(model.body_mass[link_ids] * p[idx:idx+11]); idx += 11
@@ -355,7 +362,9 @@ def domain_randomize_eval(model: mjx.Model, dr_range: tuple, params: jax.Array =
     def shift_dynamics(p):
         idx = 0
         # 1. Friction
-        friction = model.geom_friction.at[HANDLE_GEOM, 0].set(p[idx]); idx += 1
+        friction = model.geom_friction.at[LEFT_FINGER_GEOM, 0].set(p[idx])
+        friction = friction.at[RIGHT_FINGER_GEOM, 0].set(p[idx]); idx += 1
+        friction = friction.at[HANDLE_GEOM, 0].set(p[idx]); idx += 1
         # 2. Mass
         mass = model.body_mass.at[handle_body].set(model.body_mass[handle_body] * p[idx]); idx += 1
         mass = mass.at[:11].set(model.body_mass[link_ids] * p[idx:idx+11]); idx += 11
@@ -373,7 +382,9 @@ def domain_randomize_eval(model: mjx.Model, dr_range: tuple, params: jax.Array =
         p = dist(rng)
         idx = 0
         # 1. Friction
-        friction = model.geom_friction.at[HANDLE_GEOM, 0].set(p[idx]); idx += 1
+        friction = model.geom_friction.at[LEFT_FINGER_GEOM, 0].set(p[idx])
+        friction = friction.at[RIGHT_FINGER_GEOM, 0].set(p[idx]); idx += 1
+        friction = friction.at[HANDLE_GEOM, 0].set(p[idx]); idx += 1
         # 2. Mass
         mass = model.body_mass.at[handle_body].set(model.body_mass[handle_body] * p[idx]); idx += 1
         mass = mass.at[:11].set(model.body_mass[link_ids] * p[idx:idx+11]); idx += 11
