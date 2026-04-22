@@ -1,33 +1,26 @@
-"""Domain randomization for the Berkeley Humanoid environment."""
+"""Domain randomization for Berkeley Humanoid locomotion."""
 
 import jax
 from mujoco import mjx
 
 from custom_envs.locomotion import randomization_utils
 
-FLOOR_GEOM_ID = 0
-TORSO_BODY_ID = 1
 
-
-def domain_randomize(model: mjx.Model, dr_range, rng: jax.Array, params=None):
-  return randomization_utils.domain_randomize_batched(
-      model,
-      dr_range,
-      floor_geom_id=FLOOR_GEOM_ID,
-      torso_body_id=TORSO_BODY_ID,
-      rng=rng,
-      params=params,
+def domain_randomize(
+    model: mjx.Model,
+    dr_range: tuple[jax.Array, jax.Array],
+    rng: jax.Array = None,
+    params: jax.Array = None,
+):
+  return randomization_utils.domain_randomize(
+      model, dr_range, rng=rng, params=params, floor_geom_id=0, torso_body_id=1
   )
 
 
 def domain_randomize_eval(
-    model: mjx.Model, dr_range, rng: jax.Array = None, params=None
+    model: mjx.Model,
+    dr_range: tuple[jax.Array, jax.Array],
+    rng: jax.Array = None,
+    params: jax.Array = None,
 ):
-  return randomization_utils.domain_randomize_single(
-      model,
-      dr_range,
-      floor_geom_id=FLOOR_GEOM_ID,
-      torso_body_id=TORSO_BODY_ID,
-      rng=rng,
-      params=params,
-  )
+  return domain_randomize(model, dr_range, rng=rng, params=params)

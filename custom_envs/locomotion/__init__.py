@@ -22,8 +22,8 @@ from ml_collections import config_dict
 from mujoco import mjx
 
 from custom_envs import mjx_env
+from custom_envs.locomotion.apollo import joystick as apollo_joystick
 from custom_envs.locomotion.barkour import joystick as barkour_joystick
-from custom_envs.locomotion.barkour import randomize as barkour_randomize
 from custom_envs.locomotion.berkeley_humanoid import joystick as berkeley_humanoid_joystick
 from custom_envs.locomotion.berkeley_humanoid import randomize as berkeley_humanoid_randomize
 from custom_envs.locomotion.g1 import joystick as g1_joystick
@@ -31,20 +31,21 @@ from custom_envs.locomotion.g1 import randomize as g1_randomize
 from custom_envs.locomotion.go1 import getup as go1_getup
 from custom_envs.locomotion.go1 import handstand as go1_handstand
 from custom_envs.locomotion.go1 import joystick as go1_joystick
-from custom_envs.locomotion.go1 import randomize as go1_randomize
-from custom_envs.locomotion.h1 import randomize as h1_randomize
 from custom_envs.locomotion.h1 import inplace_gait_tracking as h1_inplace_gait_tracking
 from custom_envs.locomotion.h1 import joystick_gait_tracking as h1_joystick_gait_tracking
 from custom_envs.locomotion.op3 import joystick as op3_joystick
 from custom_envs.locomotion.op3 import randomize as op3_randomize
+from custom_envs.locomotion import randomization_utils
 from custom_envs.locomotion.spot import getup as spot_getup
 from custom_envs.locomotion.spot import joystick as spot_joystick
 from custom_envs.locomotion.spot import joystick_gait_tracking as spot_joystick_gait_tracking
-from custom_envs.locomotion.spot import randomize as spot_randomize
 from custom_envs.locomotion.t1 import joystick as t1_joystick
-from custom_envs.locomotion.t1 import randomize as t1_randomize
+
 
 _envs = {
+    "ApolloJoystickFlatTerrain": functools.partial(
+        apollo_joystick.Joystick, task="flat_terrain"
+    ),
     "BarkourJoystick": barkour_joystick.Joystick,
     "BerkeleyHumanoidJoystickFlatTerrain": functools.partial(
         berkeley_humanoid_joystick.Joystick, task="flat_terrain"
@@ -86,6 +87,7 @@ _envs = {
 }
 
 _cfgs = {
+    "ApolloJoystickFlatTerrain": apollo_joystick.default_config,
     "BarkourJoystick": barkour_joystick.default_config,
     "BerkeleyHumanoidJoystickFlatTerrain": (
         berkeley_humanoid_joystick.default_config
@@ -110,55 +112,95 @@ _cfgs = {
     "T1JoystickRoughTerrain": t1_joystick.default_config,
 }
 
+_dr_classes = (
+    apollo_joystick.Joystick,
+    barkour_joystick.Joystick,
+    berkeley_humanoid_joystick.Joystick,
+    g1_joystick.Joystick,
+    go1_joystick.Joystick,
+    go1_getup.Getup,
+    go1_handstand.Handstand,
+    go1_handstand.Footstand,
+    h1_inplace_gait_tracking.InplaceGaitTracking,
+    h1_joystick_gait_tracking.JoystickGaitTracking,
+    op3_joystick.Joystick,
+    spot_joystick.Joystick,
+    spot_getup.Getup,
+    spot_joystick_gait_tracking.JoystickGaitTracking,
+    t1_joystick.Joystick,
+)
+
+
+def _dr_range(self) -> tuple[jax.Array, jax.Array]:
+  return randomization_utils.make_default_dr_range(self.mjx_model)
+
+
+def _nominal_params(self) -> jax.Array:
+  return randomization_utils.make_default_nominal_params(self.mjx_model)
+
+
+for _cls in _dr_classes:
+  _cls.dr_range = property(_dr_range)
+  _cls.nominal_params = property(_nominal_params)
+
+
+_default_randomizer = functools.partial(
+    randomization_utils.domain_randomize, floor_geom_id=0, torso_body_id=1
+)
+_g1_randomizer = functools.partial(
+    randomization_utils.domain_randomize, floor_geom_id=0, torso_body_id=16
+)
+_default_randomizer_eval = functools.partial(
+    randomization_utils.domain_randomize_eval, floor_geom_id=0, torso_body_id=1
+)
+_g1_randomizer_eval = functools.partial(
+    randomization_utils.domain_randomize_eval, floor_geom_id=0, torso_body_id=16
+)
+
 _randomizer = {
-    "BarkourJoystick": barkour_randomize.domain_randomize,
-    "BerkeleyHumanoidJoystickFlatTerrain": (
-        berkeley_humanoid_randomize.domain_randomize
-    ),
-    "BerkeleyHumanoidJoystickRoughTerrain": (
-        berkeley_humanoid_randomize.domain_randomize
-    ),
-    "G1JoystickFlatTerrain": g1_randomize.domain_randomize,
-    "G1JoystickRoughTerrain": g1_randomize.domain_randomize,
-    "Go1JoystickFlatTerrain": go1_randomize.domain_randomize,
-    "Go1JoystickRoughTerrain": go1_randomize.domain_randomize,
-    "Go1Getup": go1_randomize.domain_randomize,
-    "Go1Handstand": go1_randomize.domain_randomize,
-    "Go1Footstand": go1_randomize.domain_randomize,
-    "H1InplaceGaitTracking": h1_randomize.domain_randomize,
-    "H1JoystickGaitTracking": h1_randomize.domain_randomize,
+    "ApolloJoystickFlatTerrain": _default_randomizer,
+    "BarkourJoystick": _default_randomizer,
+    "BerkeleyHumanoidJoystickFlatTerrain": _default_randomizer,
+    "BerkeleyHumanoidJoystickRoughTerrain": _default_randomizer,
+    "G1JoystickFlatTerrain": _g1_randomizer,
+    "G1JoystickRoughTerrain": _g1_randomizer,
+    "Go1JoystickFlatTerrain": _default_randomizer,
+    "Go1JoystickRoughTerrain": _default_randomizer,
+    "Go1Getup": _default_randomizer,
+    "Go1Handstand": _default_randomizer,
+    "Go1Footstand": _default_randomizer,
+    "H1InplaceGaitTracking": _default_randomizer,
+    "H1JoystickGaitTracking": _default_randomizer,
     "Op3Joystick": op3_randomize.domain_randomize,
-    "SpotFlatTerrainJoystick": spot_randomize.domain_randomize,
-    "SpotGetup": spot_randomize.domain_randomize,
-    "SpotJoystickGaitTracking": spot_randomize.domain_randomize,
-    "T1JoystickFlatTerrain": t1_randomize.domain_randomize,
-    "T1JoystickRoughTerrain": t1_randomize.domain_randomize,
+    "SpotFlatTerrainJoystick": _default_randomizer,
+    "SpotGetup": _default_randomizer,
+    "SpotJoystickGaitTracking": _default_randomizer,
+    "T1JoystickFlatTerrain": _default_randomizer,
+    "T1JoystickRoughTerrain": _default_randomizer,
 }
 
 _randomizer_eval = {
-    "BarkourJoystick": barkour_randomize.domain_randomize_eval,
-    "BerkeleyHumanoidJoystickFlatTerrain": (
-        berkeley_humanoid_randomize.domain_randomize_eval
-    ),
-    "BerkeleyHumanoidJoystickRoughTerrain": (
-        berkeley_humanoid_randomize.domain_randomize_eval
-    ),
-    "G1JoystickFlatTerrain": g1_randomize.domain_randomize_eval,
-    "G1JoystickRoughTerrain": g1_randomize.domain_randomize_eval,
-    "Go1JoystickFlatTerrain": go1_randomize.domain_randomize_eval,
-    "Go1JoystickRoughTerrain": go1_randomize.domain_randomize_eval,
-    "Go1Getup": go1_randomize.domain_randomize_eval,
-    "Go1Handstand": go1_randomize.domain_randomize_eval,
-    "Go1Footstand": go1_randomize.domain_randomize_eval,
-    "H1InplaceGaitTracking": h1_randomize.domain_randomize_eval,
-    "H1JoystickGaitTracking": h1_randomize.domain_randomize_eval,
+    "ApolloJoystickFlatTerrain": _default_randomizer_eval,
+    "BarkourJoystick": _default_randomizer_eval,
+    "BerkeleyHumanoidJoystickFlatTerrain": _default_randomizer_eval,
+    "BerkeleyHumanoidJoystickRoughTerrain": _default_randomizer_eval,
+    "G1JoystickFlatTerrain": _g1_randomizer_eval,
+    "G1JoystickRoughTerrain": _g1_randomizer_eval,
+    "Go1JoystickFlatTerrain": _default_randomizer_eval,
+    "Go1JoystickRoughTerrain": _default_randomizer_eval,
+    "Go1Getup": _default_randomizer_eval,
+    "Go1Handstand": _default_randomizer_eval,
+    "Go1Footstand": _default_randomizer_eval,
+    "H1InplaceGaitTracking": _default_randomizer_eval,
+    "H1JoystickGaitTracking": _default_randomizer_eval,
     "Op3Joystick": op3_randomize.domain_randomize_eval,
-    "SpotFlatTerrainJoystick": spot_randomize.domain_randomize_eval,
-    "SpotGetup": spot_randomize.domain_randomize_eval,
-    "SpotJoystickGaitTracking": spot_randomize.domain_randomize_eval,
-    "T1JoystickFlatTerrain": t1_randomize.domain_randomize_eval,
-    "T1JoystickRoughTerrain": t1_randomize.domain_randomize_eval,
+    "SpotFlatTerrainJoystick": _default_randomizer_eval,
+    "SpotGetup": _default_randomizer_eval,
+    "SpotJoystickGaitTracking": _default_randomizer_eval,
+    "T1JoystickFlatTerrain": _default_randomizer_eval,
+    "T1JoystickRoughTerrain": _default_randomizer_eval,
 }
+
 
 def __getattr__(name):
   if name == "ALL_ENVS":
@@ -208,8 +250,11 @@ def load(
   Returns:
       An instance of the environment.
   """
+  mjx_env.ensure_menagerie_exists()  # Ensure menagerie exists when environment is loaded.
   if env_name not in _envs:
-    raise ValueError(f"Env '{env_name}' not found. Available envs: {_cfgs.keys()}")
+    raise ValueError(
+        f"Env '{env_name}' not found. Available envs: {_cfgs.keys()}"
+    )
   config = config or get_default_config(env_name)
   return _envs[env_name](config=config, config_overrides=config_overrides)
 
@@ -226,10 +271,11 @@ def get_domain_randomizer(
     return None
   return _randomizer[env_name]
 
+
 def get_domain_randomizer_eval(
     env_name: str,
 ) -> Optional[Callable[[mjx.Model, jax.Array], Tuple[mjx.Model, mjx.Model]]]:
-  """Get the default domain randomizer for an environment."""
+  """Get the evaluation domain randomizer for an environment."""
   if env_name not in _randomizer_eval:
     print(
         f"Env '{env_name}' does not have a domain randomizer in the locomotion"

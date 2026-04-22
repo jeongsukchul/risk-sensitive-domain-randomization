@@ -15,7 +15,6 @@
 """Core classes for MuJoCo Playground."""
 
 import abc
-import os
 import subprocess
 import sys
 from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple, Union
@@ -38,7 +37,7 @@ EXTERNAL_DEPS_PATH = epath.Path(__file__).parent.parent / "external_deps"
 # Resource paths do not have glob implemented, so we use a bare epath.Path.
 MENAGERIE_PATH = EXTERNAL_DEPS_PATH / "mujoco_menagerie"
 # Commit SHA of the menagerie repo.
-MENAGERIE_COMMIT_SHA = "14ceccf557cc47240202f2354d684eca58ff8de4"
+MENAGERIE_COMMIT_SHA = "1b86ece576591213e2b666ebf59508454200ca97"
 
 
 def _clone_with_progress(
@@ -136,13 +135,15 @@ def make_data(
     mocap_pos: Optional[jax.Array] = None,
     mocap_quat: Optional[jax.Array] = None,
     impl: Optional[str] = None,
-    nconmax: Optional[int] = None,
+    naconmax: Optional[int] = None,
+    naccdmax: Optional[int] = None,
     njmax: Optional[int] = None,
     device: Optional[jax.Device] = None,
 ) -> mjx.Data:
   """Initialize MJX Data."""
   data = mjx.make_data(
-      model, impl=impl, nconmax=nconmax, njmax=njmax, device=device
+      model, impl=impl, naconmax=naconmax, naccdmax=naccdmax, njmax=njmax,
+      device=device,
   )
   if qpos is not None:
     data = data.replace(qpos=qpos)
@@ -159,35 +160,6 @@ def make_data(
   return data
 
 
-def init(
-    model: Union[mujoco.MjModel, mjx.Model],
-    qpos: Optional[jax.Array] = None,
-    qvel: Optional[jax.Array] = None,
-    ctrl: Optional[jax.Array] = None,
-    act: Optional[jax.Array] = None,
-    mocap_pos: Optional[jax.Array] = None,
-    mocap_quat: Optional[jax.Array] = None,
-    impl: Optional[str] = None,
-    nconmax: Optional[int] = None,
-    njmax: Optional[int] = None,
-    device: Optional[jax.Device] = None,
-) -> mjx.Data:
-  """Backwards-compatible alias used by existing envs."""
-  return make_data(
-      model,
-      qpos=qpos,
-      qvel=qvel,
-      ctrl=ctrl,
-      act=act,
-      mocap_pos=mocap_pos,
-      mocap_quat=mocap_quat,
-      impl=impl,
-      nconmax=nconmax,
-      njmax=njmax,
-      device=device,
-  )
-
-
 def step(
     model: mjx.Model,
     data: mjx.Data,
@@ -199,8 +171,7 @@ def step(
     data = mjx.step(model, data)
     return data, None
 
-  return single_step(data, None)[0]
-#   return jax.lax.scan(single_step, data, (), n_substeps)[0]
+  return jax.lax.scan(single_step, data, (), n_substeps)[0]
 
 
 @struct.dataclass
@@ -359,27 +330,7 @@ def render_array(
     hfield_data: Optional[jax.Array] = None,
 ):
   """Renders a trajectory as an array of images."""
-  gl_context = None
-  should_force_headless = not os.environ.get("DISPLAY") and os.environ.get(
-      "MUJOCO_GL"
-  ) in (None, "", "egl")
-
-  if should_force_headless:
-    import mujoco.egl
-
-    gl_context = mujoco.egl.GLContext(width, height)
-    gl_context.make_current()
-
-  try:
-    renderer = mujoco.Renderer(mj_model, height=height, width=width)
-  except mujoco.FatalError:
-    if gl_context is not None:
-      raise
-    import mujoco.egl
-
-    gl_context = mujoco.egl.GLContext(width, height)
-    gl_context.make_current()
-    renderer = mujoco.Renderer(mj_model, height=height, width=width)
+  renderer = mujoco.Renderer(mj_model, height=height, width=width)
   camera = camera if camera is not None else -1
 
   if hfield_data is not None:
@@ -397,22 +348,19 @@ def render_array(
       modify_scn_fn(renderer.scene)
     return renderer.render()
 
-  try:
-    if isinstance(trajectory, list):
-      out = []
-      for i, state in enumerate(tqdm.tqdm(trajectory)):
-        if modify_scene_fns is not None:
-          modify_scene_fn = modify_scene_fns[i]
-        else:
-          modify_scene_fn = None
-        out.append(get_image(state, modify_scene_fn))
-    else:
-      out = get_image(trajectory)
-    return out
-  finally:
-    renderer.close()
-    if gl_context is not None:
-      gl_context.free()
+  if isinstance(trajectory, list):
+    out = []
+    for i, state in enumerate(tqdm.tqdm(trajectory)):
+      if modify_scene_fns is not None:
+        modify_scene_fn = modify_scene_fns[i]
+      else:
+        modify_scene_fn = None
+      out.append(get_image(state, modify_scene_fn))
+  else:
+    out = get_image(trajectory)
+
+  renderer.close()
+  return out
 
 
 def get_sensor_data(

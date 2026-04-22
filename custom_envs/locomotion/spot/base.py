@@ -24,8 +24,7 @@ import mujoco
 from mujoco import mjx
 
 from custom_envs import mjx_env
-from custom_envs.locomotion import randomization_utils
-from mujoco_playground._src.locomotion.spot import spot_constants as consts
+from custom_envs.locomotion.spot import spot_constants as consts
 
 
 def get_assets() -> Dict[str, bytes]:
@@ -48,8 +47,9 @@ class SpotEnv(mjx_env.MjxEnv):
       config_overrides: Optional[Dict[str, Union[str, int, list[Any]]]] = None,
   ) -> None:
     super().__init__(config, config_overrides)
+    self._model_assets = get_assets()
     self._mj_model = mujoco.MjModel.from_xml_string(
-        epath.Path(xml_path).read_text(), assets=get_assets()
+        epath.Path(xml_path).read_text(), assets=self._model_assets
     )
     self._mj_model.opt.timestep = config.sim_dt
 
@@ -63,8 +63,14 @@ class SpotEnv(mjx_env.MjxEnv):
     self._mj_model.vis.global_.offwidth = 3840
     self._mj_model.vis.global_.offheight = 2160
 
-    self._mjx_model =  mjx.put_model(self._mj_model, impl=self._config.impl)
+    self._mjx_model = mjx.put_model(self._mj_model, impl=self._config.impl)
     self._xml_path = xml_path
+
+    # Contact sensor IDs.
+    self._feet_floor_found_sensor = [
+        self._mj_model.sensor(f"{geom}_floor_found").id
+        for geom in consts.FEET_GEOMS
+    ]
 
   # Sensor readings.
 
@@ -124,7 +130,3 @@ class SpotEnv(mjx_env.MjxEnv):
   @property
   def mjx_model(self) -> mjx.Model:
     return self._mjx_model
-
-  @property
-  def dr_range(self) -> tuple[jax.Array, jax.Array]:
-    return randomization_utils.make_default_dr_range(self._mjx_model)

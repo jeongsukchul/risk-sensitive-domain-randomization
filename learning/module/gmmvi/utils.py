@@ -184,6 +184,8 @@ def visualise_pairwise_2d_marginal(
     max_scatter_points: int = 300,
     marginal_mc_samples: int = 64,
     num_grid: int = 80,
+    max_dims: Optional[int] = 8,
+    dpi: int = 100,
     show: bool = False,
 ):
     """
@@ -200,7 +202,10 @@ def visualise_pairwise_2d_marginal(
     D = dr_range_low.shape[0]
 
     if dims is None:
-        dims = tuple(range(D))
+        if max_dims is not None and D > max_dims:
+            dims = tuple(np.linspace(0, D - 1, max_dims, dtype=int).tolist())
+        else:
+            dims = tuple(range(D))
     else:
         dims = tuple(dims)
 
@@ -227,8 +232,10 @@ def visualise_pairwise_2d_marginal(
     eval_samples_plot = _subsample_points(eval_samples, max_scatter_points, key2) if eval_samples is not None else None
 
     K = len(dims)
-    fig, axes = plt.subplots(K, K, figsize=(3.5 * K, 3.5 * K), squeeze=False)
+    fig, axes = plt.subplots(K, K, figsize=(3.5 * K, 3.5 * K), dpi=dpi, squeeze=False)
     fig.subplots_adjust(wspace=0.15, hspace=0.15)
+    if K < D:
+        fig.suptitle(f"Pairwise marginals for dims {dims} of {D}")
 
     mappable = None
 
