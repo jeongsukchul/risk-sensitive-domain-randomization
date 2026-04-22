@@ -67,7 +67,7 @@ def default_config() -> config_dict.ConfigDict:
           ),
       ),
       impl="warp",
-      naconmax=30 * 8192,
+      nconmax=30 * 8192,
       njmax=200,
   )
 
@@ -178,7 +178,7 @@ class Handstand(go1_base.Go1Env):
         qvel=qvel,
         ctrl=qpos[7:],
         impl=self.mjx_model.impl.value,
-        naconmax=self._config.naconmax,
+        nconmax=self._config.nconmax,
         njmax=self._config.njmax,
     )
     data = mjx.forward(self.mjx_model, data)

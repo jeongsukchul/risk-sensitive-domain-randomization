@@ -135,14 +135,13 @@ def make_data(
     mocap_pos: Optional[jax.Array] = None,
     mocap_quat: Optional[jax.Array] = None,
     impl: Optional[str] = None,
-    naconmax: Optional[int] = None,
-    naccdmax: Optional[int] = None,
+    nconmax: Optional[int] = None,
     njmax: Optional[int] = None,
     device: Optional[jax.Device] = None,
 ) -> mjx.Data:
   """Initialize MJX Data."""
   data = mjx.make_data(
-      model, impl=impl, naconmax=naconmax, naccdmax=naccdmax, njmax=njmax,
+      model, impl=impl, nconmax=nconmax, njmax=njmax,
       device=device,
   )
   if qpos is not None:
