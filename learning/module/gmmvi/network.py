@@ -53,15 +53,16 @@ def create_gmm_network_and_state(
 ):  
     
     gmm = setup_full_cov_gmm(dim, cfg.max_components, bound_info)
-    
+    num_initial_components = 20 if dim < 35 else 30
+    max_components = num_initial_components
     gmm_state = gmm.init_gmm_state(key,
-                                cfg.num_initial_components,
+                                num_initial_components,
                                 prior_mean,
                                 prior_scale,
                                 cfg.use_diagonal_convs,
                                 prior_scale**2)
     model = setup_gmm_wrapper(gmm,
-                            cfg.max_components,
+                            max_components,
                             cfg.initial_stepsize,
                             cfg.initial_l2_regularizer,
                             10000)
@@ -69,7 +70,7 @@ def create_gmm_network_and_state(
     sample_db = setup_sampledb(dim,
                             cfg.use_sample_database,
                             cfg.max_database_size,
-                            cfg.max_components,
+                            max_components,
                             cfg.use_diagonal_convs,
                             batch_size,
                             num_envs,
@@ -95,7 +96,7 @@ def create_gmm_network_and_state(
                         cfg.use_diagonal_convs,
                         cfg.del_iters,
                         cfg.add_iters,
-                        cfg.max_components,
+                        max_components,
                         cfg.thresholds_for_add_heuristic,
                         cfg.min_weight_for_del_heuristic,
                         cfg.num_database_samples)

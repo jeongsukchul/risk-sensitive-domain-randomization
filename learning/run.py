@@ -99,6 +99,7 @@ CAMERAS = {
     "T1JoystickRoughTerrain" :"track",
     "LeapCubeRotateZAxis" :"side",
     "LeapCubeReorient" :"side",
+    "AlohaHandOver" :None,
     "PandaPickCube" : None,
     "PandaPickCubeOrientation" : None,
     "PandaStackCube" : None,
