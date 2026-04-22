@@ -37,6 +37,7 @@ def default_config() -> config_dict.ConfigDict:
       early_termination=True,
       action_repeat=1,
       action_scale=0.3,
+      reward_scale_for_sampler = 30.0,
       obs_noise=0.05,
       obs_history_size=3,
       max_foot_height=0.07,

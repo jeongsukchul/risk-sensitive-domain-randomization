@@ -38,6 +38,7 @@ def default_config() -> config_dict.ConfigDict:
       early_termination=True,
       action_repeat=1,
       action_scale=0.3,
+      reward_scale_for_sampler = 30.0,
       history_len=3,
       obs_noise=config_dict.create(
           scales=config_dict.create(

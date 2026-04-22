@@ -402,6 +402,13 @@ def train(
 
   assert num_envs % device_count == 0
   import copy
+  reward_scale_for_sampler = float(
+      getattr(
+          getattr(environment, "_config", object()),
+          "reward_scale_for_sampler",
+          1.0,
+      )
+  )
   env = copy.deepcopy(environment)
   nominal_dynamics_params= env.nominal_params
   print("num timesteps", num_timesteps)
@@ -410,6 +417,7 @@ def train(
   print("nominal params", nominal_dynamics_params)
   print("dr range", env.dr_range)
   print("sampler update freq", sampler_update_freq)
+  print("reward scale for sampler", reward_scale_for_sampler)
   
   save_dir = make_dir(work_dir / "results" / sampler_choice)
   if hasattr(env,'dr_range') :
@@ -888,7 +896,11 @@ def train(
         length=num_updates_per_batch,
     )
     # if sampler_choice != "GMM":
-    values = jnp.maximum(rewards, 0).mean(axis=(0,1)) if sampler_choice!="EPOpt" else 0#+ bootstrap_value
+    values = (
+        jnp.maximum(rewards, 0).mean(axis=(0, 1)) * reward_scale_for_sampler
+        if sampler_choice != "EPOpt"
+        else 0
+    )  # + bootstrap_value
     cumulated_values += values
     # For Debuggin GMM
     # target = Funnel(dim=2, sample_bounds=[-30, 30])
