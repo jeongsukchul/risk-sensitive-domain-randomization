@@ -52,9 +52,9 @@ def create_gmm_network_and_state(
     bound_info : dict = None,
 ):  
     
-    gmm = setup_full_cov_gmm(dim, cfg.max_components, bound_info)
     num_initial_components = 20 if dim < 35 else 30
     max_components = num_initial_components
+    gmm = setup_full_cov_gmm(dim, max_components, bound_info)
     gmm_state = gmm.init_gmm_state(key,
                                 num_initial_components,
                                 prior_mean,
