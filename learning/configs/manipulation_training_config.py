@@ -38,7 +38,7 @@ def manipulation_ppo_config(env_name: str) -> config_dict.ConfigDict:
   )
   if env_name == "AlohaHandOver":
     rl_config.num_timesteps = 100_000_000
-    rl_config.num_evals = 25
+    rl_config.num_evals = 10
     rl_config.unroll_length = 15
     rl_config.num_minibatches = 32
     rl_config.num_updates_per_batch = 8

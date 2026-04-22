@@ -27,6 +27,31 @@ from custom_envs.manipulation.aloha import aloha_constants as consts
 from custom_envs.manipulation.aloha import base as aloha_base
 
 
+_FRICTION_GEOM_NAMES = (
+    "table",
+    "box",
+)
+_GRIPPER_FRICTION_GEOM_NAMES = (
+    "left/left_finger_top",
+    "left/left_finger_bottom",
+    "left/right_finger_top",
+    "left/right_finger_bottom",
+    "right/left_finger_top",
+    "right/left_finger_bottom",
+    "right/right_finger_top",
+    "right/right_finger_bottom",
+)
+_FRICTION_GEOM_IDS: tuple[int, ...] = ()
+_GRIPPER_FRICTION_GEOM_IDS: tuple[int, ...] = ()
+_GRIPPER_BODY_NAMES = (
+    "left/left_finger_link",
+    "left/right_finger_link",
+    "right/left_finger_link",
+    "right/right_finger_link",
+)
+_GRIPPER_BODY_IDS: tuple[int, ...] = ()
+
+
 def default_config() -> config_dict.ConfigDict:
   return config_dict.create(
       ctrl_dt=0.02,
@@ -89,6 +114,21 @@ class HandOver(aloha_base.AlohaEnv):
     self._handover_pos = jp.array([0.0, 0.0, 0.24])
 
     self._box_geom = self._mj_model.geom('box').id
+    self._friction_geom_ids = tuple(
+        self._mj_model.geom(name).id for name in _FRICTION_GEOM_NAMES
+    )
+    global _FRICTION_GEOM_IDS
+    _FRICTION_GEOM_IDS = self._friction_geom_ids
+    self._gripper_friction_geom_ids = tuple(
+        self._mj_model.geom(name).id for name in _GRIPPER_FRICTION_GEOM_NAMES
+    )
+    global _GRIPPER_FRICTION_GEOM_IDS
+    _GRIPPER_FRICTION_GEOM_IDS = self._gripper_friction_geom_ids
+    self._gripper_body_ids = tuple(
+        self._mj_model.body(name).id for name in _GRIPPER_BODY_NAMES
+    )
+    global _GRIPPER_BODY_IDS
+    _GRIPPER_BODY_IDS = self._gripper_body_ids
     self._picked_q = self._mj_model.keyframe('picked').qpos
     self._picked_ctrl = self._mj_model.keyframe('picked').ctrl
     self._transferred_q = self._mj_model.keyframe('transferred').qpos
@@ -290,11 +330,11 @@ class HandOver(aloha_base.AlohaEnv):
     ])
     privileged_state = jp.concatenate([
         state,
-        self.mjx_model.geom_friction[:, 0],
-        self.mjx_model.body_mass[:],
-        self.mjx_model.dof_damping[:],
-        self.mjx_model.dof_armature[:],
-        self.mjx_model.actuator_gainprm[:, 0],
+        self.mjx_model.geom_friction[jp.array(self._friction_geom_ids), 0],
+        self.mjx_model.geom_friction[
+            jp.array([self._gripper_friction_geom_ids[0]]), 0
+        ],
+        self.mjx_model.body_mass[jp.array(self._gripper_body_ids)],
     ])
 
     return {
@@ -304,30 +344,27 @@ class HandOver(aloha_base.AlohaEnv):
   @property
   def nominal_params(self) -> jax.Array:
     return jp.ones(
-        self.mjx_model.geom_friction.shape[0]
-        + self.mjx_model.body_mass.shape[0]
-        + self.mjx_model.dof_damping.shape[0]
-        + self.mjx_model.dof_armature.shape[0]
-        + self.mjx_model.actuator_gainprm.shape[0]
+        len(self._friction_geom_ids)
+        + 3
     )
 
   @property
   def dr_range(self) -> tuple[jax.Array, jax.Array]:
-    low = jp.concatenate([
-        jp.full((self.mjx_model.geom_friction.shape[0],), 0.9),
-        jp.full((self.mjx_model.body_mass.shape[0],), 0.9),
-        jp.full((self.mjx_model.dof_damping.shape[0],), 0.9),
-        jp.full((self.mjx_model.dof_armature.shape[0],), 0.9),
-        jp.full((self.mjx_model.actuator_gainprm.shape[0],), 0.9),
-    ])
-    high = jp.concatenate([
-        jp.full((self.mjx_model.geom_friction.shape[0],), 1.1),
-        jp.full((self.mjx_model.body_mass.shape[0],), 1.1),
-        jp.full((self.mjx_model.dof_damping.shape[0],), 1.1),
-        jp.full((self.mjx_model.dof_armature.shape[0],), 1.1),
-        jp.full((self.mjx_model.actuator_gainprm.shape[0],), 1.1),
-    ])
-    return low, high
+    """Defines lower and upper bounds for each handover DR parameter."""
+    low, high = [], []
+
+    # 1. Selected geom friction scales.
+    low.append(jp.array([0.9])); high.append(jp.array([1.1]))  # table
+    low.append(jp.array([0.9])); high.append(jp.array([1.1]))  # box
+
+    # 2. Object mass scale.
+    low.append(jp.array([0.9])); high.append(jp.array([1.1]))  # box
+
+    # 3. Shared gripper dynamics scales.
+    low.append(jp.array([0.9])); high.append(jp.array([1.1]))  # gripper frictions
+    low.append(jp.array([0.9])); high.append(jp.array([1.1]))  # gripper mass 
+
+    return jp.concatenate(low), jp.concatenate(high)
 
 
 def domain_randomize(
@@ -336,67 +373,74 @@ def domain_randomize(
     params: jax.Array = None,
     rng: jax.Array = None,
 ):
-  """Applies full per-geom/body/DOF/actuator DR to AlohaHandOver.
+  """Applies selected geom friction and gripper mass DR to AlohaHandOver.
 
   Supports both single params (shape [D]) and batched params (shape [B, D]).
   """
   dr_low, dr_high = dr_range
-  ngeom = model.geom_friction.shape[0]
-  nbody = model.body_mass.shape[0]
-  nv = model.dof_damping.shape[0]
-  nu = model.actuator_gainprm.shape[0]
+  if not _FRICTION_GEOM_IDS:
+    raise ValueError("Handover friction geom ids are not initialized.")
+  if not _GRIPPER_FRICTION_GEOM_IDS:
+    raise ValueError("Handover gripper friction geom ids are not initialized.")
+  if not _GRIPPER_BODY_IDS:
+    raise ValueError("Handover gripper body ids are not initialized.")
+  friction_geom_ids = jp.array(_FRICTION_GEOM_IDS)
+  gripper_friction_geom_ids = jp.array(_GRIPPER_FRICTION_GEOM_IDS)
+  gripper_body_ids = jp.array(_GRIPPER_BODY_IDS)
+  ngeom = len(_FRICTION_GEOM_IDS)
 
   def _shift(p):
     idx = 0
     geom_friction_scale = p[idx : idx + ngeom]
     idx += ngeom
-    body_mass_scale = p[idx : idx + nbody]
-    idx += nbody
-    dof_damping_scale = p[idx : idx + nv]
-    idx += nv
-    dof_armature_scale = p[idx : idx + nv]
-    idx += nv
-    actuator_gain_scale = p[idx : idx + nu]
-    idx += nu
+    box_mass_scale = p[idx]
+    idx += 1
+    gripper_friction_scale = p[idx]
+    idx += 1
+    gripper_mass_scale = p[idx]
+    idx += 1
     assert idx == len(dr_low)
 
     geom_friction = model.geom_friction.at[:, 0].set(
-        model.geom_friction[:, 0] * geom_friction_scale
+        model.geom_friction[:, 0]
     )
-    body_mass = model.body_mass * body_mass_scale
-    dof_damping = model.dof_damping * dof_damping_scale
-    dof_armature = model.dof_armature * dof_armature_scale
+    geom_friction = geom_friction.at[friction_geom_ids, 0].set(
+        model.geom_friction[friction_geom_ids, 0] * geom_friction_scale
+    )
+    geom_friction = geom_friction.at[gripper_friction_geom_ids, 0].set(
+        model.geom_friction[gripper_friction_geom_ids, 0]
+        * gripper_friction_scale
+    )
+    box_body = model.body_mass.shape[0] - 2
+    body_mass = model.body_mass.at[box_body].set(
+        model.body_mass[box_body] * box_mass_scale
+    )
+    body_mass = body_mass.at[gripper_body_ids].set(
+        model.body_mass[gripper_body_ids] * gripper_mass_scale
+    )
 
-    kp_val = model.actuator_gainprm[:, 0] * actuator_gain_scale
-    actuator_gainprm = model.actuator_gainprm.at[:, 0].set(kp_val)
-    actuator_biasprm = model.actuator_biasprm.at[:, 1].set(-kp_val)
-
-    return geom_friction, body_mass, dof_damping, dof_armature, actuator_gainprm, actuator_biasprm
+    return geom_friction, body_mass
 
   if rng is not None:
     if rng.ndim == 1:
       p = jax.random.uniform(rng, (len(dr_low),), minval=dr_low, maxval=dr_high)
-      geom_friction, body_mass, dof_damping, dof_armature, actuator_gainprm, actuator_biasprm = _shift(p)
+      geom_friction, body_mass = _shift(p)
     else:
       dist = functools.partial(
           jax.random.uniform, shape=(len(dr_low),), minval=dr_low, maxval=dr_high
       )
-      geom_friction, body_mass, dof_damping, dof_armature, actuator_gainprm, actuator_biasprm = jax.vmap(
+      geom_friction, body_mass = jax.vmap(
           lambda key: _shift(dist(key))
       )(rng)
   else:
     if params.ndim == 1:
-      geom_friction, body_mass, dof_damping, dof_armature, actuator_gainprm, actuator_biasprm = _shift(params)
+      geom_friction, body_mass = _shift(params)
     else:
-      geom_friction, body_mass, dof_damping, dof_armature, actuator_gainprm, actuator_biasprm = jax.vmap(_shift)(params)
+      geom_friction, body_mass = jax.vmap(_shift)(params)
 
   model = model.tree_replace({
       "geom_friction": geom_friction,
       "body_mass": body_mass,
-      "dof_damping": dof_damping,
-      "dof_armature": dof_armature,
-      "actuator_gainprm": actuator_gainprm,
-      "actuator_biasprm": actuator_biasprm,
   })
 
   in_axes = jax.tree_util.tree_map(lambda x: None, model)
@@ -406,10 +450,6 @@ def domain_randomize(
     in_axes = in_axes.tree_replace({
         "geom_friction": 0,
         "body_mass": 0,
-        "dof_damping": 0,
-        "dof_armature": 0,
-        "actuator_gainprm": 0,
-        "actuator_biasprm": 0,
     })
 
   return model, in_axes
