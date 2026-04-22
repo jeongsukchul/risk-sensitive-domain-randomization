@@ -9,6 +9,4 @@ learning/logs
 learning/outputs
 .git/
 external_deps/
-learning/module/gbs/
-dummy/
-compare_GBS_GMMVI/
+learning/module/gbs/wandb
