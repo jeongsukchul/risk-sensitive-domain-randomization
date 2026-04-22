@@ -37,7 +37,7 @@ def default_config() -> config_dict.ConfigDict:
       Kd=0.5,
       action_repeat=1,
       action_scale=0.3,
-      rewrad_scale_for_sampler=20.,
+      reward_scale_for_sampler=20.,
       soft_joint_pos_limit_factor=0.9,
       init_from_crouch=0.0,
       energy_termination_threshold=np.inf,

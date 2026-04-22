@@ -16,7 +16,7 @@ def make_default_dr_range(
     armature_range: tuple[float, float] = (1.0, 1.05),
     torso_ipos_offset_range: tuple[float, float] = (-0.05, 0.05),
     body_mass_range: tuple[float, float] = (0.5, 1.5),
-    torso_mass_offset_range: tuple[float, float] = (-1.0, 1.0),
+    torso_mass_offset_range: tuple[float, float] = (-1.5, 1.5),
     qpos_offset_range: tuple[float, float] = (-0.05, 0.05),
 ) -> tuple[jax.Array, jax.Array]:
   """Builds a parameter range matching current Playground locomotion DR fields."""
