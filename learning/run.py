@@ -90,6 +90,7 @@ CAMERAS = {
     "WalkerStand": "side",
     "Go1Handstand": "side",
     "Go1JoystickFlatTerrain": "track",
+    "Op3Joystick": "track",
     "Go1JoystickRoughTerrain": "track",
     "SpotJoystickGaitTracking": "track",
     "G1InplaceGaitTracking" : "track",

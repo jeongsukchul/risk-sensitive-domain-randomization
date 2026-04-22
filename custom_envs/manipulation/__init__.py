@@ -23,7 +23,7 @@ from custom_envs import mjx_env
 
 mjx_env.ensure_menagerie_exists()  # Ensure menagerie exists before importing env modules.
 
-# from custom_envs.manipulation.aloha import handover as aloha_handover
+from custom_envs.manipulation.aloha import handover as aloha_handover
 # from custom_envs.manipulation.aloha import single_peg_insertion as aloha_peg
 from custom_envs.manipulation.franka_emika_panda import open_cabinet as panda_open_cabinet
 from custom_envs.manipulation.franka_emika_panda import nut_thread as panda_nut_thread
@@ -35,7 +35,7 @@ from custom_envs.manipulation.leap_hand import reorient as leap_cube_reorient
 from custom_envs.manipulation.leap_hand import rotate_z as leap_rotate_z
 
 _envs = {
-    # "AlohaHandOver": aloha_handover.HandOver,
+    "AlohaHandOver": aloha_handover.HandOver,
     # "AlohaSinglePegInsertion": aloha_peg.SinglePegInsertion,
     # "AlohaPegInsertion": aloha_peg.SinglePegInsertion,
     "PandaPickCube": panda_pick.PandaPickCube,
@@ -50,7 +50,7 @@ _envs = {
 }
 
 _cfgs = {
-    # "AlohaHandOver": aloha_handover.default_config,
+    "AlohaHandOver": aloha_handover.default_config,
     # "AlohaSinglePegInsertion": aloha_peg.default_config,
     # "AlohaPegInsertion": aloha_peg.default_config,
     "PandaPickCube": panda_pick.default_config,
@@ -65,7 +65,7 @@ _cfgs = {
 }
 
 _randomizer = {
-    # "AlohaHandOver": aloha_handover.domain_randomize,
+    "AlohaHandOver": aloha_handover.domain_randomize,
     # "AlohaSinglePegInsertion": aloha_peg.domain_randomize,
     # "AlohaPegInsertion": aloha_peg.domain_randomize,
     "LeapCubeRotateZAxis": leap_rotate_z.domain_randomize,
@@ -80,7 +80,7 @@ _randomizer = {
 
 _randomizer_eval = {
     # "LeapCubeRotateZAxis": leap_rotate_z.domain_randomize_eval,
-    # "AlohaHandOver": aloha_handover.domain_randomize_eval,
+    "AlohaHandOver": aloha_handover.domain_randomize_eval,
     # "AlohaSinglePegInsertion": aloha_peg.domain_randomize_eval,
     # "AlohaPegInsertion": aloha_peg.domain_randomize_eval,
     "LeapCubeReorient": leap_cube_reorient.domain_randomize_eval,

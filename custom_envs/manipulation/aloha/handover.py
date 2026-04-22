@@ -14,13 +14,13 @@
 # ==============================================================================
 """Handover task for ALOHA."""
 
+import functools
 from typing import Any, Dict, Optional, Union
 
 import jax
 from jax import numpy as jp
 from ml_collections import config_dict
 from mujoco import mjx
-import functools
 
 from custom_envs import mjx_env
 from custom_envs.manipulation.aloha import aloha_constants as consts
@@ -42,7 +42,7 @@ def default_config() -> config_dict.ConfigDict:
               no_table_collision=0.3,
           ),
       ),
-      impl='jax',
+      impl='warp',
       nconmax=24 * 2048,
       njmax=88,
   )
@@ -205,9 +205,6 @@ class HandOver(aloha_base.AlohaEnv):
         | jp.isnan(data.qvel).any()
         | dropped
     )
-    reward_finite = jp.isfinite(reward)
-    done = done | (~reward_finite)
-    reward = jp.where(reward_finite, reward, 0.0)
     state.info['_steps'] += self._config.action_repeat
     state.info['_steps'] = jp.where(
         done | (state.info['_steps'] >= self._config.episode_length),
@@ -264,7 +261,7 @@ class HandOver(aloha_base.AlohaEnv):
         'no_table_collision': 1 - table_collision,
     }
 
-  def _get_obs(self, data: mjx.Data, info: Dict[str, Any]) -> dict[str, jax.Array]:
+  def _get_obs(self, data: mjx.Data, info: Dict[str, Any]) -> jax.Array:
     left_gripper_pos = data.site_xpos[self._left_gripper_site]
     left_gripper_mat = data.site_xmat[self._left_gripper_site]
     right_gripper_pos = data.site_xpos[self._right_gripper_site]
@@ -291,42 +288,44 @@ class HandOver(aloha_base.AlohaEnv):
             float
         ),
     ])
-
     privileged_state = jp.concatenate([
         state,
-        data.qfrc_bias,
-        data.actuator_force,
-        jp.mean(self.mjx_model.geom_friction[:, 0:1], axis=0),
+        self.mjx_model.geom_friction[:, 0],
         self.mjx_model.body_mass[:],
+        self.mjx_model.dof_damping[:],
+        self.mjx_model.dof_armature[:],
         self.mjx_model.actuator_gainprm[:, 0],
-        self.mjx_model.dof_damping[:16],
-        self.mjx_model.dof_armature[:16],
     ])
 
     return {
         "state": state,
         "privileged_state": privileged_state,
     }
-
   @property
   def nominal_params(self) -> jax.Array:
-    return jp.ones(5)
+    return jp.ones(
+        self.mjx_model.geom_friction.shape[0]
+        + self.mjx_model.body_mass.shape[0]
+        + self.mjx_model.dof_damping.shape[0]
+        + self.mjx_model.dof_armature.shape[0]
+        + self.mjx_model.actuator_gainprm.shape[0]
+    )
 
   @property
   def dr_range(self) -> tuple[jax.Array, jax.Array]:
-    low = jp.array([
-        0.3,  # geom friction (mu)
-        0.1,  # object mass scale
-        0.8,  # robot mass scale
-        0.8,  # joint damping scale
-        0.9,  # actuator gain scale
+    low = jp.concatenate([
+        jp.full((self.mjx_model.geom_friction.shape[0],), 0.9),
+        jp.full((self.mjx_model.body_mass.shape[0],), 0.9),
+        jp.full((self.mjx_model.dof_damping.shape[0],), 0.9),
+        jp.full((self.mjx_model.dof_armature.shape[0],), 0.9),
+        jp.full((self.mjx_model.actuator_gainprm.shape[0],), 0.9),
     ])
-    high = jp.array([
-        3.0,
-        10.0,
-        1.2,
-        1.2,
-        1.1,
+    high = jp.concatenate([
+        jp.full((self.mjx_model.geom_friction.shape[0],), 1.1),
+        jp.full((self.mjx_model.body_mass.shape[0],), 1.1),
+        jp.full((self.mjx_model.dof_damping.shape[0],), 1.1),
+        jp.full((self.mjx_model.dof_armature.shape[0],), 1.1),
+        jp.full((self.mjx_model.actuator_gainprm.shape[0],), 1.1),
     ])
     return low, high
 
@@ -337,39 +336,38 @@ def domain_randomize(
     params: jax.Array = None,
     rng: jax.Array = None,
 ):
-  """Applies domain randomization to AlohaHandOver MJX model.
+  """Applies full per-geom/body/DOF/actuator DR to AlohaHandOver.
 
   Supports both single params (shape [D]) and batched params (shape [B, D]).
   """
   dr_low, dr_high = dr_range
-  obj_body = model.body_mass.shape[0] - 2  # 'box' (mocap_target is last)
-  obj_dofs = 6  # free joint
+  ngeom = model.geom_friction.shape[0]
+  nbody = model.body_mass.shape[0]
+  nv = model.dof_damping.shape[0]
+  nu = model.actuator_gainprm.shape[0]
 
   def _shift(p):
     idx = 0
-    friction_mu = p[idx]
-    idx += 1
-    obj_mass_scale = p[idx]
-    idx += 1
-    robot_mass_scale = p[idx]
-    idx += 1
-    damping_scale = p[idx]
-    idx += 1
-    gain_scale = p[idx]
-    idx += 1
+    geom_friction_scale = p[idx : idx + ngeom]
+    idx += ngeom
+    body_mass_scale = p[idx : idx + nbody]
+    idx += nbody
+    dof_damping_scale = p[idx : idx + nv]
+    idx += nv
+    dof_armature_scale = p[idx : idx + nv]
+    idx += nv
+    actuator_gain_scale = p[idx : idx + nu]
+    idx += nu
     assert idx == len(dr_low)
 
-    geom_friction = model.geom_friction.at[:, 0].set(friction_mu)
-    body_mass = model.body_mass
-    body_mass = body_mass.at[1:obj_body].set(body_mass[1:obj_body] * robot_mass_scale)
-    body_mass = body_mass.at[obj_body].set(body_mass[obj_body] * obj_mass_scale)
-
-    dof_damping = model.dof_damping.at[: model.nv - obj_dofs].set(
-        model.dof_damping[: model.nv - obj_dofs] * damping_scale
+    geom_friction = model.geom_friction.at[:, 0].set(
+        model.geom_friction[:, 0] * geom_friction_scale
     )
-    dof_armature = model.dof_armature
+    body_mass = model.body_mass * body_mass_scale
+    dof_damping = model.dof_damping * dof_damping_scale
+    dof_armature = model.dof_armature * dof_armature_scale
 
-    kp_val = model.actuator_gainprm[:, 0] * gain_scale
+    kp_val = model.actuator_gainprm[:, 0] * actuator_gain_scale
     actuator_gainprm = model.actuator_gainprm.at[:, 0].set(kp_val)
     actuator_biasprm = model.actuator_biasprm.at[:, 1].set(-kp_val)
 
