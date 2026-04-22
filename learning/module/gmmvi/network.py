@@ -41,6 +41,7 @@ class GMMNetwork(NamedTuple):
     sample_selector : Callable
     component_stepsize_fn : Callable
     weight_updater : Callable
+    use_grad_info : bool
 
 def create_gmm_network_and_state(
     dim : int,
@@ -50,6 +51,7 @@ def create_gmm_network_and_state(
     prior_mean : float = 0.,
     prior_scale : float = .3,
     bound_info : dict = None,
+    use_grad_info : bool = False,
 ):  
     gmm = setup_full_cov_gmm(dim, cfg.max_components, bound_info)
     # The current trainer only consumes the newest training batch from SampleDB.
@@ -133,5 +135,6 @@ def create_gmm_network_and_state(
             component_updater=ng_update_fn,
             sample_selector=sample_selector,
             component_stepsize_fn=component_stepsize_fn,
-            weight_updater=weight_update_fn)
+            weight_updater=weight_update_fn,
+            use_grad_info=use_grad_info)
     return initial_train_state, gmm_network

@@ -309,23 +309,26 @@ def train(
     end_beta : float = -40.,
     scheduler_mode : str = "linear",
     trust_region : float = 0.005,
+    use_grad_info : bool = False,
     # GBS hyperparameters (aligned with module/gbs/gbs_test.py defaults)
     gbs_process_type: str = "vp",  # "vp" or "langevin"
-    gbs_num_steps: int = 100,
-    gbs_lr: float = 1e-3,
+    gbs_num_steps: int = 50,
+    gbs_lr: float = 5e-4,
     gbs_clip_grad: float = 1.0,
     gbs_init_std: float = 1.0,
-    gbs_loss_mode: str = "tr_lv",  # "tr_lv" or "tr_lv_subtraj"
+    gbs_loss_mode: str = "tr_dds_lv",  # "dis_lv", "dds_lv", or "tr_dds_lv"
     gbs_max_rnd: float = 1e8,
-    gbs_subtraj_prob: float = 0.5,
-    gbs_fix_terminal: bool = False,
-    gbs_subtraj_steps: Optional[int] = None,
+    gbs_trust_region_bound: float = 0.1,
+    gbs_trust_region_lambda_max: float = 50.0,
+    gbs_trust_region_lambda_grid_size: int = 128,
+    gbs_minibatch_size: int = 2000,
+    gbs_minibatch_steps: int = 400,
     gbs_sde_ctrl_noise: Optional[float] = None,
     gbs_sde_ctrl_dropout: Optional[float] = None,
     gbs_use_tanh_bijection: bool = True,
     gbs_model_type: str = "pisgrad",  # "pisgrad" or "potential"
-    gbs_model_num_layers: int = 2,
-    gbs_model_num_hid: int = 64,
+    gbs_model_num_layers: int = 6,
+    gbs_model_num_hid: int = 256,
     gbs_sigma_const: float = 1.0,
     gbs_vp_diff_coeff_sq_min: float = 0.1,
     gbs_vp_diff_coeff_sq_max: float = 10.0,
@@ -521,6 +524,7 @@ def train(
       success_rate_condition= success_rate_condition,
       sampler_choice = sampler_choice,
       kl_upper_bound = trust_region,
+      use_grad_info = use_grad_info,
     )
   init_autodr_state, init_doraemon_state, init_flow_state, init_gmm_state = init_states
   scheduler, init_scheduler_state =  GMMScheduler.create(
@@ -618,7 +622,7 @@ def train(
         apply_fn=gbs_model_bwd.apply, params=gbs_bwd_params, tx=gbs_optimizer
     )
     init_flow_state = (gbs_fwd_state, gbs_bwd_state)
-  gmm_update_fn = samplerppo_losses.make_gmm_update(samplerppo_network.gmm_network)
+  gmm_update_fn = samplerppo_losses.make_gmm_update(samplerppo_network.gmm_network, use_grad_info)
   gradient_update_fn = gradients.gradient_update_fn(
       loss_fn, optimizer, pmap_axis_name=_PMAP_AXIS_NAME, has_aux=True
   )
@@ -641,27 +645,28 @@ def train(
     _, state = nnx.split(model)
     return (loss, new_state, new_opt_state), others
 
-  gbs_sampler_jit = samplerppo_losses.make_gbs_sampler_jit()
-  gbs_train_step_jit = samplerppo_losses.make_gbs_train_step_jit(
-      gbs_batch_size=gbs_batch_size,
-      gbs_prior_sampler=gbs_prior_sampler,
-      gbs_num_steps=gbs_num_steps,
-      gbs_process=gbs_process,
-      gbs_loss_mode=gbs_loss_mode,
-      gbs_model_type=gbs_model_type,
-      gbs_subtraj_prob=gbs_subtraj_prob,
-      gbs_fix_terminal=gbs_fix_terminal,
-      gbs_subtraj_steps=gbs_subtraj_steps,
-      gbs_sde_ctrl_noise=gbs_sde_ctrl_noise,
-      gbs_sde_ctrl_dropout=gbs_sde_ctrl_dropout,
-      gbs_center=gbs_center,
-      gbs_domain_low=dr_range_low,
-      gbs_domain_high=dr_range_high,
-      gbs_use_tanh_bijection=gbs_use_tanh_bijection,
-      gbs_logabsdet=gbs_logabsdet,
-      gbs_prior=gbs_prior,
-      gbs_max_rnd=gbs_max_rnd,
-  )
+  # gbs_sampler_jit = samplerppo_losses.make_gbs_sampler_jit(
+  #   gbs_loss_mode)
+  # gbs_train_step_jit = samplerppo_losses.make_gbs_train_step_jit(
+  #     gbs_batch_size=gbs_batch_size,
+  #     gbs_prior_sampler=gbs_prior_sampler,
+  #     gbs_num_steps=gbs_num_steps,
+  #     gbs_process=gbs_process,
+  #     gbs_loss_mode=gbs_loss_mode,
+  #     gbs_model_type=gbs_model_type,
+  #     gbs_sde_ctrl_noise=gbs_sde_ctrl_noise,
+  #     gbs_sde_ctrl_dropout=gbs_sde_ctrl_dropout,
+  #     gbs_center=gbs_center,
+  #     gbs_use_tanh_bijection=gbs_use_tanh_bijection,
+  #     gbs_logabsdet=gbs_logabsdet,
+  #     gbs_prior=gbs_prior,
+  #     gbs_max_rnd=gbs_max_rnd,
+  #     gbs_trust_region_bound=gbs_trust_region_bound,
+  #     gbs_trust_region_lambda_max=gbs_trust_region_lambda_max,
+  #     gbs_trust_region_lambda_grid_size=gbs_trust_region_lambda_grid_size,
+  #     gbs_minibatch_size=gbs_minibatch_size,
+  #     gbs_minibatch_steps=gbs_minibatch_steps,
+  # )
   metrics_aggregator = metric_logger.EpisodeMetricsLogger(
       steps_between_logging=training_metrics_steps
       or env_step_per_training_step,
@@ -813,29 +818,30 @@ def train(
     elif sampler_choice == "GBS":
       fwd_state, bwd_state = training_state.flow_state
       gbs_sample_keys = jax.random.split(param_key, gbs_num_updates)
-      def _sample_gbs_one(sample_key):
-        _, dynamics_params_latent, _ = gbs_sampler_jit(
-            sample_key,
-            (fwd_state, bwd_state),
-            fwd_state.params,
-            gbs_batch_size,
-            gbs_prior_sampler,
-            gbs_num_steps,
-            gbs_process,
-            True,
-            gbs_sde_ctrl_noise,
-            gbs_sde_ctrl_dropout,
-            gbs_center,
-        )
-        return (
-            gbs_to_box(dynamics_params_latent)
-            if gbs_use_tanh_bijection
-            else dynamics_params_latent
-        )
-      sampled_dynamics_params = jnp.reshape(
-          jax.vmap(_sample_gbs_one)(gbs_sample_keys),
-          (sampler_rollout_batch_size, len(dr_range_low)),
-      )
+      # def _sample_gbs_one(sample_key):
+      #   _, dynamics_params_latent, _ = gbs_sampler_jit(
+      #       sample_key,
+      #       (fwd_state, bwd_state),
+      #       fwd_state.params,
+      #       bwd_state.params,
+      #       gbs_batch_size,
+      #       gbs_prior_sampler,
+      #       gbs_num_steps,
+      #       gbs_process,
+      #       True,
+      #       gbs_sde_ctrl_noise,
+      #       gbs_sde_ctrl_dropout,
+      #       gbs_center,
+      #   )
+      #   return (
+      #       gbs_to_box(dynamics_params_latent)
+      #       if gbs_use_tanh_bijection
+      #       else dynamics_params_latent
+      #   )
+      # sampled_dynamics_params = jnp.reshape(
+      #     jax.vmap(_sample_gbs_one)(gbs_sample_keys),
+      #     (sampler_rollout_batch_size, len(dr_range_low)),
+      # )
 
     elif sampler_choice == "GMM":
         sampled_dynamics_params, mapping = samplerppo_network.gmm_network.model.sample(
@@ -870,10 +876,19 @@ def train(
       rollout_dynamics_params = jnp.concatenate(
           [model_params, reset_params], axis=-1
       )
-    # obs_for_approx = jax.tree_util.tree_map(lambda x: x.reshape(-1, *x.shape[2:]), data.observation)
-    # value_approx = samplerppo_network.value_network.apply(training_state.normalizer_params, training_state.params.value, obs_for_approx)
-    # value_approx =value_approx.mean(0) / 2 / episode_length
-
+    # def value_grad(dr_params):
+    obs_for_approx = jax.tree_util.tree_map(lambda x: x.reshape(-1, *x.shape[2:]), data.observation)
+    obs_for_approx = jax.tree_util.tree_map(lambda x: x.swapaxes(0, 1), obs_for_approx)
+    grad_info = 0
+    print("obs batched", obs_for_approx)
+    def value_grad_fn(dr_params, obs):
+        obs["privileged_state"] = obs["privileged_state"].at[..., -len(dr_range_low):].set(dr_params)
+        value_approx =  samplerppo_network.value_network.apply(training_state.normalizer_params, training_state.params.value, obs)
+        results= value_approx.mean(0) / 2 / episode_length
+        return results
+    value_approx, grad_info = jax.vmap(jax.value_and_grad(value_grad_fn))(rollout_dynamics_params, obs_for_approx)
+    print('value_approx', value_approx)
+    print('grad_info', grad_info)
     if rewards is None:
       rewards = data.reward  # (K, L, B)
     rollout_episode_done = data.extras['state_extras']['episode_done']
@@ -935,7 +950,9 @@ def train(
     )
     print("mean_partial_episode_reward_rate", mean_partial_episode_reward_rate)
     values = mean_partial_episode_reward_rate if sampler_choice!="EPOpt" else 0
+    values = value_approx if use_grad_info else values
     cumulated_values += values
+    # cumulated_value_grad += grad_info
     if use_scheduling:
       scheduler_key, key = jax.random.split(key)
       scheduler_state = training_state.scheduler_state
@@ -1031,9 +1048,11 @@ def train(
 
     def update_gmm(gts):
       target_lnpdf = _beta * cumulated_values/sampler_update_freq
+      target_lnpdf_grad = _beta * grad_info/sampler_update_freq
+
       new_sample_db_state = samplerppo_network.gmm_network.sample_selector.save_samples(gts.model_state, \
                     gts.sample_db_state, sampled_dynamics_params, target_lnpdf, \
-                      jnp.zeros_like(sampled_dynamics_params), mapping)
+                      target_lnpdf_grad, mapping)
       new_gmm_training_state = gts._replace(sample_db_state=new_sample_db_state)
       new_gmm_training_state = gmm_update_fn(new_gmm_training_state, key_update)
 
@@ -1073,7 +1092,7 @@ def train(
       averaged_cumulated_values = (
           averaged_cumulated_values * scale_for_sampler
       )
-    target_lnpdf_for_logging = _beta * averaged_cumulated_values
+    value_logging = averaged_cumulated_values
     metrics.update({
       # 'sampler_partial_episode_return_min': update_signal * mean_partial_episode_return.min(),
       # 'sampler_partial_episode_return_max': update_signal * mean_partial_episode_return.max(),
@@ -1096,13 +1115,13 @@ def train(
       'sampler_values_q50': update_signal * jnp.quantile(averaged_cumulated_values, .50),
       'sampler_values_q75': update_signal * jnp.quantile(averaged_cumulated_values, .75),
       'sampler_values_std': update_signal * averaged_cumulated_values.std(),
-      'target_pdf_min': update_signal * target_lnpdf_for_logging.min(),
-      'target_pdf_max': update_signal * target_lnpdf_for_logging.max(),
-      'target_pdf_mean': update_signal * target_lnpdf_for_logging.mean(),
-      'target_pdf_q25': update_signal * jnp.quantile(target_lnpdf_for_logging, .25),
-      'target_pdf_q50': update_signal * jnp.quantile(target_lnpdf_for_logging, .50),
-      'target_pdf_q75': update_signal * jnp.quantile(target_lnpdf_for_logging, .75),
-      'target_pdf_std': update_signal * target_lnpdf_for_logging.std(),
+      'value_logging_min': update_signal * value_logging.min(),
+      'value_logging_max': update_signal * value_logging.max(),
+      'value_logging_mean': update_signal * value_logging.mean(),
+      'value_logging_q25': update_signal * jnp.quantile(value_logging, .25),
+      'value_logging_q50': update_signal * jnp.quantile(value_logging, .50),
+      'value_logging_q75': update_signal * jnp.quantile(value_logging, .75),
+      'value_logging_std': update_signal * value_logging.std(),
       'beta': update_signal * _beta,
     })
     new_training_state = TrainingState(
@@ -1341,6 +1360,7 @@ def train(
         sample_key,
         (fwd_state, bwd_state),
         fwd_state.params,
+        bwd_state.params,
         2**14,
         gbs_prior_sampler,
         gbs_num_steps,
@@ -1461,6 +1481,7 @@ def train(
         sample_key,
         (fwd_state, bwd_state),
         fwd_state.params,
+        bwd_state.params,
         gbs_batch_size,
         gbs_prior_sampler,
         gbs_num_steps,
@@ -1654,6 +1675,7 @@ def train(
                 metric_key,
                 (fwd_state, bwd_state),
                 fwd_state.params,
+                bwd_state.params,
                 num_samples_bench,
                 gbs_prior_sampler,
                 gbs_num_steps,
@@ -1832,6 +1854,7 @@ def train(
             sample_key,
             (fwd_state, bwd_state),
             fwd_state.params,
+            bwd_state.params,
             gbs_batch_size,
             gbs_prior_sampler,
             gbs_num_steps,
@@ -1976,34 +1999,35 @@ def train(
       elif run_evals and sampler_visualization and len(dr_range_low)>2 and sampler_choice=="GBS":
         sample_key, local_key = jax.random.split(local_key)
         fwd_state, bwd_state = _unpmap(training_state.flow_state)
-        _, samples_latent, _ = gbs_sampler_jit(
-          sample_key,
-          (fwd_state, bwd_state),
-          fwd_state.params,
-          2**14,
-          gbs_prior_sampler,
-          gbs_num_steps,
-          gbs_process,
-          True,
-          -1.0,
-          -1.0,
-          gbs_center,
-        )
-        eval_samples = gbs_to_box(samples_latent) if gbs_use_tanh_bijection else samples_latent
-        fig, _ = samplerppo_helper.plot_pairwise_sample_density(
-          samples=np.asarray(eval_samples),
-          low=np.asarray(dr_range_low),
-          high=np.asarray(dr_range_high),
-          title=f"GBS pairwise sample density [step={int(current_step)}]",
-        )
-        gbs_frames.append(samplerppo_helper.finalize_figure(fig))
-        samplerppo_helper.maybe_log_resized_wandb_image(
-            use_wandb=use_wandb,
-            wandb_module=wandb,
-            key="GBS Heatmap",
-            fig=fig,
-            step=current_step,
-        )
+        # _, samples_latent, _ = gbs_sampler_jit(
+        #   sample_key,
+        #   (fwd_state, bwd_state),
+        #   fwd_state.params,
+        #   bwd_state.params,
+        #   2**14,
+        #   gbs_prior_sampler,
+        #   gbs_num_steps,
+        #   gbs_process,
+        #   True,
+        #   -1.0,
+        #   -1.0,
+        #   gbs_center,
+        # )
+        # eval_samples = gbs_to_box(samples_latent) if gbs_use_tanh_bijection else samples_latent
+        # fig, _ = samplerppo_helper.plot_pairwise_sample_density(
+        #   samples=np.asarray(eval_samples),
+        #   low=np.asarray(dr_range_low),
+        #   high=np.asarray(dr_range_high),
+        #   title=f"GBS pairwise sample density [step={int(current_step)}]",
+        # )
+        # gbs_frames.append(samplerppo_helper.finalize_figure(fig))
+        # samplerppo_helper.maybe_log_resized_wandb_image(
+        #     use_wandb=use_wandb,
+        #     wandb_module=wandb,
+        #     key="GBS Heatmap",
+        #     fig=fig,
+        #     step=current_step,
+        # )
       logging.info(metrics)
       progress_fn(current_step, metrics)
       samplerppo_helper.save_sampler_state(

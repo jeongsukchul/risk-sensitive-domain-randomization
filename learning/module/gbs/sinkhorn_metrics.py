@@ -7,11 +7,11 @@ import jax.numpy as jnp
 from ott.geometry import pointcloud
 from ott.solvers import linear
 
-from learning.module.gbs.target4_family import (
-    Target4HarmonicParams,
-    Target4ShiftedHarmonicParams,
-    get_target4_harmonic_params,
-    target4_energy_values as harmonic_target4_energy_values,
+from learning.module.gbs.targets.target_family import (
+    TargetHarmonicParams,
+    TargetShiftedHarmonicParams,
+    get_target_harmonic_params,
+    target_energy_values as harmonic_target_energy_values,
 )
 
 
@@ -27,6 +27,12 @@ def _sinkhorn_distance_jitted(
     geom = pointcloud.PointCloud(x, y, epsilon=epsilon)
     out = linear.solve(geom, a=w_x, b=w_y)
     return out.primal_cost
+
+
+def should_compute_interatomic_w2(n_particles: int, max_pairs: int = 4096) -> bool:
+    if n_particles <= 1:
+        return False
+    return (n_particles * (n_particles - 1)) // 2 <= max_pairs
 
 
 def sinkhorn_distance(
@@ -112,16 +118,19 @@ def emd2_1d_uniform(x: jax.Array, y: jax.Array) -> jax.Array:
 
 
 @jax.jit
-def target4_energy_values(
+def target_energy_values(
     samples: jax.Array,
     lam: jax.Array,
-    target_params: Target4HarmonicParams | Target4ShiftedHarmonicParams | None = None,
+    target_params: TargetHarmonicParams | TargetShiftedHarmonicParams | None = None,
     policy_p: jax.Array | float | None = None,
 ) -> jax.Array:
     samples = jnp.asarray(samples, dtype=jnp.float32)
     lam = jnp.asarray(lam, dtype=jnp.float32)
-    params = get_target4_harmonic_params(samples.shape[-1], target_params, policy_p=policy_p)
-    return lam * harmonic_target4_energy_values(samples, params, policy_p=policy_p)
+    if policy_p is None:
+        params = get
+    else:
+        params = get_target_harmonic_params(samples.shape[-1], target_params, policy_p=policy_p)
+    return lam * harmonic_target_energy_values(samples, params, policy_p=policy_p)
 
 
 @functools.partial(jax.jit, static_argnames=("n_particles", "n_spatial_dim"))
@@ -141,9 +150,9 @@ def energy_wasserstein_1d(
     samples: jax.Array,
     ref_samples: jax.Array,
     lam: jax.Array,
-    target_params: Target4HarmonicParams | Target4ShiftedHarmonicParams | None = None,
+    target_params: TargetHarmonicParams | TargetShiftedHarmonicParams | None = None,
     policy_p: jax.Array | float | None = None,
 ) -> jax.Array:
-    gen_energy = target4_energy_values(samples, lam, target_params=target_params, policy_p=policy_p)
-    ref_energy = target4_energy_values(ref_samples, lam, target_params=target_params, policy_p=policy_p)
+    gen_energy = target_energy_values(samples, lam, target_params=target_params, policy_p=policy_p)
+    ref_energy = target_energy_values(ref_samples, lam, target_params=target_params, policy_p=policy_p)
     return emd2_1d_uniform(gen_energy, ref_energy)

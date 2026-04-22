@@ -5,7 +5,7 @@ init_std :  20.
 dim: 2
 #general config
 initial_stepsize: 1.0 # component stepsize and weight step size
-initial_l2_regularizer: 1e-5
+initial_l2_regularizer: 1e-8 #1e-5
 use_self_normalized_importance_weights :  True
 temperature :  1.0
 #GMM config

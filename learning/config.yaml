@@ -18,6 +18,7 @@ num_evals : ???
 #policy
 policy : ppo
 asymmetric_critic: true
+use_grad_info : false
 distributional_q : false
 
 # logging

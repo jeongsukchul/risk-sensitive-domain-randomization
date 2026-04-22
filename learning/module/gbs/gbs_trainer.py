@@ -4,10 +4,12 @@ Fur further details see: https://arxiv.org/abs/2307.01198
 """
 
 from functools import partial
+from pathlib import Path
 from time import time
 from typing import Optional, Sequence
 
 import distrax
+import imageio
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -17,28 +19,438 @@ import matplotlib.pyplot as plt
 from flax.training import train_state
 from flax import linen as nn
 from matplotlib.ticker import MaxNLocator
+from tqdm import trange
+import logging
+import plotly.graph_objects as go
+from learning.module.gbs.sinkhorn_metrics import (
+    effective_sample_size_from_log_weights,
+    interatomic_wasserstein_1d,
+    sinkhorn_distance,
+)
 
 # IMPORTANT: gbs_loss must provide a sampler that does NOT need target logprob inside.
 # I assume you expose: rnd_no_target(...) -> (x0, xT, log_ratio)
 from .gbs_loss import (
-    add_subtraj_aux_defaults,
+    dds_logw_from_buffer,
+    dds_lv_loss_from_values,
+    dds_re_loss_from_values,
     VP,
-    lv_subtraj_loss,
     rnd_no_target,
-    rnd_time_reversal_lv_no_target,
-    rnd_time_reversal_lv_subtraj_no_target,
-    lv_loss_from_rnd,
+    simul_forward_sde_for_buffer,
+    lv_loss_from_values,
+    re_loss_from_values,
+    solve_trust_region_lambda_from_logw,
+    solve_trust_region_lambda_grid_golden,
+    tr_lv_loss_from_buffer,
 )
+
+
+def _normalize_loss_mode(loss_mode: str) -> str:
+    normalized = loss_mode.lower().replace("-", "_")
+    aliases = {
+        "lv": "dds_lv",
+        "time_reversal_lv": "dds_lv",
+        "dds_euler_lv": "dds_lv",
+        "euler_dds_lv": "dds_lv",
+        "trust_region_lv": "tr_dds_lv",
+        "tr_lv": "tr_dds_lv",
+        "trust_region_dds_lv": "tr_dds_lv",
+    }
+    return aliases.get(normalized, normalized)
+
+
+def _aux_scalar(value):
+    arr = jnp.asarray(value)
+    if arr.ndim > 0:
+        arr = jnp.nanmean(arr)
+    return float(jax.device_get(arr))
+def _to_python_scalar(x):
+    if isinstance(x, (float, int)):
+        return x
+    if hasattr(x, "item"):
+        try:
+            return x.item()
+        except Exception:
+            pass
+    return float(x)
+
+
+def _last_hist_value(hist: dict[str, list], key: str):
+    if key not in hist or len(hist[key]) == 0:
+        return None
+    value = hist[key][-1]
+    try:
+        value = _to_python_scalar(value)
+    except Exception:
+        return None
+    if isinstance(value, float) and not np.isfinite(value):
+        return None
+    return value
+
+
+def _select_loss_key_for_logging(loss_mode: str, hist: dict[str, list]) -> str | None:
+    loss_mode = _normalize_loss_mode(loss_mode)
+    if loss_mode == "tr_dds_lv":
+        candidates = ["train/tr_lv_var", "train/tr_lv_mean"]
+    else:
+        candidates = ["train/neg_elbo_var", "train/neg_elbo_mean"]
+    for key in candidates:
+        if key in hist:
+            return key
+    return None
+
+
+def plot_evolution_plotly(
+    ts,
+    xs,
+    dim: int = 0,
+    ntraj: int = 50,
+    domain=None,
+    decimals: int = 6,
+):
+    """
+    ts: [T]
+    xs: [T, N, D]
+    domain: optional array-like of shape [D, 2]
+    """
+    ts = np.asarray(ts)
+    xs = np.asarray(xs)
+
+    fig = go.Figure()
+
+    if domain is not None:
+        domain = np.asarray(domain)
+        fig.update_layout(yaxis_range=domain[dim].tolist())
+
+    trajs = xs[:, :, dim].T  # [N, T]
+
+    mask = np.isfinite(trajs).all(axis=1)
+    discard = int(mask.size - mask.sum())
+    if discard > 0:
+        logging.warning("Filtering %d trajectories with non-finite values.", discard)
+
+    if discard < mask.size:
+        trajs = trajs[mask][:ntraj]
+
+        final_vals = trajs[:, -1]
+        denom = 1e-8 + final_vals.max() - final_vals.min()
+        hues = 100.0 * (final_vals - final_vals.min()) / denom
+
+        x = np.round(ts, decimals=decimals)
+        for traj, hue in zip(trajs, hues):
+            fig.add_trace(
+                go.Scatter(
+                    x=x,
+                    y=np.round(traj, decimals=decimals),
+                    mode="lines",
+                    line={
+                        "color": f"hsv({float(np.round(hue, decimals))}%,100%,50%)",
+                        "width": 0.4,
+                    },
+                    showlegend=False,
+                )
+            )
+
+    fig.update_layout(
+        template="plotly_white",
+        xaxis_title="t",
+        yaxis_title=f"x[{dim}]",
+        margin=dict(l=40, r=20, t=30, b=40),
+    )
+    return fig
+
+def gbs_history_keys(loss_mode: str) -> list[str]:
+    loss_mode = _normalize_loss_mode(loss_mode)
+    if loss_mode in ("dis", "dis_lv", "dds", "dds_lv"):
+        return [
+            "train/neg_elbo_mean",
+            "train/neg_elbo_var",
+            "train/running_mean",
+            "train/terminal_mean",
+            "train/xT_mean_norm",
+            "train/n_filtered",
+        ]
+    if loss_mode == "tr_dds_lv":
+        return [
+            "train/tr_lv_mean",
+            "train/tr_lv_var",
+            "train/tr_lv_lambda",
+            "train/tr_lv_alpha",
+            "train/logw_mean",
+            "train/logw_var",
+            "train/xT_mean_norm",
+            "train/n_filtered",
+        ]
+    raise ValueError(f"Unknown loss_mode: {loss_mode}")
+
+
+def make_gbs_sampler_jit(
+    gbs_loss_mode: str,
+    batch_size,
+    prior_sampler,
+    num_steps,
+    process,
+    stop_grad,
+    gbs_center,
+    target_loggrad_latent_fn=None,
+    use_lgv: bool = False,
+    integrator_type : str = "euler",
+):
+    gbs_loss_mode = _normalize_loss_mode(gbs_loss_mode)
+    use_reference_ctrl = gbs_loss_mode not in ("dis", "dis_lv")
+    @jax.jit
+    def rnd_wrapped(
+        key,
+        model_state,
+        fwd_params,
+        bwd_params,
+        current_lambda,
+        current_policy_p,
+    ):
+        target_loggrad_fn = None
+        if target_loggrad_latent_fn is not None:
+            target_loggrad_fn = lambda x: target_loggrad_latent_fn(
+                x, current_lambda, current_policy_p
+            )
+
+        return rnd_no_target(
+            key,
+            model_state,
+            fwd_params,
+            bwd_params,
+            batch_size,
+            prior_sampler,
+            num_steps,
+            process,
+            use_reference_ctrl,
+            stop_grad,
+            gbs_center,
+            use_ito= True if "lv" in gbs_loss_mode else False,
+            target_loggrad_fn=target_loggrad_fn,
+            use_lgv=use_lgv,
+            integrator_type=integrator_type,
+        )
+
+    return rnd_wrapped
+
+
+def make_gbs_train_step_jit(
+    gbs_batch_size: int,
+    gbs_prior_sampler,
+    gbs_num_steps: int,
+    gbs_process,
+    gbs_loss_mode: str,
+    gbs_center,
+    gbs_use_tanh_bijection: bool,
+    gbs_logabsdet,
+    gbs_prior,
+    gbs_max_rnd: float,
+    gbs_trust_region_bound: float,
+    gbs_trust_region_lambda_max: float,
+    gbs_trust_region_lambda_grid_size: int,
+    gbs_minibatch_size: int = 2000,
+    gbs_minibatch_steps: int = 400,
+    gbs_target_loggrad_latent_fn=None,
+    gbs_use_lgv: bool = False,
+    integrator_type: str = "euler",
+):
+    gbs_loss_mode = _normalize_loss_mode(gbs_loss_mode)
+
+    def buffer_loss_wrapped(
+        model_state,
+        fwd_params,
+        bwd_params,
+        paths,
+        dbs,
+        logw_behavior,
+        target_lp_vals_mb,
+        fixed_lambda,
+        current_lambda,
+        current_policy_p,
+    ):
+        del bwd_params
+        target_loggrad_fn = None
+        if gbs_target_loggrad_latent_fn is not None:
+            target_loggrad_fn = lambda x: gbs_target_loggrad_latent_fn(
+                x, current_lambda, current_policy_p
+            )
+        loss, aux, _ = tr_lv_loss_from_buffer(
+            model_state=model_state,
+            behavior_params=jax.lax.stop_gradient(fwd_params),
+            candidate_params=fwd_params,
+            paths=paths,
+            dbs=dbs,
+            logw_behavior=logw_behavior,
+            num_steps=gbs_num_steps,
+            process=gbs_process,
+            max_rnd=gbs_max_rnd,
+            process_center=gbs_center,
+            fixed_lambda=fixed_lambda,
+            target_lp_vals=target_lp_vals_mb,
+            target_loggrad_fn=target_loggrad_fn,
+            use_lgv=gbs_use_lgv,
+        )
+        return loss, aux
+
+    buffer_loss_grad = jax.jit(jax.grad(buffer_loss_wrapped, 1, has_aux=True))
+
+    @jax.jit
+    def gbs_train_step_jit(
+        key,
+        fwd_state,
+        bwd_state,
+        target_lnpdf,
+        current_lambda,
+        current_policy_p,
+    ):
+        target_lp_vals = target_lnpdf
+        model_state = (fwd_state, bwd_state)
+
+        if gbs_loss_mode == "tr_dds_lv":
+            paths, dbs = simul_forward_sde_for_buffer(
+                key,
+                model_state,
+                fwd_state.params,
+                gbs_batch_size,
+                gbs_prior_sampler,
+                gbs_num_steps,
+                gbs_process,
+                gbs_center,
+                target_loggrad_fn=(
+                    None
+                    if gbs_target_loggrad_latent_fn is None
+                    else lambda x: gbs_target_loggrad_latent_fn(
+                        x, current_lambda, current_policy_p
+                    )
+                ),
+                use_lgv=gbs_use_lgv,
+                integrator_type=integrator_type,
+            )
+            xT = paths[:, -1, :]
+            if gbs_use_tanh_bijection:
+                target_lp_vals = target_lp_vals + gbs_logabsdet(xT)
+            logw_behavior = dds_logw_from_buffer(
+                model_state=model_state,
+                behavior_params=fwd_state.params,
+                paths=paths,
+                dbs=dbs,
+                num_steps=gbs_num_steps,
+                process=gbs_process,
+                target_lp_vals=target_lp_vals,
+                process_center=gbs_center,
+                target_loggrad_fn=(
+                    None
+                    if gbs_target_loggrad_latent_fn is None
+                    else lambda x: gbs_target_loggrad_latent_fn(
+                        x, current_lambda, current_policy_p
+                    )
+                ),
+                use_lgv=gbs_use_lgv,
+            )
+            fixed_lambda = solve_trust_region_lambda_grid_golden(
+                logw_behavior,
+                trust_region_bound=gbs_trust_region_bound,
+                lambda_max=gbs_trust_region_lambda_max,
+                grid_size=gbs_trust_region_lambda_grid_size,
+            )
+            mb_size = min(int(gbs_minibatch_size), int(gbs_batch_size))
+            aux_keys = tuple(gbs_history_keys(gbs_loss_mode))
+            init_aux = {k: jnp.asarray(0.0, dtype=jnp.float32) for k in aux_keys}
+
+            def body_fn(_, carry):
+                key_inner, fwd_state_inner, aux_acc = carry
+                key_inner, k_idx = jax.random.split(key_inner)
+                idx = jax.random.randint(k_idx, (mb_size,), 0, gbs_batch_size)
+                grads, aux = buffer_loss_grad(
+                    (fwd_state_inner, bwd_state),
+                    fwd_state_inner.params,
+                    bwd_state.params,
+                    paths[idx],
+                    dbs[idx],
+                    logw_behavior[idx],
+                    target_lp_vals[idx],
+                    fixed_lambda,
+                    current_lambda,
+                    current_policy_p,
+                )
+                fwd_state_inner = fwd_state_inner.apply_gradients(grads=grads)
+                aux_acc = {k: aux_acc[k] + jnp.asarray(aux[k], dtype=jnp.float32) for k in aux_keys}
+                return key_inner, fwd_state_inner, aux_acc
+
+            key_out, new_fwd_state, aux_sum = jax.lax.fori_loop(
+                0,
+                int(gbs_minibatch_steps),
+                body_fn,
+                (key, fwd_state, init_aux),
+            )
+            del key_out
+            aux_mean = {
+                k: aux_sum[k] / jnp.asarray(float(gbs_minibatch_steps), dtype=jnp.float32)
+                for k in aux_keys
+            }
+            return new_fwd_state, bwd_state, aux_mean
+        else:
+            def loss_from_params(fwd_params):
+                local_target_lp = target_lp_vals
+                use_reference_ctrl = gbs_loss_mode in ("dds", "dds_lv")
+                target_loggrad_fn = None
+                if gbs_target_loggrad_latent_fn is not None:
+                    target_loggrad_fn = lambda x: gbs_target_loggrad_latent_fn(
+                        x, current_lambda, current_policy_p
+                    )
+
+                x0, xT, log_ratio = rnd_no_target(
+                    key,
+                    (fwd_state, bwd_state),
+                    fwd_params,
+                    None,
+                    gbs_batch_size,
+                    gbs_prior_sampler,
+                    gbs_num_steps,
+                    gbs_process,
+                    use_reference_ctrl,
+                    True,
+                    gbs_center,
+                    use_ito= True if "lv" in gbs_loss_mode else False,
+                    target_loggrad_fn=target_loggrad_fn,
+                    use_lgv=gbs_use_lgv,
+                    integrator_type=integrator_type,
+                )
+                if gbs_use_tanh_bijection:
+                    local_target_lp = local_target_lp + gbs_logabsdet(xT)
+                if gbs_loss_mode == "dis":
+                    loss, aux, _ = re_loss_from_values(
+                        x0, xT, log_ratio, gbs_prior.log_prob, local_target_lp, max_rnd=gbs_max_rnd
+                    )
+                elif gbs_loss_mode == "dis_lv":
+                    loss, aux, _ = lv_loss_from_values(
+                        x0, xT, log_ratio, gbs_prior.log_prob, local_target_lp, max_rnd=gbs_max_rnd
+                    )
+                elif gbs_loss_mode == "dds":
+                    loss, aux, _ = dds_re_loss_from_values(
+                        x0, xT, log_ratio, gbs_process, local_target_lp, process_center=gbs_center, max_rnd=gbs_max_rnd
+                    )
+                else:
+                    loss, aux, _ = dds_lv_loss_from_values(
+                        x0, xT, log_ratio, gbs_process, local_target_lp, process_center=gbs_center, max_rnd=gbs_max_rnd
+                    )
+                return loss, aux
+
+            grads, aux = jax.grad(loss_from_params, has_aux=True)(fwd_state.params)
+            new_fwd_state = fwd_state.apply_gradients(grads=grads)
+            return new_fwd_state, bwd_state, aux
+
+    return gbs_train_step_jit
 
 
 class PISGRADNet(nn.Module):
     dim: int
 
-    num_layers: int = 2
-    num_hid: int = 64
+    num_layers: int = 6
+    num_hid: int = 256
     outer_clip: float = 1e4
     inner_clip: float = 1e2
-
+    gbs_scale_diff : float = 1.
     weight_init: float = 1e-8
     bias_init: float = 0.0
 
@@ -98,7 +510,7 @@ class PISGRADNet(nn.Module):
         out_state = jnp.clip(out_state, -self.outer_clip, self.outer_clip)
 
         lgv_term = jnp.clip(lgv_term, -self.inner_clip, self.inner_clip)
-        out_state_p_grad = out_state + t_net2 * lgv_term
+        out_state_p_grad = out_state + t_net2 * (lgv_term + input_array / self.gbs_scale_diff)
         return out_state_p_grad
 
 
@@ -118,8 +530,8 @@ class PotentialPISGRADNet(nn.Module):
 
     dim: int
 
-    num_layers: int = 2
-    num_hid: int = 64
+    num_layers: int = 6
+    num_hid: int = 256
     outer_clip: float = 1e4
 
     weight_init: float = 1e-8
@@ -348,400 +760,412 @@ def plot_sample_density_2d(
     return fig, axes
 
 
-# -------------------------
-# LV loss from precomputed target log-prob VALUES
-# -------------------------
-def lv_loss_from_values(
-    x0, xT, log_ratio, prior_log_prob, target_lp_vals, max_rnd: float | None = None
+
+
+def run_gbs(
+    *,
+    low,
+    high,
+    dim: int,
+    function_evaluations: int,
+    buffer_size: int,
+    num_steps: int,
+    lr: float,
+    init_std: float,
+    seed: int,
+    beta: float,
+    tau: float,
+    q: float,
+    initial_p: float | None,
+    p_update_freq: int,
+    p_ema_alpha: float,
+    p_jump_prob: float,
+    loss_mode: str,
+    sinkhorn_num_samples: int,
+    n_particles: int | None,
+    n_spatial_dim: int,
+    save_dir,
+    gif_path,
+    snap_iters,
+    model_type: str,
+    model_num_layers: int,
+    model_num_hid: int,
+    gbs_scale_diff : float,
+    final_sample_size: int,
+    max_rnd: float,
+    trust_region_bound: float,
+    trust_region_lambda_max: float,
+    trust_region_lambda_grid_size: int,
+    minibatch_size: int,
+    minibatch_steps: int,
+    return_snapshots: bool,
+    snapshot_sample_size: int | None,
+    max_metric_eval_points: int | None,
+    process,
+    latent_prior_loc,
+    process_center,
+    clip_prior_without_tanh: bool,
+    use_tanh_bijection: bool,
+    logabsdet_fn,
+    to_box,
+    target_logprob_box_fn,
+    sample_mean_fn,
+    compute_metrics_fn,
+    sample_reference_fn,
+    energy_w2_fn,
+    optimal_p_fn,
+    update_p_fn,
+    target_loggrad_latent_fn=None,
+    use_lgv: bool = False,
+    # ---- new wandb args ----
+    use_wandb: bool = False,
+    wandb_log_every: int = 1,
+    wandb_prefix: str = "gbs",
+    wandb_plot_ntraj: int = 50,
 ):
-    """
-    x0: [B,D]
-    xT: [B,D]
-    log_ratio: [B]  (or [B,])
-    prior_log_prob: callable: prior.log_prob(x0) -> [B]
-    target_lp_vals: [B] numeric values (already computed outside JAX)
-    """
-    running_cost = -log_ratio                      # [B]
-    terminal_cost = prior_log_prob(x0) - target_lp_vals  # [B]
-    neg_elbo = running_cost + terminal_cost        # [B]
-    mask = jnp.isfinite(neg_elbo)
-    if max_rnd is not None:
-        mask = mask & (neg_elbo < max_rnd)
-    neg_elbo_masked = jnp.where(mask, neg_elbo, jnp.nan)
-    loss = jnp.nanvar(neg_elbo_masked)
-    aux = {
-        "train/neg_elbo_mean": jnp.nanmean(neg_elbo_masked),
-        "train/neg_elbo_var": jnp.nanvar(neg_elbo_masked),
-        "train/running_mean": jnp.nanmean(jnp.where(mask, running_cost, jnp.nan)),
-        "train/terminal_mean": jnp.nanmean(jnp.where(mask, terminal_cost, jnp.nan)),
-        "train/xT_mean_norm": jnp.mean(jnp.linalg.norm(xT, axis=-1)),
-        "train/n_filtered": jnp.sum(~mask),
-    }
-    return loss, aux
-
-
-def gbs_trainer(cfg, target, target_log_prob):
-    """
-    target: used for sampling/eval only if you want; not required for training loss now.
-    target_log_prob: function that takes final_state and returns NUMERIC logprob values.
-                     IMPORTANT: this is NOT traced by JAX; we call it outside jit.
-    """
-    key_gen = jax.random.PRNGKey(cfg.seed)
-    dim = target.dim
-    alg_cfg = cfg.algorithm
-
-    # Prior
-    prior = distrax.MultivariateNormalDiag(jnp.zeros(dim), jnp.ones(dim) * alg_cfg.init_std)
-    prior_sampler = lambda key: jnp.squeeze(prior.sample(seed=key, sample_shape=(1,)))  # [D]
-    prior_log_prob = prior.log_prob  # JAX-traceable
-
-    # Models
-    model_cfg = dict(alg_cfg.model)
-    model_type = model_cfg.pop("model_type", "pisgrad")
-    fwd_model = make_gbs_model(model_type=model_type, **model_cfg)
-    key, key_gen = jax.random.split(key_gen)
-    fwd_params = fwd_model.init(
-        key,
-        jnp.ones([alg_cfg.batch_size, dim]),
-        jnp.ones([alg_cfg.batch_size, 1]),
-        jnp.ones([alg_cfg.batch_size, dim]),
-    )
-    bwd_model = make_gbs_model(model_type=model_type, **model_cfg)
-    key, key_gen = jax.random.split(key_gen)
-    bwd_params = bwd_model.init(
-        key,
-        jnp.ones([alg_cfg.batch_size, dim]),
-        jnp.ones([alg_cfg.batch_size, 1]),
-        jnp.ones([alg_cfg.batch_size, dim]),
-    )
-
-    optimizer = optax.chain(
-        optax.zero_nans(),
-        optax.clip(alg_cfg.grad_clip),
-        optax.adam(learning_rate=alg_cfg.step_size),
-    )
-    fwd_state = train_state.TrainState.create(apply_fn=fwd_model.apply, params=fwd_params, tx=optimizer)
-    bwd_state = train_state.TrainState.create(apply_fn=bwd_model.apply, params=bwd_params, tx=optimizer)
-
-    # 1) JIT sampler without target
-    loss_mode = getattr(alg_cfg, "loss_mode", "tr_lv")  # "dis", "tr_lv", or "tr_lv_subtraj"
-    subtraj_prob = float(getattr(alg_cfg, "subtraj_prob", 0.5))
-    fix_terminal = bool(getattr(alg_cfg, "fix_terminal", False))
-    subtraj_steps = getattr(alg_cfg, "subtraj_steps", None)
-    if subtraj_steps is not None:
-        subtraj_steps = int(subtraj_steps)
-    if fix_terminal and subtraj_steps is not None:
-        raise ValueError("Cannot set subtraj_steps when fix_terminal=True.")
-    if loss_mode == "tr_lv_subtraj" and model_type != "potential":
-        raise ValueError("loss_mode='tr_lv_subtraj' requires model_type='potential'.")
-    subtraj_domain = getattr(target, "domain", None)
-    if loss_mode == "tr_lv_subtraj" and subtraj_domain is None:
-        raise ValueError("loss_mode='tr_lv_subtraj' requires target.domain.")
-    if subtraj_domain is not None:
-        subtraj_domain = jnp.asarray(subtraj_domain)
-        domain_low = subtraj_domain[:, 0]
-        domain_high = subtraj_domain[:, 1]
-    noise_schedule = getattr(
-        alg_cfg,
-        "noise_schedule",
-        VP(
-            diff_coeff_sq_min=0.1,
-            diff_coeff_sq_max=10.0,
-            scale_diff_coeff=1.0,
-            terminal_t=1.0,
-            generative=False,
-            sign=-1.0,
-            include_base_drift=True,
-        ),
-    )
-    max_rnd = getattr(alg_cfg, "max_rnd", 1e8)
-    raw_sde_ctrl_noise = getattr(alg_cfg, "sde_ctrl_noise", None)
-    raw_sde_ctrl_dropout = getattr(alg_cfg, "sde_ctrl_dropout", None)
-    sde_ctrl_noise = -1.0 if raw_sde_ctrl_noise is None else float(raw_sde_ctrl_noise)
-    sde_ctrl_dropout = -1.0 if raw_sde_ctrl_dropout is None else float(raw_sde_ctrl_dropout)
-    process_center = getattr(alg_cfg, "process_center", None)
-    if process_center is None and getattr(target, "domain", None) is not None:
-        process_center = jnp.asarray(target.domain).mean(axis=-1)
-    elif process_center is not None:
-        process_center = jnp.asarray(process_center)
-
-    if loss_mode == "dis":
-        rnd_jit = jax.jit(
-            rnd_no_target,
-            static_argnums=(4, 5, 6, 7, 8),  # + stop_grad (must be static for Python branching)
+    low = jnp.asarray(low)
+    high = jnp.asarray(high)
+    process_center = jnp.asarray(process_center, dtype=jnp.float32)
+    latent_prior_loc = jnp.asarray(latent_prior_loc, dtype=jnp.float32)
+    outer_iterations = int(function_evaluations) // int(buffer_size)
+    if snap_iters is None:
+        snap_iters = []
+    if snapshot_sample_size is None:
+        snapshot_sample_size = final_sample_size
+    save_dir = Path(save_dir)
+    save_dir.mkdir(parents=True, exist_ok=True)
+    metric_eval_iters = set()
+    if max_metric_eval_points is None or outer_iterations <= max_metric_eval_points:
+        metric_eval_iters = set(range(outer_iterations))
+    else:
+        metric_eval_iters = set(
+            np.unique(np.linspace(0, outer_iterations - 1, max_metric_eval_points).astype(int)).tolist()
         )
-    elif loss_mode == "tr_lv":
-        rnd_jit = jax.jit(
-            rnd_time_reversal_lv_no_target,
-            static_argnums=(3, 4, 5, 6, 7),  # batch_size, prior_sampler, num_steps, process, stop_grad
+
+    key = jax.random.PRNGKey(seed)
+    key, k_p0 = jax.random.split(key)
+    if initial_p is None:
+        p = float(jax.random.uniform(k_p0, minval=0.0, maxval=1.0))
+    else:
+        p = float(np.clip(initial_p, 0.0, 1.0))
+
+    if n_particles is None:
+        if dim % n_spatial_dim != 0:
+            raise ValueError(f"dim={dim} must be divisible by n_spatial_dim={n_spatial_dim}")
+        n_particles = dim // n_spatial_dim
+    if n_particles * n_spatial_dim != dim:
+        raise ValueError(
+            f"n_particles * n_spatial_dim must equal dim, got {n_particles} * {n_spatial_dim} != {dim}"
+        )
+
+    prior = distrax.MultivariateNormalDiag(
+        loc=latent_prior_loc,
+        scale_diag=jnp.ones(dim, dtype=jnp.float32) * init_std,
+    )
+    if clip_prior_without_tanh:
+        prior_sampler = lambda k: jnp.clip(
+            jnp.squeeze(prior.sample(seed=k, sample_shape=(1,))), low, high
         )
     else:
-        raise ValueError(f"Unknown loss_mode: {loss_mode}")
+        prior_sampler = lambda k: jnp.squeeze(prior.sample(seed=k, sample_shape=(1,)))
 
-    # 2) JIT grad of loss
-    if loss_mode == "dis":
-        def loss_wrapped(
-            key,
-            model_state,
-            fwd_params,
-            bwd_params,
-            batch_size,
-            prior_sampler,
-            num_steps,
-            noise_schedule,
-            target_lp_vals,
-        ):
-            x0, xT, log_ratio = rnd_no_target(
-                key,
-                model_state,
-                fwd_params,
-                bwd_params,
-                batch_size,
-                prior_sampler,
-                num_steps,
-                noise_schedule,
-                stop_grad=True,
-                process_center=process_center,
-            )
-            loss, aux = lv_loss_from_values(
-                x0, xT, log_ratio, prior_log_prob, target_lp_vals, max_rnd=max_rnd
-            )
-            return loss, aux
+    model_cfg = dict(
+        model_type=model_type,
+        dim=dim,
+        num_layers=model_num_layers,
+        num_hid=model_num_hid,
+        gbs_scale_diff = gbs_scale_diff,
+    )
+    fwd_model = make_gbs_model(**model_cfg)
+    bwd_model = make_gbs_model(**model_cfg)
+    key, k1, k2 = jax.random.split(key, 3)
+    fwd_params = fwd_model.init(
+        k1, jnp.ones([buffer_size, dim]), jnp.ones([buffer_size, 1]), jnp.ones([buffer_size, dim])
+    )
+    bwd_params = bwd_model.init(
+        k2, jnp.ones([buffer_size, dim]), jnp.ones([buffer_size, 1]), jnp.ones([buffer_size, dim])
+    )
+    opt = optax.chain(optax.zero_nans(), optax.clip(1.0), optax.adam(lr))
+    fwd_state = train_state.TrainState.create(apply_fn=fwd_model.apply, params=fwd_params, tx=opt)
+    bwd_state = train_state.TrainState.create(apply_fn=bwd_model.apply, params=bwd_params, tx=opt)
 
-        loss_grad = jax.jit(
-            jax.grad(loss_wrapped, (2, 3), has_aux=True),
-            static_argnums=(4, 5, 6, 7),  # keep callables static
+    loss_mode = _normalize_loss_mode(loss_mode)
+    integrator_type = "euler" if "dis" in loss_mode else "exp"
+    sampler_jit = make_gbs_sampler_jit(
+        loss_mode,
+        buffer_size,
+        prior_sampler,
+        num_steps,
+        process,
+        True,
+        process_center,
+        target_loggrad_latent_fn=target_loggrad_latent_fn,
+        use_lgv=use_lgv,
+        integrator_type=integrator_type,
+    )
+    train_step_jit = make_gbs_train_step_jit(
+        gbs_batch_size=buffer_size,
+        gbs_prior_sampler=prior_sampler,
+        gbs_num_steps=num_steps,
+        gbs_process=process,
+        gbs_loss_mode=loss_mode,
+        gbs_center=process_center,
+        gbs_use_tanh_bijection=use_tanh_bijection,
+        gbs_logabsdet=logabsdet_fn,
+        gbs_prior=prior,
+        gbs_max_rnd=max_rnd,
+        gbs_trust_region_bound=trust_region_bound,
+        gbs_trust_region_lambda_max=trust_region_lambda_max,
+        gbs_trust_region_lambda_grid_size=trust_region_lambda_grid_size,
+        gbs_minibatch_size=minibatch_size,
+        gbs_minibatch_steps=minibatch_steps,
+        gbs_target_loggrad_latent_fn=target_loggrad_latent_fn,
+        gbs_use_lgv=use_lgv,
+        integrator_type=integrator_type,
+    )
+
+    hist = {k: [] for k in gbs_history_keys(loss_mode)}
+    hist.update(
+        {
+            "target/p": [],
+            "target/lambda": [],
+            "target/sample_mean": [],
+            "target/forward_kl": [],
+            "target/reverse_kl": [],
+            "target/wasserstein": [],
+            "target/sinkhorn": [],
+            "target/ess": [],
+            "target/energy_w2": [],
+            "target/interatomic_w2": [],
+            "target/target_mean": [],
+            "target/optimal_p": [],
+            "target/p_updated": [],
+            "target/p_jumped": [],
+            "target/p_base": [],
+            "target/p_ema": [],
+        }
+    )
+
+    frames = []
+    snapshot_records = []
+    
+    for t in trange(outer_iterations):
+        current_lambda = beta * p
+        current_policy_p = p
+        key, k_step = jax.random.split(key)
+        _, xT_latent, _ = sampler_jit(
+            k_step,
+            (fwd_state, bwd_state),
+            fwd_state.params,
+            bwd_state.params,
+            current_lambda,
+            current_policy_p,
         )
-    elif loss_mode == "tr_lv":
-        def loss_wrapped(
-            key,
-            model_state,
-            fwd_params,
-            bwd_params,
-            batch_size,
-            prior_sampler,
-            num_steps,
-            process,
-            target_lp_vals,
-        ):
-            x0, xT, rnd_running = rnd_time_reversal_lv_no_target(
-                key,
-                model_state,
-                fwd_params,
-                batch_size,
+        if use_wandb and wandb.run is not None and wandb_log_every > 0 and (t % wandb_log_every == 0):
+            key, k_plot = jax.random.split(key)
+            paths_for_plot, _ = simul_forward_sde_for_buffer(
+                k_plot,
+                (fwd_state, bwd_state),
+                fwd_state.params,
+                min(int(wandb_plot_ntraj), int(buffer_size)),
                 prior_sampler,
                 num_steps,
                 process,
-                stop_grad=True,
-                sde_ctrl_noise=sde_ctrl_noise,
-                sde_ctrl_dropout=sde_ctrl_dropout,
-                process_center=process_center,
-            )
-            rnd_total = prior_log_prob(x0) + rnd_running - target_lp_vals
-            loss, aux, _ = lv_loss_from_rnd(rnd_total, xT=xT, max_rnd=max_rnd)
-            return loss, aux
-
-        loss_grad = jax.jit(
-            jax.grad(loss_wrapped, (2, 3), has_aux=True),
-            static_argnums=(4, 5, 6, 7),
-        )
-    else:
-        def loss_wrapped(
-            key,
-            model_state,
-            fwd_params,
-            bwd_params,
-            batch_size,
-            prior_sampler,
-            num_steps,
-            process,
-            target_lp_vals,
-        ):
-            del bwd_params
-            use_subtraj = jax.random.uniform(jax.random.fold_in(key, 23)) < subtraj_prob
-
-            def _subtraj_branch(_):
-                x_start, x_end, rnd_running, idx_init, idx_end = (
-                    rnd_time_reversal_lv_subtraj_no_target(
-                        key,
-                        model_state,
-                        fwd_params,
-                        batch_size,
-                        prior_sampler,
-                        num_steps,
-                        process,
-                        True,
-                        fix_terminal,
-                        subtraj_steps,
-                        domain_low,
-                        domain_high,
-                        False,
-                        sde_ctrl_noise,
-                        sde_ctrl_dropout,
-                        process_center,
+                process_center,
+                target_loggrad_fn=(
+                    None
+                    if target_loggrad_latent_fn is None
+                    else lambda x: target_loggrad_latent_fn(
+                        x, current_lambda, current_policy_p
                     )
-                )
-                loss, aux, _ = lv_subtraj_loss(
-                    fwd_state=model_state[0],
-                    fwd_params=fwd_params,
-                    x_start=x_start,
-                    x_end=x_end,
-                    rnd_running=rnd_running,
-                    idx_init=idx_init,
-                    idx_end=idx_end,
-                    num_steps=num_steps,
-                    prior_log_prob=prior_log_prob,
-                    target_lp_vals=target_lp_vals,
-                    max_rnd=max_rnd,
-                )
-                return loss, aux
-
-            def _full_branch(_):
-                x0, xT, rnd_running = rnd_time_reversal_lv_no_target(
-                    key,
-                    model_state,
-                    fwd_params,
-                    batch_size,
-                    prior_sampler,
-                    num_steps,
-                    process,
-                    True,
-                    sde_ctrl_noise,
-                    sde_ctrl_dropout,
-                    process_center,
-                )
-                rnd_total = prior_log_prob(x0) + rnd_running - target_lp_vals
-                loss, aux, _ = lv_loss_from_rnd(rnd_total, xT=xT, max_rnd=max_rnd)
-                aux = add_subtraj_aux_defaults(
-                    aux,
-                    idx_init=0.0,
-                    idx_end=float(num_steps),
-                    scale=1.0,
-                )
-                return loss, aux
-
-            loss, aux = jax.lax.cond(use_subtraj, _subtraj_branch, _full_branch, operand=None)
-            return loss, aux
-
-        loss_grad = jax.jit(
-            jax.grad(loss_wrapped, (2, 3), has_aux=True),
-            static_argnums=(4, 5, 6, 7),
+                ),
+                use_lgv=use_lgv,
+                integrator_type=integrator_type,
+            )
+            # simul_forward_sde_for_buffer returns [N, T, D] or [N, T+1, D]
+            # convert to [T, N, D] for plotting
+            traj_xs = np.asarray(to_box(paths_for_plot)).transpose(1, 0, 2)
+            traj_ts = np.linspace(0.0, 1.0, traj_xs.shape[0], dtype=np.float32)
+        xT = to_box(xT_latent)
+        target_lp_vals = jnp.asarray(
+            target_logprob_box_fn(xT, current_lambda, current_policy_p)
+        ).reshape(-1)
+        fwd_state, bwd_state, aux = train_step_jit(
+            k_step,
+            fwd_state,
+            bwd_state,
+            target_lp_vals,
+            current_lambda,
+            current_policy_p,
         )
+        aux_mean = {k: _aux_scalar(aux[k]) for k in gbs_history_keys(loss_mode)}
+        for k in gbs_history_keys(loss_mode):
+            hist[k].append(aux_mean[k])
 
-    timer = 0.0
-    if loss_mode == "dis":
-        history_keys = [
-            "train/neg_elbo_mean",
-            "train/neg_elbo_var",
-            "train/running_mean",
-            "train/terminal_mean",
-            "train/xT_mean_norm",
-            "train/n_filtered",
-        ]
-    elif loss_mode == "tr_lv":
-        history_keys = [
-            "train/rnd_mean",
-            "train/rnd_var",
-            "train/xT_mean_norm",
-            "train/n_filtered",
-        ]
-    else:
-        history_keys = [
-            "train/rnd_mean",
-            "train/rnd_var",
-            "train/xT_mean_norm",
-            "train/n_filtered",
-            "train/subtraj_scale",
-            "train/subtraj_idx_init",
-            "train/subtraj_idx_end",
-        ]
-    history = {k: [] for k in history_keys}
-    for step in range(alg_cfg.iters):
-        key, key_gen = jax.random.split(key_gen)
-        iter_time = time()
+        sample_mean_g = float(sample_mean_fn(xT, current_policy_p))
+        key, k_metric, k_update = jax.random.split(key, 3)
+        if t in metric_eval_iters:
+            forward_kl, reverse_kl, wasserstein = compute_metrics_fn(
+                xT, current_lambda, k_metric, current_policy_p
+            )
+            ess = effective_sample_size_from_log_weights(
+                target_logprob_box_fn(xT, current_lambda, current_policy_p)
+            )
+            key, k_sink = jax.random.split(key)
+            sinkhorn_target = None if sample_reference_fn is None else sample_reference_fn(
+                k_sink, current_lambda, xT.shape, current_policy_p
+            )
+            n_sink = min(int(sinkhorn_num_samples), int(xT.shape[0]))
+            if sinkhorn_target is None:
+                sinkhorn = float("nan")
+                energy_w2 = float("nan")
+                interatomic_w2 = float("nan")
+            else:
+                sinkhorn = sinkhorn_distance(xT[:n_sink], sinkhorn_target[:n_sink])
+                energy_w2 = float(
+                    energy_w2_fn(xT[:n_sink], sinkhorn_target[:n_sink], current_lambda, current_policy_p)
+                )
+                if dim % n_spatial_dim == 0:
+                    interatomic_w2 = float(
+                        interatomic_wasserstein_1d(
+                            xT[:n_sink],
+                            sinkhorn_target[:n_sink],
+                            n_particles=n_particles,
+                            n_spatial_dim=n_spatial_dim,
+                        )
+                    )
+                else:
+                    interatomic_w2 = float("nan")
+        else:
+            forward_kl = reverse_kl = wasserstein = sinkhorn = ess = energy_w2 = interatomic_w2 = float("nan")
+        optimal_p, target_mean = optimal_p_fn(current_lambda, tau, q)
 
-        model_state = (fwd_state, bwd_state)
+        hist["target/p"].append(float(p))
+        hist["target/lambda"].append(float(current_lambda))
+        hist["target/sample_mean"].append(sample_mean_g)
+        hist["target/forward_kl"].append(forward_kl)
+        hist["target/reverse_kl"].append(reverse_kl)
+        hist["target/wasserstein"].append(wasserstein)
+        hist["target/sinkhorn"].append(sinkhorn)
+        hist["target/ess"].append(ess)
+        hist["target/energy_w2"].append(energy_w2)
+        hist["target/interatomic_w2"].append(interatomic_w2)
+        hist["target/target_mean"].append(target_mean)
+        hist["target/optimal_p"].append(optimal_p)
+        should_update_p = p_update_freq > 0 and ((t + 1) % p_update_freq == 0)
+        hist["target/p_updated"].append(float(should_update_p))
+        hist["target/p_jumped"].append(0.0)
+        hist["target/p_base"].append(float(jax.nn.sigmoid(tau * (sample_mean_g - q))))
+        hist["target/p_ema"].append(float(p))
+        if should_update_p:
+            p, base_p, ema_p, jumped = update_p_fn(
+                prev_p=p,
+                sample_mean_g=sample_mean_g,
+                tau=tau,
+                q=q,
+                ema_alpha=p_ema_alpha,
+                jump_prob=p_jump_prob,
+                key=k_update,
+            )
+            hist["target/p"][-1] = float(p)
+            hist["target/p_jumped"][-1] = float(jumped)
+            hist["target/p_base"][-1] = float(base_p)
+            hist["target/p_ema"][-1] = float(ema_p)
 
-        # ---- Phase A: sample xT (JAX) ----
-        # We need xT to compute target log-prob values OUTSIDE JAX.
-        if loss_mode == "dis":
-            x0, xT, log_ratio = rnd_jit(
-                key,
-                model_state,
+        if gif_path and (t in snap_iters):
+            frame_pts = np.asarray(xT)
+            frames.append(frame_pts)
+
+            if use_wandb and wandb.run is not None:
+                fig, ax = plt.subplots(1, 1, figsize=(5, 5))
+                ax.scatter(frame_pts[:, 0], frame_pts[:, 1], s=3, alpha=0.25, c="r")
+                ax.set_xlim(float(low[0]), float(high[0]))
+                ax.set_ylim(float(low[1]), float(high[1]))
+                ax.set_aspect("equal")
+                ax.set_title(f"GBS target snapshot {t}")
+                fig.tight_layout()
+
+                wandb.log({f"{wandb_prefix}/frame": wandb.Image(fig)}, step=t)
+                plt.close(fig)
+        if return_snapshots and (t in snap_iters):
+            key, k_snap = jax.random.split(key)
+            _, xT_snap_latent, _ = sampler_jit(
+                k_snap,
+                (fwd_state, bwd_state),
                 fwd_state.params,
                 bwd_state.params,
-                alg_cfg.batch_size,
-                prior_sampler,
-                alg_cfg.num_steps,
-                noise_schedule,
-                True,  # stop_grad=True
-                process_center,
+                current_lambda,
+                current_policy_p,
             )
-        elif loss_mode == "tr_lv":
-            x0, xT, rnd_running = rnd_jit(
-                key,
-                model_state,
-                fwd_state.params,
-                alg_cfg.batch_size,
-                prior_sampler,
-                alg_cfg.num_steps,
-                noise_schedule,
-                True,
-                sde_ctrl_noise,
-                sde_ctrl_dropout,
-                process_center,
-            )
-        else:
-            x0, xT, rnd_running = rnd_time_reversal_lv_no_target(
-                key,
-                model_state,
-                fwd_state.params,
-                alg_cfg.batch_size,
-                prior_sampler,
-                alg_cfg.num_steps,
-                noise_schedule,
-                True,
-                sde_ctrl_noise,
-                sde_ctrl_dropout,
-                process_center,
+            snapshot_records.append(
+                {"iter": int(t), "p": float(p), "samples": np.asarray(to_box(xT_snap_latent))}
             )
 
-        # ---- Phase B: compute target log-prob values outside JAX ----
-        # You said you can do: target_log_prob(final_state) once final_state is given.
-        # Ensure it returns shape [B], float32/float64.
-        target_lp_vals = target_log_prob(xT)  # MUST return a JAX array or something convertible to jnp.array
-        target_lp_vals = jnp.asarray(target_lp_vals).reshape(-1)
+        # ------------------------------------------------------------------
+        # Per-iteration W&B logging
+        # ------------------------------------------------------------------
+        if use_wandb and (wandb_log_every > 0) and ((t % wandb_log_every) == 0):
+            payload = {
+                f"{wandb_prefix}/iter": int(t),
+                f"{wandb_prefix}/function_evals": float((t + 1) * buffer_size),
+                f"{wandb_prefix}/target/p": _last_hist_value(hist, "target/p"),
+                f"{wandb_prefix}/target/sinkhorn": _last_hist_value(hist, "target/sinkhorn"),
+                f"{wandb_prefix}/target/energy_w2": _last_hist_value(hist, "target/energy_w2"),
+            }
 
-        # ---- Phase C: compute grads (JAX), using target_lp_vals as input data ----
-        (fwd_grads, bwd_grads), aux = loss_grad(
-            key,
-            model_state,
-            fwd_state.params,
-            bwd_state.params,
-            alg_cfg.batch_size,
-            prior_sampler,
-            alg_cfg.num_steps,
-            noise_schedule,
-            target_lp_vals,
-        )
+            if "train/tr_lv_lambda" in hist:
+                payload[f"{wandb_prefix}/train/tr_lv_lambda"] = _last_hist_value(
+                    hist, "train/tr_lv_lambda"
+                )
 
-        timer += time() - iter_time
+            loss_key = _select_loss_key_for_logging(loss_mode, hist)
+            if loss_key is not None:
+                payload[f"{wandb_prefix}/{loss_key}"] = _last_hist_value(hist, loss_key)
 
-        fwd_state = fwd_state.apply_gradients(grads=fwd_grads)
-        bwd_state = bwd_state.apply_gradients(grads=bwd_grads)
+            payload = {k: v for k, v in payload.items() if v is not None}
+            wandb.log(payload, step=t)
 
-        for k in history:
-            history[k].append(float(aux[k]))
+            if traj_ts is not None and traj_xs is not None:
+                domain = np.stack([np.asarray(low), np.asarray(high)], axis=1)
+                evolution_payload = {}
+                for dim_idx in range(int(traj_xs.shape[-1])):
+                    evolution_fig = plot_evolution_plotly(
+                                ts=traj_ts,
+                                xs=traj_xs,
+                                dim=dim_idx,
+                                ntraj=wandb_plot_ntraj,
+                                domain=domain,
+                        )
+                    evolution_payload[f"{wandb_prefix}/evolution/dim_{dim_idx}"] = wandb.Plotly(evolution_fig)
+                wandb.log(evolution_payload, step=t)
 
-        # Optional: simple logging without full eval framework
-        if cfg.use_wandb and (step % getattr(cfg, "log_every", 100) == 0):
-            log_dict = {"stats/step": step, "stats/wallclock": timer}
-            log_dict.update({k: float(v) for k, v in aux.items()})
-            wandb.log(log_dict)
+    if gif_path and frames:
+        rendered = []
+        for idx, pts in enumerate(frames):
+            fig, ax = plt.subplots(1, 1, figsize=(5, 5))
+            ax.scatter(pts[:, 0], pts[:, 1], s=3, alpha=0.25, c="r")
+            ax.set_xlim(float(low[0]), float(high[0]))
+            ax.set_ylim(float(low[1]), float(high[1]))
+            ax.set_aspect("equal")
+            ax.set_title(f"GBS target snapshot {idx}")
+            fig.tight_layout()
+            fig.canvas.draw()
+            rendered.append(np.asarray(fig.canvas.buffer_rgba())[..., :3])
+            plt.close(fig)
+        imageio.mimsave(gif_path, rendered, fps=4)
 
-    return {
-        "fwd_state": fwd_state,
-        "bwd_state": bwd_state,
-        "history": history,
-        "wallclock_s": timer,
-    }
+    key, k_final = jax.random.split(key)
+    _, xT_final_latent, _ = sampler_jit(
+        k_final,
+        (fwd_state, bwd_state),
+        fwd_state.params,
+        bwd_state.params,
+        current_lambda,
+        current_policy_p,
+    )
+    xT_final = to_box(xT_final_latent)
+    np.save((save_dir / f"gbs_samples_{loss_mode}.npy").as_posix(), np.array(xT_final))
+    result = (fwd_state, bwd_state, hist, np.asarray(xT_final))
+    if return_snapshots:
+        return result + (snapshot_records,)
+    return result

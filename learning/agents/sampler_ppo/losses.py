@@ -28,14 +28,10 @@ import jax.numpy as jnp
 import distrax
 from learning.module import networks
 from learning.module.gmmvi.network import GMMTrainingState
-from learning.module.gbs.gbs_loss import (
-    add_subtraj_aux_defaults,
-    VP,
-    Langevin,
-    lv_loss_from_rnd,
-    lv_subtraj_loss,
-    rnd_time_reversal_lv_no_target,
-    rnd_time_reversal_lv_subtraj_no_target,
+from learning.module.gbs.gbs_loss import VP, Langevin
+from learning.module.gbs.gbs_trainer import (
+    make_gbs_sampler_jit as shared_make_gbs_sampler_jit,
+    make_gbs_train_step_jit as shared_make_gbs_train_step_jit,
 )
 
 
@@ -76,7 +72,6 @@ def make_gbs_process(
         terminal_t=gbs_terminal_t,
         generative=False,
         sign=-1.0,
-        include_base_drift=gbs_include_base_drift,
     )
   if gbs_process_type == "langevin":
     return Langevin(diff_coeff=gbs_sigma_const, terminal_t=gbs_terminal_t)
@@ -112,11 +107,24 @@ def make_gbs_prior_and_maps(
   return gbs_to_box, gbs_logabsdet, gbs_center, gbs_prior, gbs_prior_sampler
 
 
-def make_gbs_sampler_jit():
-  return jax.jit(
-      rnd_time_reversal_lv_no_target,
-      static_argnums=(3, 4, 5, 6, 7),
-  )
+def _normalize_gbs_loss_mode(gbs_loss_mode: str) -> str:
+  normalized = gbs_loss_mode.lower().replace("-", "_")
+  aliases = {
+      "lv": "dds_lv",
+      "time_reversal_lv": "dds_lv",
+      "dds_exp_lv": "dds_exponential_lv",
+      "exponential_dds_lv": "dds_exponential_lv",
+      "dds_euler_lv": "dds_lv",
+      "euler_dds_lv": "dds_lv",
+      "trust_region_lv": "tr_dds_lv",
+      "tr_lv": "tr_dds_lv",
+      "trust_region_dds_lv": "tr_dds_lv",
+  }
+  return aliases.get(normalized, normalized)
+
+
+def make_gbs_sampler_jit(gbs_loss_mode: str):
+  return shared_make_gbs_sampler_jit(_normalize_gbs_loss_mode(gbs_loss_mode))
 
 
 def make_gbs_train_step_jit(
@@ -126,132 +134,38 @@ def make_gbs_train_step_jit(
     gbs_process: Any,
     gbs_loss_mode: str,
     gbs_model_type: str,
-    gbs_subtraj_prob: float,
-    gbs_fix_terminal: bool,
-    gbs_subtraj_steps: int | None,
     gbs_sde_ctrl_noise: float,
     gbs_sde_ctrl_dropout: float,
     gbs_center: jax.Array,
-    gbs_domain_low: jax.Array,
-    gbs_domain_high: jax.Array,
     gbs_use_tanh_bijection: bool,
     gbs_logabsdet: Callable[[jax.Array], jax.Array],
     gbs_prior: Any,
     gbs_max_rnd: float,
+    gbs_trust_region_bound: float,
+    gbs_trust_region_lambda_max: float,
+    gbs_trust_region_lambda_grid_size: int,
+    gbs_minibatch_size: int = 2000,
+    gbs_minibatch_steps: int = 400,
 ):
-  if gbs_fix_terminal and gbs_subtraj_steps is not None:
-    raise ValueError("Cannot set gbs_subtraj_steps when gbs_fix_terminal=True.")
-  if gbs_loss_mode == "tr_lv_subtraj" and gbs_model_type != "potential":
-    raise ValueError("gbs_loss_mode='tr_lv_subtraj' requires gbs_model_type='potential'.")
-
-  @jax.jit
-  def gbs_train_step_jit(
-      key,
-      fwd_state,
-      bwd_state,
-      target_lnpdf,
-  ):
-    def loss_from_params(fwd_params, bwd_params):
-      target_lp_vals = target_lnpdf
-      if gbs_loss_mode == "tr_lv_subtraj":
-        use_subtraj = jax.random.uniform(jax.random.fold_in(key, 23)) < gbs_subtraj_prob
-
-        def _subtraj_branch(_):
-          x_start, xT, rnd_running, idx_init, idx_end = (
-            rnd_time_reversal_lv_subtraj_no_target(
-                key,
-                (fwd_state, bwd_state),
-                fwd_params,
-                gbs_batch_size,
-                gbs_prior_sampler,
-                gbs_num_steps,
-                gbs_process,
-                True,
-                gbs_fix_terminal,
-                gbs_subtraj_steps,
-                gbs_domain_low,
-                gbs_domain_high,
-                gbs_use_tanh_bijection,
-                gbs_sde_ctrl_noise,
-                gbs_sde_ctrl_dropout,
-                gbs_center,
-            )
-          )
-          target_lp_vals_sub = target_lp_vals
-          if gbs_use_tanh_bijection:
-            target_lp_vals_sub = target_lp_vals_sub + gbs_logabsdet(xT)
-          loss, aux, _ = lv_subtraj_loss(
-              fwd_state=fwd_state,
-              fwd_params=fwd_params,
-              x_start=x_start,
-              x_end=xT,
-              rnd_running=rnd_running,
-              idx_init=idx_init,
-              idx_end=idx_end,
-              num_steps=gbs_num_steps,
-              prior_log_prob=gbs_prior.log_prob,
-              target_lp_vals=target_lp_vals_sub,
-              max_rnd=gbs_max_rnd,
-          )
-          return loss, aux
-
-        def _full_branch(_):
-          x0, xT, rnd_running = rnd_time_reversal_lv_no_target(
-              key,
-              (fwd_state, bwd_state),
-              fwd_params,
-              gbs_batch_size,
-              gbs_prior_sampler,
-              gbs_num_steps,
-              gbs_process,
-              True,
-              gbs_sde_ctrl_noise,
-              gbs_sde_ctrl_dropout,
-              gbs_center,
-          )
-          target_lp_vals_full = target_lp_vals
-          if gbs_use_tanh_bijection:
-            target_lp_vals_full = target_lp_vals_full + gbs_logabsdet(xT)
-          rnd_total = gbs_prior.log_prob(x0) + rnd_running - target_lp_vals_full
-          loss, aux, _ = lv_loss_from_rnd(rnd_total, xT=xT, max_rnd=gbs_max_rnd)
-          aux = add_subtraj_aux_defaults(
-              aux,
-              idx_init=0.0,
-              idx_end=float(gbs_num_steps),
-              scale=1.0,
-          )
-          return loss, aux
-
-        loss, aux = jax.lax.cond(use_subtraj, _subtraj_branch, _full_branch, operand=None)
-      else:
-        x0, xT, rnd_running = rnd_time_reversal_lv_no_target(
-            key,
-            (fwd_state, bwd_state),
-            fwd_params,
-            gbs_batch_size,
-            gbs_prior_sampler,
-            gbs_num_steps,
-            gbs_process,
-            True,
-            gbs_sde_ctrl_noise,
-            gbs_sde_ctrl_dropout,
-            gbs_center,
-        )
-        if gbs_use_tanh_bijection:
-          target_lp_vals = target_lp_vals + gbs_logabsdet(xT)
-        rnd_total = gbs_prior.log_prob(x0) + rnd_running - target_lp_vals
-        loss, aux, _ = lv_loss_from_rnd(rnd_total, xT=xT, max_rnd=gbs_max_rnd)
-      return loss, aux
-
-    (grads, aux) = jax.grad(loss_from_params, (0, 1), has_aux=True)(
-        fwd_state.params, bwd_state.params
-    )
-    fwd_grads, bwd_grads = grads
-    new_fwd_state = fwd_state.apply_gradients(grads=fwd_grads)
-    new_bwd_state = bwd_state.apply_gradients(grads=bwd_grads)
-    return new_fwd_state, new_bwd_state, aux
-
-  return gbs_train_step_jit
+  return shared_make_gbs_train_step_jit(
+      gbs_batch_size=gbs_batch_size,
+      gbs_prior_sampler=gbs_prior_sampler,
+      gbs_num_steps=gbs_num_steps,
+      gbs_process=gbs_process,
+      gbs_loss_mode=_normalize_gbs_loss_mode(gbs_loss_mode),
+      gbs_sde_ctrl_noise=gbs_sde_ctrl_noise,
+      gbs_sde_ctrl_dropout=gbs_sde_ctrl_dropout,
+      gbs_center=gbs_center,
+      gbs_use_tanh_bijection=gbs_use_tanh_bijection,
+      gbs_logabsdet=gbs_logabsdet,
+      gbs_prior=gbs_prior,
+      gbs_max_rnd=gbs_max_rnd,
+      gbs_trust_region_bound=gbs_trust_region_bound,
+      gbs_trust_region_lambda_max=gbs_trust_region_lambda_max,
+      gbs_trust_region_lambda_grid_size=gbs_trust_region_lambda_grid_size,
+      gbs_minibatch_size=gbs_minibatch_size,
+      gbs_minibatch_steps=gbs_minibatch_steps,
+  )
 
 def compute_gae(
     truncation: jnp.ndarray,
@@ -409,7 +323,7 @@ def compute_samplerppo_loss(
       'v_loss': v_loss,
       'entropy_loss': entropy_loss,
   }
-def make_gmm_update(gmm_network: networks.FeedForwardNetwork):
+def make_gmm_update(gmm_network: networks.FeedForwardNetwork, use_grad_info):
   def gmm_update(
           gmmvi_state, key
     ):
@@ -417,11 +331,19 @@ def make_gmm_update(gmm_network: networks.FeedForwardNetwork):
           gmm_network.sample_selector.select_train_datas(gmmvi_state.sample_db_state)
       new_component_stepsizes = gmm_network.component_stepsize_fn(gmmvi_state.model_state)
       new_model_state = gmm_network.model.update_stepsizes(gmmvi_state.model_state, new_component_stepsizes)
-      expected_hessian_neg, expected_grad_neg = gmm_network.more_ng_estimator(new_model_state,
+      if use_grad_info:
+        expected_hessian_neg, expected_grad_neg = gmm_network.ng_estimator(new_model_state,
                                                               samples,
                                                               sample_dist_densities,
                                                               target_lnpdfs,
                                                               target_lnpdf_grads)
+      else:
+        expected_hessian_neg, expected_grad_neg = gmm_network.more_ng_estimator(new_model_state,
+                                                                samples,
+                                                                sample_dist_densities,
+                                                                target_lnpdfs,
+                                                                target_lnpdf_grads)
+      
       new_model_state = gmm_network.component_updater(new_model_state,
                                       expected_hessian_neg,
                                       expected_grad_neg,

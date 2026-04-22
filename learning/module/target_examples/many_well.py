@@ -13,6 +13,7 @@ from learning.module.target_examples.base_target import Target
 
 
 # Taken from FAB code
+
 class Energy:
     """
     https://zenodo.org/record/3242635#.YNna8uhKjIW

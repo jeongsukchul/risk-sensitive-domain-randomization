@@ -295,6 +295,8 @@ def train_ppo(cfg:dict, randomization_fn, env, eval_env=None):
         else:
             wandb_name+= f" [beta={cfg.beta}]_sampler_update_freq={cfg.sampler_update_freq}"
             group+=f" [beta={cfg.beta}]_sampler_update_freq={cfg.sampler_update_freq}"
+        wandb_name +=f"_use_grad_info={cfg.use_grad_info}"
+        group+=f"_use_grad_info={cfg.use_grad_info}"
     elif cfg.policy=='adrppo':
         sampler_choice = 'AutoDR'
         wandb_name+= f" [threshold={cfg.success_threshold}]"
@@ -360,6 +362,7 @@ def train_ppo(cfg:dict, randomization_fn, env, eval_env=None):
         start_beta = cfg.start_beta,
         end_beta = cfg.end_beta,
         scheduler_mode=     cfg.scheduler_mode,
+        use_grad_info = cfg.use_grad_info,
         gbs_process_type=getattr(cfg, "gbs_process_type", "vp"),
         gbs_num_steps=getattr(cfg, "gbs_num_steps", 100),
         gbs_lr=getattr(cfg, "gbs_lr", 1e-3),

@@ -88,6 +88,7 @@ def make_samplerppo_networks(
     success_threshold = 600,
     success_rate_condition = 0.5,
     kl_upper_bound= 0.1,
+    use_grad_info = False,
 ) -> SAMPLERPPONetworks:
   """Make SAMPLERPPO networks with preprocessor."""
   parametric_action_distribution = distribution.NormalTanhDistribution(
@@ -111,7 +112,7 @@ def make_samplerppo_networks(
   init_gmmvi_state, gmm_network = create_gmm_network_and_state(dynamics_param_size, \
                                                                sampler_batch_size, sampler_batch_size, init_key,\
                                                                prior_scale=.1,
-                                                                bound_info=bound_info)
+                                                                bound_info=bound_info, use_grad_info=use_grad_info)
   dr_low, dr_high = bound_info
   init_fn, autodr_update_fn = make_adr_update_fn(
     domain_low=dr_low,

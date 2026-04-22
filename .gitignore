@@ -10,3 +10,5 @@ learning/outputs
 .git/
 external_deps/
 learning/module/gbs/
+dummy/
+compare_GBS_GMMVI/
