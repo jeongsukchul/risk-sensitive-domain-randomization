@@ -209,7 +209,7 @@ def train_ppo(cfg:dict, randomization_fn, env, env_cfg, eval_env=None):
         group += f" [threshold={cfg.success_threshold}]"
     elif cfg.policy=='doraemonppo':
         sampler_choice = 'DORAEMON'
-        wandb_name += f" [threshold={cfg.success_threshold}_condition={cfg.success_rate_condition}]"
+        wandb_name += f" [threshold={cfg.success_threshold}_condition={cfg.success_rate_condition}_tr_thres={cfg.trust_region_threshold}]"
         group = sampler_choice
         group += f" [threshold={cfg.success_threshold}_condition={cfg.success_rate_condition}]"
     else:
@@ -265,6 +265,7 @@ def train_ppo(cfg:dict, randomization_fn, env, env_cfg, eval_env=None):
         n_sampler_iters = cfg.n_sampler_iters,
         success_threshold = cfg.success_threshold,
         success_rate_condition = cfg.success_rate_condition,
+        trust_region_threshold= cfg.trust_region_threshold,
         work_dir = cfg.work_dir,
         use_scheduling = cfg.use_scheduling,
         scheduler_lr =cfg.scheduler_lr,

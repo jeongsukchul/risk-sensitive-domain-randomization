@@ -292,6 +292,7 @@ def train(
     max_bound :float = 110.,
     success_threshold : float = .6, 
     success_rate_condition : float = 0.5,
+    trust_region_threshold : float = 0.1,
     work_dir: str= None,
     use_scheduling : bool = False,
     scheduler_lr: float = 0.2,
@@ -300,7 +301,6 @@ def train(
     start_beta : float =10.,
     end_beta : float = -40.,
     scheduler_mode : str = "linear",
-    trust_region : float = 0.005,
     # GBS hyperparameters (aligned with module/gbs/gbs_test.py defaults)
     gbs_process_type: str = "vp",  # "vp" or "langevin"
     gbs_num_steps: int = 100,
@@ -474,8 +474,8 @@ def train(
       bound_info = training_dr_range,
       success_threshold= success_threshold,
       success_rate_condition= success_rate_condition,
+      kl_upper_bound = trust_region_threshold,
       sampler_choice = sampler_choice,
-      kl_upper_bound = trust_region,
     )
   init_autodr_state, init_doraemon_state, init_flow_state, init_gmm_state = init_states
   scheduler, init_scheduler_state =  GMMScheduler.create(
