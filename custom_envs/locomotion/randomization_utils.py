@@ -11,9 +11,9 @@ from mujoco import mjx
 def make_default_dr_range(
     model: mjx.Model,
     *,
-    floor_friction_range: tuple[float, float] = (0.4, 1.5),
-    dof_friction_range: tuple[float, float] = (0.9, 1.1),
-    armature_range: tuple[float, float] = (1.0, 1.05),
+    floor_friction_range: tuple[float, float] = (0.4, 2.),
+    # dof_friction_range: tuple[float, float] = (0.9, 1.1),
+    # armature_range: tuple[float, float] = (1.0, 1.05),
     torso_ipos_offset_range: tuple[float, float] = (-0.05, 0.05),
     body_mass_range: tuple[float, float] = (0.5, 1.5),
     torso_mass_offset_range: tuple[float, float] = (-1.5, 1.5),
@@ -23,8 +23,8 @@ def make_default_dr_range(
   n_dofs = model.nv - 6
   low = jp.array(
       [floor_friction_range[0]]
-      + [dof_friction_range[0]] * n_dofs
-      + [armature_range[0]] * n_dofs
+    #   + [dof_friction_range[0]] * n_dofs
+    #   + [armature_range[0]] * n_dofs
       + [torso_ipos_offset_range[0]] * 3
       + [body_mass_range[0]] * model.nbody
       + [torso_mass_offset_range[0]]
@@ -32,8 +32,8 @@ def make_default_dr_range(
   )
   high = jp.array(
       [floor_friction_range[1]]
-      + [dof_friction_range[1]] * n_dofs
-      + [armature_range[1]] * n_dofs
+    #   + [dof_friction_range[1]] * n_dofs
+    #   + [armature_range[1]] * n_dofs
       + [torso_ipos_offset_range[1]] * 3
       + [body_mass_range[1]] * model.nbody
       + [torso_mass_offset_range[1]]
@@ -47,8 +47,8 @@ def make_default_nominal_params(model: mjx.Model) -> jax.Array:
   n_dofs = model.nv - 6
   return jp.array(
       [1.0]
-      + [1.0] * n_dofs
-      + [1.0] * n_dofs
+    #   + [1.0] * n_dofs
+    #   + [1.0] * n_dofs
       + [0.0] * 3
       + [1.0] * model.nbody
       + [0.0]
@@ -69,15 +69,17 @@ def _apply_randomization(
   geom_friction = model.geom_friction.at[floor_geom_id, 0].set(params[idx])
   idx += 1
 
-  dof_frictionloss = model.dof_frictionloss.at[6:].set(
-      model.dof_frictionloss[6:] * params[idx : idx + n_dofs]
-  )
-  idx += n_dofs
+  dof_frictionloss = model.dof_frictionloss
+  dof_armature = model.dof_armature
+#   dof_frictionloss = model.dof_frictionloss.at[6:].set(
+#       model.dof_frictionloss[6:] * params[idx : idx + n_dofs]
+#   )
+#   idx += n_dofs
 
-  dof_armature = model.dof_armature.at[6:].set(
-      model.dof_armature[6:] * params[idx : idx + n_dofs]
-  )
-  idx += n_dofs
+#   dof_armature = model.dof_armature.at[6:].set(
+#       model.dof_armature[6:] * params[idx : idx + n_dofs]
+#   )
+#   idx += n_dofs
 
   body_ipos = model.body_ipos.at[torso_body_id].set(
       model.body_ipos[torso_body_id] + params[idx : idx + 3]

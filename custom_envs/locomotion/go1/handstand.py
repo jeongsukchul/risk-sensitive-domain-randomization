@@ -313,6 +313,10 @@ class Handstand(go1_base.Go1Env):
         joint_vel,
         data.actuator_force,
         torso_height,
+        self.mjx_model.body_ipos[1],
+        self.mjx_model.body_mass[:],
+        self.mjx_model.geom_friction[0, 0:1],
+        self.mjx_model.qpos0[7:]
     ])
 
     return {
