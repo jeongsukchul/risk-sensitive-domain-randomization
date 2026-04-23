@@ -253,9 +253,9 @@ class PandaOpenCabinet(panda.PandaBase):
     low, high = [], []
     # 29d
     # 1. Gripper Friction (1 param): U(0.3, 1.5)
-    low.append(jp.array([0.3])); high.append(jp.array([15.]))
+    low.append(jp.array([0.1])); high.append(jp.array([20.]))
     # 1. Cabinet Friction (1 param): U(0.3, 1.5)
-    low.append(jp.array([0.3])); high.append(jp.array([15.]))
+    low.append(jp.array([0.1])); high.append(jp.array([20.]))
     # 2. Cabinet Handle/Drawer Mass Scale (1 param): U(0.5, 2.0)
     low.append(jp.array([0.1])); high.append(jp.array([20.0]))
     # Franka Mass Scale (11 param)
