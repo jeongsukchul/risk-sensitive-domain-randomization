@@ -11,7 +11,7 @@ from mujoco import mjx
 def make_default_dr_range(
     model: mjx.Model,
     *,
-    floor_friction_range: tuple[float, float] = (0.4, 2.),
+    floor_friction_range: tuple[float, float] = (0.4, 1.5),
     # dof_friction_range: tuple[float, float] = (0.9, 1.1),
     # armature_range: tuple[float, float] = (1.0, 1.05),
     torso_ipos_offset_range: tuple[float, float] = (-0.05, 0.05),
