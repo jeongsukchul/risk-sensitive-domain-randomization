@@ -23,7 +23,7 @@ from custom_envs import mjx_env
 from ml_collections import config_dict
 
 from custom_envs import mjx_env
-# from mujoco_playground._src.dm_control_suite import acrobot
+from custom_envs.dm_control_suite import acrobot
 # from mujoco_playground._src.dm_control_suite import ball_in_cup
 from custom_envs.dm_control_suite import cartpole, humanoid
 from custom_envs.dm_control_suite import cheetah
@@ -39,8 +39,8 @@ from custom_envs.dm_control_suite import pendulum
 from custom_envs.dm_control_suite import walker
 
 _envs = {
-    # "AcrobotSwingup": partial(acrobot.Balance, sparse=False),
-    # "AcrobotSwingupSparse": partial(acrobot.Balance, sparse=True),
+    "AcrobotSwingup": partial(acrobot.Balance, sparse=False),
+    "AcrobotSwingupSparse": partial(acrobot.Balance, sparse=True),
     # "BallInCup": ball_in_cup.BallInCup,
     "CartpoleBalance": partial(cartpole.Balance, swing_up=False, sparse=False),
     "CartpoleBalanceSparse": partial(
@@ -78,8 +78,8 @@ _envs = {
 
 _cfgs = {
     # go/keep-sorted start
-    # "AcrobotSwingup": acrobot.default_config,
-    # "AcrobotSwingupSparse": acrobot.default_config,
+    "AcrobotSwingup": acrobot.default_config,
+    "AcrobotSwingupSparse": acrobot.default_config,
     # "BallInCup": ball_in_cup.default_config,
     "CartpoleBalance": cartpole.default_config,
     "CartpoleBalanceSparse": cartpole.default_config,
@@ -109,7 +109,8 @@ _cfgs = {
 }
 
 _randomizer = {
-
+  "AcrobotSwingup": acrobot.domain_randomize,
+  "AcrobotSwingupSparse": acrobot.domain_randomize,
   "CartpoleSwingup": cartpole.domain_randomize,
   "CartpoleSwingupSparse": cartpole.domain_randomize,
   "HopperHop" : hopper.domain_randomize,
@@ -126,7 +127,8 @@ _randomizer = {
   "QuadrupedWalk": quadruped.domain_randomize,
 }
 _randomizer_eval = {
-
+  "AcrobotSwingup": acrobot.domain_randomize_eval,
+  "AcrobotSwingupSparse": acrobot.domain_randomize_eval,
   "CartpoleSwingup": cartpole.domain_randomize_eval,
   "CartpoleSwingupSparse": cartpole.domain_randomize_eval,
   "HopperHop" : hopper.domain_randomize_eval,
