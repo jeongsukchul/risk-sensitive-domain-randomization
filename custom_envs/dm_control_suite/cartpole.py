@@ -245,7 +245,7 @@ class Balance(mjx_env.MjxEnv):
       # self.mjx_model.dof_frictionloss[1:2],
       # self.mjx_model.dof_armature[1:2],
       # self.mjx_model.dof_damping[1:2],
-      self.mjx_model.qpos0[1:2],
+      self.mjx_model.opt.gravity[2:3],
     ])
     # return state
     return {
@@ -320,17 +320,17 @@ class Balance(mjx_env.MjxEnv):
     return self._mjx_model
   @property
   def nominal_params(self)-> jp.ndarray:
-    return jp.array([1, 0])
+    return jp.array([1, -9.81])
   @property
   def dr_range(self) -> dict:
 
     low = jp.array(
-        [0.5] +                             
-        [-3]                             
+        [0.01] +                             
+        [-12.0]                             
     )
     high = jp.array(
-        [8.2] +                         
-        [3]                               
+        [30.0] +                         
+        [0]                               
     )
     return low, high
   @property
@@ -347,7 +347,7 @@ class Balance(mjx_env.MjxEnv):
     return low, high
   @property
   def dr_label(self) -> dict:
-    return ("Pole Mass", "Joint Stiffness Equilibrium Offset")
+    return ("Pole Mass", "Gravity Z")
   @property
   def ood_range(self) -> dict:
 
@@ -385,12 +385,12 @@ def domain_randomize(model: mjx.Model, dr_range, params=None, rng:jax.Array=None
     idx+=1
     # dof_armature = model.dof_armature.at[1].set(params[idx])
     # idx+=1
-    qpos0 = model.qpos0.at[1].set(params[idx])
+    gravity = model.opt.gravity.at[2].set(params[idx])
     idx+=1
     
     assert idx == len(params)
     return (
-      qpos0,
+      gravity,
       body_mass,
       body_inertia,
     )
@@ -411,11 +411,11 @@ def domain_randomize(model: mjx.Model, dr_range, params=None, rng:jax.Array=None
     # idx+=1
     # dof_damping = model.dof_damping.at[1].set(model.dof_damping[1]* rng_params[idx])
     # idx+=1
-    qpos0 = model.qpos0.at[1].set(rng_params[idx])
+    gravity = model.opt.gravity.at[2].set(rng_params[idx])
     idx+=1
     assert idx == len(rng_params)
     return (
-      qpos0,
+      gravity,
       body_mass,
       body_inertia,
     )
@@ -423,13 +423,13 @@ def domain_randomize(model: mjx.Model, dr_range, params=None, rng:jax.Array=None
   if rng is None and params is not None:
 
     (
-      qpos0, 
+      gravity,
       body_mass,
       body_inertia,
     ) = shift_dynamics(params)
   elif rng is not None and params is None:
     (
-      qpos0,
+      gravity,
       body_mass,
       body_inertia,
     ) = rand_dynamics(rng)
@@ -437,12 +437,12 @@ def domain_randomize(model: mjx.Model, dr_range, params=None, rng:jax.Array=None
     raise ValueError("rng and params wrong!")
   in_axes = jax.tree_util.tree_map(lambda x: None, model)
   in_axes = in_axes.tree_replace({
-      "qpos0": 0,
+      "opt.gravity": 0,
       "body_mass": 0,
       "body_inertia": 0,
   })
   model = model.tree_replace({
-      "qpos0": qpos0,
+      "opt.gravity": gravity,
       "body_mass": body_mass,
       "body_inertia": body_inertia,
   })
@@ -467,12 +467,12 @@ def domain_randomize_eval(model: mjx.Model, dr_range, params=None, rng:jax.Array
     # idx+=1
     # dof_damping = model.dof_damping.at[1].set(model.dof_damping[1]* params[idx])
     # idx+=1
-    qpos0 = model.qpos0.at[1].set(params[idx])
+    gravity = model.opt.gravity.at[2].set(params[idx])
     idx+=1
 
     assert idx == len(params)
     return (
-      qpos0,
+      gravity,
       body_mass,
       body_inertia,
     )
@@ -492,25 +492,24 @@ def domain_randomize_eval(model: mjx.Model, dr_range, params=None, rng:jax.Array
     # idx+=1
     # dof_damping = model.dof_damping.at[1].set(model.dof_damping[1]* rng_params[idx])
     # idx+=1
-    qpos0 = model.qpos0.at[1].set(rng_params[idx])
-    # qpos0 = model.qpos0
+    gravity = model.opt.gravity.at[2].set(rng_params[idx])
     idx+=1
     assert idx == len(dr_low)
     return (
-      qpos0,
+      gravity,
       body_mass,
       body_inertia,
     )
   
   if rng is None and params is not None:
     (
-      qpos0, 
+      gravity,
       body_mass,
       body_inertia
       ) = shift_dynamics(params)
   elif rng is not None and params is None:
     (
-      qpos0,
+      gravity,
       body_mass,
       body_inertia
     ) = rand_dynamics(rng)
@@ -518,12 +517,12 @@ def domain_randomize_eval(model: mjx.Model, dr_range, params=None, rng:jax.Array
     raise ValueError("rng and params wrong!")
   in_axes = jax.tree_util.tree_map(lambda x: None, model)
   in_axes = in_axes.tree_replace({
-      "qpos0": 0,
+      "opt.gravity": 0,
       "body_mass": 0,
       "body_inertia": 0,
   })
   model = model.tree_replace({
-      "qpos0": qpos0,
+      "opt.gravity": gravity,
       "body_mass": body_mass,
       "body_inertia": body_inertia, 
   })

@@ -266,7 +266,7 @@ def evaluate(cfg, key, log_prob_fn=None):
 
         metrics, reward_1d, _ = evaluator.run_evaluation(
             params, dynamics_params=dynamics_params_grid,
-            training_metrics={}, num_eval_seeds=50, success_threshold=0.7,
+            training_metrics={}, num_eval_seeds=1, success_threshold=0.7,
         )
         
         all_rewards_1d.append(reward_1d)

@@ -863,7 +863,7 @@ def train(
 
       def filter_datas(batched_data):
         returns = jnp.sum(batched_data.reward * batched_data.discount, axis=1)  # [B]
-        k = batch_size*num_minibatches
+        k = batch_size * num_minibatches
         _, indicies = jax.lax.top_k(-returns, k)
         filtered_data = jax.tree_util.tree_map(
             lambda x: x[indicies],

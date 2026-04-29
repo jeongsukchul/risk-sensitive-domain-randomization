@@ -350,7 +350,7 @@ def plot_and_print(df, output_dir, sweep_config_path):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--logs", type=str, default="./logs", help="Path to logs directory")
-    parser.add_argument("--output", type=str, default="final_leaderboard.csv", help="Output CSV file")
+    parser.add_argument("--output", type=str, default="final_leaderboard_results.csv", help="Output CSV file")
     parser.add_argument("--plot_dir", type=str, default="./plots", help="Directory to save plots")
     parser.add_argument("--sweep_config", type=str, default="sweep_config.yaml", help="Path to sweep config yaml")
     args = parser.parse_args()
