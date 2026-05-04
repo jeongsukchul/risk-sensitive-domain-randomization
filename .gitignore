@@ -14,4 +14,5 @@ external_deps/
 learning/agents/sampler_ppo/toy_experiments
 learning/module/gbs/wandb
 learning/module/gbs/compare_GBS_GMMVI
+learning/wandb
 learning/plots
