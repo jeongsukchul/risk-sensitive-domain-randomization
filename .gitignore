@@ -9,6 +9,9 @@ learning/logs
 learning/outputs
 learning/commands
 .git/
+learning/wandb
 external_deps/
+learning/agents/sampler_ppo/toy_experiments
 learning/module/gbs/wandb
 learning/module/gbs/compare_GBS_GMMVI
+learning/plots
