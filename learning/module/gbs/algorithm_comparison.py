@@ -2011,7 +2011,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--use_wandb", action="store_true")
     parser.set_defaults(use_wandb=True)
     parser.add_argument("--wandb_project", type=str, default="compare_gbs_gmmvi")
-    parser.add_argument("--wandb_entity", type=str, default="tjrcjf410-seoul-national-university")
+    parser.add_argument("--wandb_entity", type=str, default=None)
     parser.add_argument("--wandb_name", type=str, default=None)
     parser.add_argument("--wandb_log_every", type=int, default=10)
     parser.add_argument("--wandb_plot_ntraj", type=int, default=50)
