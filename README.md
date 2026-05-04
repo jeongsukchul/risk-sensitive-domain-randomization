@@ -1,4 +1,4 @@
-**"This repository is for ICML 2026 submission and will be de-anonymized upon acceptance."**
+**"This repository is for Neurips 2026 submission and will be de-anonymized upon acceptance."**
 
 # Risk-Sensitive Domain Randomization (RSDR)
 
@@ -54,6 +54,10 @@ python train.py policy=gmmppo beta=-30 wandb_project="rsdr-cheetah" task=Cheetah
 # Beta = 0 (Uniform Baseline)
 python train.py policy=gmmppo beta=0 wandb_project="rsdr-cheetah" task=CheetahRun seed=0
 ```
+#### If you want to use diffusion based parameterization use (DIS-LV)
+```bash
+python train.py policy=gbsppo beta=-30 wandb_project="rsdr-cheetah" task=CheetahRun seed=0
+```
 ### Run GOFLOW Example
 
 ```bash
@@ -84,6 +88,8 @@ Simulation Environment. https://github.com/google-deepmind/mujoco_playground
 Our PPO implementation is based on Brax. We modified it to support Asymmetric Actor-Critic  (conditioning value functions on latent parameters $\xi$) to support privileged information during training. https://github.com/google/brax
 
 - **GMMVI Code**:
-  Our GMMVI implementation is based on the code in https://github.com/DenisBless/variational_sampling_methods.
+  Our GMMVI implementation is based on the code in https://github.com/DenisBless/variational_sampling_methods (with few modification)
+- **DIS-LV Code**:
+  Our DIS-LV implementation is based on the code in https://github.com/juliusberner/sde_sampler (with jax based reimplementation)
 - **BIJX**:
 Used for implementing Rational Quadratic Splines in GOFLOW baseline. https://github.com/mathisgerdes/bijx

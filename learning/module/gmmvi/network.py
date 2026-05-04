@@ -50,10 +50,14 @@ def create_gmm_network_and_state(
     prior_mean : float = 0.,
     prior_scale : float = .3,
     bound_info : dict = None,
+    max_components : int | None = None,
+    num_initial_components : int | None = None,
 ):  
     
-    num_initial_components = 20 if dim < 35 else 30
-    max_components = num_initial_components
+    max_components = int(cfg.max_components if max_components is None else max_components)
+    num_initial_components = int(
+        cfg.num_initial_components if num_initial_components is None else num_initial_components
+    )
     gmm = setup_full_cov_gmm(dim, max_components, bound_info)
     gmm_state = gmm.init_gmm_state(key,
                                 num_initial_components,

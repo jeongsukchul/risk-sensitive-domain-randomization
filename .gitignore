@@ -10,3 +10,5 @@ learning/outputs
 learning/commands
 .git/
 external_deps/
+learning/module/gbs/wandb
+learning/module/gbs/compare_GBS_GMMVI

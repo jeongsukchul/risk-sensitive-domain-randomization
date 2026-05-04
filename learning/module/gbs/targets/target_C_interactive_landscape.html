@@ -1,0 +1,496 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Target_3 Interactive Landscape</title>
+  <style>
+    :root {
+      --bg: #f4efe6;
+      --panel: rgba(255, 252, 247, 0.9);
+      --ink: #1f2a33;
+      --muted: #5f6f7b;
+      --accent: #ca5c2d;
+      --line: rgba(31, 42, 51, 0.14);
+      --shadow: 0 20px 50px rgba(47, 40, 32, 0.12);
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "IBM Plex Sans", "Avenir Next", "Segoe UI", sans-serif;
+      color: var(--ink);
+      background:
+        radial-gradient(circle at top left, rgba(202, 92, 45, 0.18), transparent 28%),
+        radial-gradient(circle at top right, rgba(49, 93, 82, 0.12), transparent 24%),
+        linear-gradient(180deg, #faf5ee 0%, var(--bg) 100%);
+      min-height: 100vh;
+    }
+    .shell {
+      width: min(1440px, calc(100vw - 32px));
+      margin: 24px auto;
+      display: grid;
+      grid-template-columns: 380px 1fr;
+      gap: 20px;
+      align-items: start;
+    }
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 24px;
+      box-shadow: var(--shadow);
+      backdrop-filter: blur(8px);
+    }
+    .controls { padding: 22px 20px; position: sticky; top: 20px; }
+    .viewer { padding: 20px; display: grid; gap: 16px; }
+    h1 {
+      margin: 0 0 8px;
+      font-family: Georgia, "Iowan Old Style", serif;
+      font-size: 2rem;
+      line-height: 1.1;
+      letter-spacing: -0.03em;
+    }
+    .lede { margin: 0 0 18px; color: var(--muted); font-size: 0.96rem; line-height: 1.5; }
+    .group-title {
+      margin: 18px 0 10px;
+      padding-top: 14px;
+      border-top: 1px solid var(--line);
+      font-size: 0.83rem;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--muted);
+    }
+    .control { display: grid; gap: 6px; margin-bottom: 12px; }
+    .control label {
+      display: flex; justify-content: space-between; gap: 10px;
+      font-size: 0.92rem; font-weight: 600;
+    }
+    .control output { color: var(--accent); font-variant-numeric: tabular-nums; }
+    input[type="range"] { width: 100%; accent-color: var(--accent); }
+    select, button {
+      width: 100%; border-radius: 14px; border: 1px solid var(--line);
+      background: white; color: var(--ink); padding: 10px 12px; font: inherit;
+    }
+    .button-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 10px; }
+    button { cursor: pointer; transition: transform 140ms ease, background 140ms ease; }
+    button:hover { transform: translateY(-1px); background: #fff7f1; }
+    .stage { display: grid; grid-template-columns: minmax(0, 1fr) 72px; gap: 16px; align-items: start; }
+    .canvas-wrap {
+      position: relative; overflow: hidden; border-radius: 22px;
+      border: 1px solid var(--line); background: #f7f3ec;
+    }
+    canvas { display: block; width: 100%; height: auto; aspect-ratio: 1 / 1; }
+    .colorbar {
+      height: min(70vh, 680px); border-radius: 18px; border: 1px solid var(--line);
+      background: linear-gradient(to top,
+        rgb(11, 8, 30) 0%, rgb(53, 28, 108) 18%, rgb(31, 121, 180) 40%,
+        rgb(45, 181, 134) 62%, rgb(170, 220, 50) 82%, rgb(254, 232, 56) 100%);
+      position: relative;
+    }
+    .colorbar-labels {
+      display: flex; flex-direction: column; justify-content: space-between;
+      font-size: 0.82rem; color: var(--muted); margin-top: 6px; height: min(70vh, 680px);
+    }
+    .meta-grid { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 12px; }
+    .meta-card {
+      padding: 14px; border-radius: 18px; border: 1px solid var(--line);
+      background: rgba(255, 255, 255, 0.72);
+    }
+    .meta-card .label {
+      display: block; font-size: 0.78rem; letter-spacing: 0.06em;
+      text-transform: uppercase; color: var(--muted); margin-bottom: 8px;
+    }
+    .meta-card .value { font-size: 1.05rem; font-weight: 700; font-variant-numeric: tabular-nums; }
+    .equations, .notes {
+      padding: 16px 18px; border-radius: 18px; border: 1px solid var(--line);
+      background: rgba(255, 255, 255, 0.72);
+    }
+    .equations code, .notes code {
+      font-family: "IBM Plex Mono", "SFMono-Regular", monospace;
+      font-size: 0.92rem; white-space: pre-wrap;
+    }
+    .notes p { margin: 0; line-height: 1.5; color: var(--muted); }
+    @media (max-width: 1160px) {
+      .shell { grid-template-columns: 1fr; }
+      .controls { position: static; }
+      .meta-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    }
+    @media (max-width: 700px) {
+      .shell { width: min(100vw - 18px, 100%); margin: 10px auto 18px; gap: 12px; }
+      .controls, .viewer { padding: 16px; }
+      .stage { grid-template-columns: 1fr; }
+      .colorbar, .colorbar-labels { height: 36px; }
+      .colorbar {
+        background: linear-gradient(to right,
+          rgb(11, 8, 30) 0%, rgb(53, 28, 108) 18%, rgb(31, 121, 180) 40%,
+          rgb(45, 181, 134) 62%, rgb(170, 220, 50) 82%, rgb(254, 232, 56) 100%);
+      }
+      .colorbar-labels { flex-direction: row; margin-top: 0; }
+      .meta-grid { grid-template-columns: 1fr 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <section class="panel controls">
+      <h1>Target_3 Landscape</h1>
+      <p class="lede">
+        Policy-shifted cosine target. Here, <code>p_u</code> changes both the tilt strength
+        <code>lambda = beta · p_u</code> and the mode location through moving centers <code>mu_i(p)</code>.
+      </p>
+
+      <div class="group-title">Global</div>
+      <div class="control">
+        <label for="mode">View <output id="mode_value">density</output></label>
+        <select id="mode">
+          <option value="density" selected>tilted density</option>
+          <option value="g">target landscape g(x; p)</option>
+        </select>
+      </div>
+      <div class="control">
+        <label for="beta">beta <output id="beta_value"></output></label>
+        <input id="beta" type="range" min="-40" max="40" step="0.5" value="10" />
+      </div>
+      <div class="control">
+        <label for="pu">p_u <output id="pu_value"></output></label>
+        <input id="pu" type="range" min="0" max="1" step="0.01" value="0.50" />
+      </div>
+      <div class="control">
+        <label for="c">c <output id="c_value"></output></label>
+        <input id="c" type="range" min="0.05" max="0.95" step="0.01" value="0.55" />
+      </div>
+      <div class="control">
+        <label for="resolution">resolution <output id="resolution_value"></output></label>
+        <input id="resolution" type="range" min="80" max="220" step="4" value="180" />
+      </div>
+      <div class="button-row">
+        <button id="play">Play p_u</button>
+        <button id="reset">Reset</button>
+      </div>
+
+      <div class="group-title">Amplitudes</div>
+      <div class="control">
+        <label for="a1">a1 <output id="a1_value"></output></label>
+        <input id="a1" type="range" min="-0.5" max="0.5" step="0.01" value="0.20" />
+      </div>
+      <div class="control">
+        <label for="a2">a2 <output id="a2_value"></output></label>
+        <input id="a2" type="range" min="-0.5" max="0.5" step="0.01" value="0.15" />
+      </div>
+
+      <div class="group-title">Frequencies</div>
+      <div class="control">
+        <label for="k1">k1 <output id="k1_value"></output></label>
+        <input id="k1" type="range" min="1" max="8" step="1" value="3" />
+      </div>
+      <div class="control">
+        <label for="k2">k2 <output id="k2_value"></output></label>
+        <input id="k2" type="range" min="1" max="8" step="1" value="5" />
+      </div>
+
+      <div class="group-title">Base Centers</div>
+      <div class="control">
+        <label for="mu01">mu0_1 <output id="mu01_value"></output></label>
+        <input id="mu01" type="range" min="0" max="1" step="0.01" value="0.20" />
+      </div>
+      <div class="control">
+        <label for="mu02">mu0_2 <output id="mu02_value"></output></label>
+        <input id="mu02" type="range" min="0" max="1" step="0.01" value="0.65" />
+      </div>
+
+      <div class="group-title">Policy Shift Coefficients</div>
+      <div class="control">
+        <label for="b1">b1 <output id="b1_value"></output></label>
+        <input id="b1" type="range" min="-1" max="1" step="0.01" value="0.35" />
+      </div>
+      <div class="control">
+        <label for="b2">b2 <output id="b2_value"></output></label>
+        <input id="b2" type="range" min="-1" max="1" step="0.01" value="-0.20" />
+      </div>
+    </section>
+
+    <section class="panel viewer">
+      <div class="stage">
+        <div class="canvas-wrap">
+          <canvas id="plot" width="900" height="900"></canvas>
+        </div>
+        <div>
+          <div class="colorbar" aria-hidden="true"></div>
+          <div class="colorbar-labels">
+            <span id="colorbar_top">high</span>
+            <span id="colorbar_mid">mid</span>
+            <span id="colorbar_bottom">low</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="meta-grid">
+        <div class="meta-card"><span class="label">lambda</span><span class="value" id="lambda_value">5.000</span></div>
+        <div class="meta-card"><span class="label">Effective a</span><span class="value" id="effective_a">[0.20, 0.15]</span></div>
+        <div class="meta-card"><span class="label">mu(p)</span><span class="value" id="mu_value">[0.375, 0.550]</span></div>
+        <div class="meta-card"><span class="label">g(x) Range</span><span class="value" id="g_range">0.20 to 0.90</span></div>
+        <div class="meta-card"><span class="label">Density Peak</span><span class="value" id="density_peak">1.0000</span></div>
+      </div>
+
+      <div class="equations"><code id="equation_text"></code></div>
+      <div class="notes"><p id="note_text"></p></div>
+    </section>
+  </div>
+
+  <script>
+    const controls = {
+      mode: document.getElementById("mode"), beta: document.getElementById("beta"), pu: document.getElementById("pu"),
+      c: document.getElementById("c"), resolution: document.getElementById("resolution"),
+      a1: document.getElementById("a1"), a2: document.getElementById("a2"),
+      k1: document.getElementById("k1"), k2: document.getElementById("k2"),
+      mu01: document.getElementById("mu01"), mu02: document.getElementById("mu02"),
+      b1: document.getElementById("b1"), b2: document.getElementById("b2"),
+    };
+
+    const outputs = {};
+    Object.keys(controls).forEach(k => {
+      const el = document.getElementById(`${k}_value`);
+      if (el) outputs[k] = el;
+    });
+
+    const ui = {
+      canvas: document.getElementById("plot"),
+      lambdaValue: document.getElementById("lambda_value"),
+      effectiveA: document.getElementById("effective_a"),
+      muValue: document.getElementById("mu_value"),
+      gRange: document.getElementById("g_range"),
+      densityPeak: document.getElementById("density_peak"),
+      equationText: document.getElementById("equation_text"),
+      noteText: document.getElementById("note_text"),
+      colorbarTop: document.getElementById("colorbar_top"),
+      colorbarMid: document.getElementById("colorbar_mid"),
+      colorbarBottom: document.getElementById("colorbar_bottom"),
+      play: document.getElementById("play"),
+      reset: document.getElementById("reset"),
+    };
+
+    const ctx = ui.canvas.getContext("2d");
+    let playTimer = null;
+
+    function formatNumber(value, digits = 2) { return Number(value).toFixed(digits); }
+    function mod1(x) { return ((x % 1) + 1) % 1; }
+
+    function getState() {
+      const pu = parseFloat(controls.pu.value);
+      const beta = parseFloat(controls.beta.value);
+      return {
+        mode: controls.mode.value,
+        beta,
+        pu,
+        ps: 1 - pu,
+        lambda: beta * pu,
+        c: parseFloat(controls.c.value),
+        resolution: parseInt(controls.resolution.value, 10),
+        a1: parseFloat(controls.a1.value), a2: parseFloat(controls.a2.value),
+        k1: parseFloat(controls.k1.value), k2: parseFloat(controls.k2.value),
+        mu01: parseFloat(controls.mu01.value), mu02: parseFloat(controls.mu02.value),
+        b1: parseFloat(controls.b1.value), b2: parseFloat(controls.b2.value),
+      };
+    }
+
+    function clampAmplitudes(state) {
+      const bound = Math.min(state.c, 1 - state.c);
+      const total = Math.abs(state.a1) + Math.abs(state.a2);
+      let { a1, a2 } = state;
+      let scaled = false;
+      if (total > bound && total > 1e-12) {
+        const scale = bound / total;
+        a1 *= scale; a2 *= scale; scaled = true;
+      }
+      return { ...state, a1, a2, amplitudeBound: bound, scaled };
+    }
+
+    function computeCenters(state) {
+      return {
+        mu1: mod1(state.mu01 + state.b1 * state.pu),
+        mu2: mod1(state.mu02 + state.b2 * state.pu),
+      };
+    }
+
+    function viridis(t) {
+      const stops = [
+        [0.0, [68, 1, 84]], [0.25, [59, 82, 139]], [0.5, [33, 145, 140]],
+        [0.75, [94, 201, 98]], [1.0, [253, 231, 37]],
+      ];
+      const clamped = Math.max(0, Math.min(1, t));
+      for (let i = 0; i < stops.length - 1; i++) {
+        const [t0, c0] = stops[i], [t1, c1] = stops[i + 1];
+        if (clamped >= t0 && clamped <= t1) {
+          const u = (clamped - t0) / (t1 - t0);
+          return [
+            Math.round(c0[0] + u * (c1[0] - c0[0])),
+            Math.round(c0[1] + u * (c1[1] - c0[1])),
+            Math.round(c0[2] + u * (c1[2] - c0[2])),
+          ];
+        }
+      }
+      return stops[stops.length - 1][1];
+    }
+
+    function computeLandscape(state) {
+      const { mu1, mu2 } = computeCenters(state);
+      const n = state.resolution;
+      const gValues = new Float32Array(n * n);
+      const zValues = new Float32Array(n * n);
+      let gMin = Infinity, gMax = -Infinity, logpMax = -Infinity;
+      for (let j = 0; j < n; j++) {
+        const y = j / (n - 1);
+        for (let i = 0; i < n; i++) {
+          const x = i / (n - 1);
+          const g = state.c
+            + state.a1 * Math.cos(2 * Math.PI * state.k1 * (x - mu1))
+            + state.a2 * Math.cos(2 * Math.PI * state.k2 * (y - mu2));
+          const idx = j * n + i;
+          gValues[idx] = g;
+          if (g < gMin) gMin = g;
+          if (g > gMax) gMax = g;
+          const logp = state.lambda * g;
+          zValues[idx] = logp;
+          if (logp > logpMax) logpMax = logp;
+        }
+      }
+      let zMin = Infinity, zMax = -Infinity, densityPeak = 0;
+      for (let i = 0; i < zValues.length; i++) {
+        zValues[i] = state.mode === "density" ? Math.exp(zValues[i] - logpMax) : gValues[i];
+        if (zValues[i] < zMin) zMin = zValues[i];
+        if (zValues[i] > zMax) zMax = zValues[i];
+        if (state.mode === "density" && zValues[i] > densityPeak) densityPeak = zValues[i];
+      }
+      return { n, gValues, zValues, gMin, gMax, zMin, zMax, densityPeak, mu1, mu2 };
+    }
+
+    function drawAxes() {
+      const { width, height } = ui.canvas;
+      ctx.strokeStyle = "rgba(255,255,255,0.65)";
+      ctx.lineWidth = 2;
+      ctx.strokeRect(36, 24, width - 72, height - 72);
+      ctx.fillStyle = "rgba(255,255,255,0.9)";
+      ctx.font = "600 24px IBM Plex Sans, sans-serif";
+      ctx.fillText("x1", width / 2 - 10, height - 12);
+      ctx.save();
+      ctx.translate(12, height / 2 + 10);
+      ctx.rotate(-Math.PI / 2);
+      ctx.fillText("x2", 0, 0);
+      ctx.restore();
+    }
+
+    function drawCenterCross(landscape) {
+      const { width, height } = ui.canvas;
+      const px = 36 + landscape.mu1 * (width - 72);
+      const py = 24 + landscape.mu2 * (height - 72);
+      ctx.save();
+      ctx.strokeStyle = "rgba(255,255,255,0.9)";
+      ctx.lineWidth = 2.5;
+      ctx.beginPath();
+      ctx.moveTo(px - 10, py); ctx.lineTo(px + 10, py);
+      ctx.moveTo(px, py - 10); ctx.lineTo(px, py + 10);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.arc(px, py, 6, 0, 2 * Math.PI);
+      ctx.stroke();
+      ctx.restore();
+    }
+
+    function render() {
+      const rawState = getState();
+      const state = clampAmplitudes(rawState);
+      Object.entries(rawState).forEach(([key, value]) => {
+        if (outputs[key]) outputs[key].textContent = typeof value === "number"
+          ? formatNumber(value, key.startsWith("k") || key === "resolution" ? 0 : 2)
+          : value;
+      });
+      const landscape = computeLandscape(state);
+      const offscreen = document.createElement("canvas");
+      offscreen.width = landscape.n; offscreen.height = landscape.n;
+      const offctx = offscreen.getContext("2d");
+      const img = offctx.createImageData(landscape.n, landscape.n);
+      const denom = Math.max(landscape.zMax - landscape.zMin, 1e-8);
+      for (let i = 0; i < landscape.zValues.length; i++) {
+        const t = (landscape.zValues[i] - landscape.zMin) / denom;
+        const [r, g, b] = viridis(t);
+        const base = i * 4;
+        img.data[base] = r; img.data[base+1] = g; img.data[base+2] = b; img.data[base+3] = 255;
+      }
+      offctx.putImageData(img, 0, 0);
+      ctx.clearRect(0, 0, ui.canvas.width, ui.canvas.height);
+      ctx.drawImage(offscreen, 36, 24, ui.canvas.width - 72, ui.canvas.height - 72);
+      drawAxes();
+      drawCenterCross(landscape);
+
+      const title = state.mode === "density" ? "Tilted density (policy-shifted)" : "Target landscape g(x; p)";
+      ctx.fillStyle = "rgba(255,255,255,0.96)";
+      ctx.font = "700 30px Georgia, serif";
+      ctx.fillText(title, 36, 54);
+      ctx.font = "600 18px IBM Plex Sans, sans-serif";
+      ctx.fillText(`beta=${formatNumber(state.beta, 2)}  p_u=${formatNumber(state.pu, 2)}  lambda=${formatNumber(state.lambda, 2)}`, 36, 80);
+
+      ui.lambdaValue.textContent = formatNumber(state.lambda, 3);
+      ui.effectiveA.textContent = `[${formatNumber(state.a1, 3)}, ${formatNumber(state.a2, 3)}]`;
+      ui.muValue.textContent = `[${formatNumber(landscape.mu1, 3)}, ${formatNumber(landscape.mu2, 3)}]`;
+      ui.gRange.textContent = `${formatNumber(landscape.gMin, 3)} to ${formatNumber(landscape.gMax, 3)}`;
+      ui.densityPeak.textContent = formatNumber(state.mode === "density" ? landscape.densityPeak : landscape.zMax, 4);
+      ui.equationText.textContent =
+        `mu_1(p) = (${formatNumber(state.mu01, 3)} + ${formatNumber(state.b1, 3)}·p_u) mod 1\n`
+        + `mu_2(p) = (${formatNumber(state.mu02, 3)} + ${formatNumber(state.b2, 3)}·p_u) mod 1\n`
+        + `g(x; p) = ${formatNumber(state.c, 3)}`
+        + ` + ${formatNumber(state.a1, 3)} cos(2π·${formatNumber(state.k1, 0)}·(x1 - mu_1(p)))`
+        + ` + ${formatNumber(state.a2, 3)} cos(2π·${formatNumber(state.k2, 0)}·(x2 - mu_2(p)))\n`
+        + `nu_beta(x | p) ∝ exp((beta·p_u) · g(x; p))`;
+      ui.noteText.textContent = state.scaled
+        ? `Amplitudes were automatically rescaled to keep g(x; p) inside [0, 1]. The crosshair marks the moving base center mu(p).`
+        : `The crosshair marks the moving base center mu(p). As p_u changes, the mode location shifts while exact normalization remains phase-invariant.`;
+      ui.colorbarTop.textContent = formatNumber(landscape.zMax, 3);
+      ui.colorbarMid.textContent = formatNumber(0.5 * (landscape.zMin + landscape.zMax), 3);
+      ui.colorbarBottom.textContent = formatNumber(landscape.zMin, 3);
+    }
+
+    function resetControls() {
+      controls.mode.value = "density";
+      controls.beta.value = "10";
+      controls.pu.value = "0.50";
+      controls.c.value = "0.55";
+      controls.resolution.value = "180";
+      controls.a1.value = "0.20";
+      controls.a2.value = "0.15";
+      controls.k1.value = "3";
+      controls.k2.value = "5";
+      controls.mu01.value = "0.20";
+      controls.mu02.value = "0.65";
+      controls.b1.value = "0.35";
+      controls.b2.value = "-0.20";
+      render();
+    }
+
+    function togglePlay() {
+      if (playTimer !== null) {
+        clearInterval(playTimer); playTimer = null; ui.play.textContent = "Play p_u"; return;
+      }
+      ui.play.textContent = "Pause";
+      let direction = 1;
+      playTimer = setInterval(() => {
+        let next = parseFloat(controls.pu.value) + 0.01 * direction;
+        if (next >= 1) { next = 1; direction = -1; }
+        if (next <= 0) { next = 0; direction = 1; }
+        controls.pu.value = String(next);
+        render();
+      }, 50);
+    }
+
+    Object.values(controls).forEach(el => {
+      el.addEventListener("input", render);
+      el.addEventListener("change", render);
+    });
+    ui.play.addEventListener("click", togglePlay);
+    ui.reset.addEventListener("click", () => {
+      if (playTimer !== null) { clearInterval(playTimer); playTimer = null; ui.play.textContent = "Play p_u"; }
+      resetControls();
+    });
+    render();
+  </script>
+</body>
+</html>

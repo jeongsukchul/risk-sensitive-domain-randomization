@@ -17,7 +17,7 @@ from matplotlib.colors import PowerNorm
 from matplotlib import pyplot as plt
 from tqdm import trange
 
-from learning.module.gbs.gbs_loss import (
+from learning.module.gbs.gbs_loss_test import (
     Langevin,
     VP,
     lv_loss_from_rnd,
