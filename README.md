@@ -54,6 +54,54 @@ python train.py policy=gmmppo beta=-30 wandb_project="rsdr-cheetah" task=Cheetah
 # Beta = 0 (Uniform Baseline)
 python train.py policy=gmmppo beta=0 wandb_project="rsdr-cheetah" task=CheetahRun seed=0
 ```
+
+All GMMPPO modes estimate and log `gmm_kl_to_uniform`. In fixed-beta mode,
+`beta` and `beta_used` remain the configured inverse temperature. GMMPPO also
+supports a fixed KL radius relative to the uniform domain-randomization
+distribution. In this mode, `beta` is the negative initial value $\beta_0$ and
+$\lambda=-1/\beta$ is optimized by projected dual ascent. It additionally logs
+`dual_lambda`, `dual_beta`, `resulting_beta`, `kl_radius`, and `kl_violation`.
+
+```bash
+cd learning
+python run.py policy=gmmppo fixed_radius=true kl_radius=0.1 beta=-30 \
+  dual_lr=0.001 wandb_project="rsdr-cheetah" task=CheetahRun seed=0
+```
+
+`fixed_radius=true` cannot be combined with `use_scheduling=true`. The optional
+projection bounds are configured with `dual_lambda_min` and `dual_lambda_max`.
+
+For two-dimensional tasks, evaluation uses an equal-area, cell-centered
+128-by-128 grid (`eval_grid_size_2d=128`, or 16,384 parameter settings). GMMPPO
+constructs the empirical target with
+`log_softmax(beta * (estimated_return - center))` and compares it with the
+grid-normalized GMM density. Evaluation logs:
+
+- `eval/empirical_reverse_kl_q_to_target`
+- `eval/empirical_forward_kl_target_to_q`
+- `eval/empirical_js_divergence`
+- `eval/empirical_total_variation`
+- `eval/empirical_hellinger_distance`
+- `eval/empirical_overlap`
+- `eval/empirical_target_reverse_kl_to_uniform`
+- `eval/empirical_weighted_target_reverse_kl_to_uniform` (explicit alias)
+- `eval/empirical_sampler_reverse_kl_to_uniform`
+- centered log-sum-exp, target log normalizer, entropies
+- target and sampler ESS fractions and expected returns
+
+Because all grid cells have equal area, the uniform reference has mass
+$1/16384$ per cell. Thus the target KL-radius diagnostic is
+$D_{\mathrm{KL}}(\hat p_{\mathrm{target}}\|U)
+=\log(16384)-H(\hat p_{\mathrm{target}})$. In fixed-radius mode, evaluation
+also logs `eval/empirical_kl_radius` and the signed `*_kl_radius_residual`
+(`KL - radius`) plus the nonnegative `*_kl_radius_violation` for both the
+weighted target and learned sampler.
+
+The grid, estimated returns, normalized target/sampler masses, log masses, and
+beta are saved in `results/GMM/empirical_target_sampler_<step>.npz`. The
+artifact also stores both KL-to-uniform estimates and the configured radius,
+together with a three-panel comparison PNG.
+
 #### If you want to use diffusion based parameterization use (DIS-LV)
 ```bash
 python train.py policy=gbsppo beta=-30 wandb_project="rsdr-cheetah" task=CheetahRun seed=0

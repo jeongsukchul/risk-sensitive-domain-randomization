@@ -145,6 +145,29 @@ def progress_fn(num_steps, metrics, use_wandb=True):
 def train_ppo(cfg:dict, randomization_fn, env, env_cfg, eval_env=None):
 
     print("training with ppo")
+    fixed_radius = bool(getattr(cfg, "fixed_radius", False))
+    if fixed_radius:
+        if cfg.policy != "gmmppo":
+            raise ValueError("fixed_radius is currently supported only for policy=gmmppo.")
+        if cfg.use_scheduling:
+            raise ValueError("fixed_radius and use_scheduling cannot be enabled together.")
+        if cfg.beta >= 0:
+            raise ValueError("Fixed-radius GMMPPO requires beta<0 as the initial beta.")
+        if cfg.kl_radius < 0:
+            raise ValueError("kl_radius must be non-negative.")
+        if cfg.dual_lr <= 0:
+            raise ValueError("dual_lr must be positive.")
+        if cfg.dual_lambda_min <= 0 or cfg.dual_lambda_max <= cfg.dual_lambda_min:
+            raise ValueError(
+                "dual_lambda_min must be positive and smaller than dual_lambda_max."
+            )
+        initial_dual_lambda = -1.0 / float(cfg.beta)
+        if not cfg.dual_lambda_min <= initial_dual_lambda <= cfg.dual_lambda_max:
+            raise ValueError(
+                "The initial lambda=-1/beta must lie within "
+                "[dual_lambda_min, dual_lambda_max]."
+            )
+
     if cfg.task in dm_control_suite._envs:
         ppo_params = brax_ppo_config(cfg.task)
     elif cfg.task in locomotion._envs:
@@ -190,7 +213,14 @@ def train_ppo(cfg:dict, randomization_fn, env, env_cfg, eval_env=None):
     elif cfg.policy=='gmmppo':
         sampler_choice = 'GMM'
         group = sampler_choice
-        if cfg.use_scheduling:
+        if fixed_radius:
+            radius_label = (
+                f"fixed_radius={cfg.kl_radius}_beta0={cfg.beta}"
+                f"_dual_lr={cfg.dual_lr}"
+            )
+            wandb_name += f" [{radius_label}]"
+            group += f" [{radius_label}]"
+        elif cfg.use_scheduling:
             wandb_name+= f" {cfg.scheduler_mode} scheduling[{cfg.start_beta}, {cfg.end_beta}_iters={cfg.n_sampler_iters}]"
             group+=f" {cfg.scheduler_mode} scheduling[{cfg.start_beta}, {cfg.end_beta}_iters={cfg.n_sampler_iters}]"
         else:
@@ -255,6 +285,7 @@ def train_ppo(cfg:dict, randomization_fn, env, env_cfg, eval_env=None):
         sampler_choice=sampler_choice,
         gamma = train_gamma,
         beta = cfg.beta,
+        eval_grid_size_2d=getattr(cfg, "eval_grid_size_2d", 128),
         sampler_update_freq =cfg.sampler_update_freq,
         n_sampler_iters = cfg.n_sampler_iters,
         success_threshold = cfg.success_threshold,
@@ -268,6 +299,11 @@ def train_ppo(cfg:dict, randomization_fn, env, env_cfg, eval_env=None):
         start_beta = cfg.start_beta,
         end_beta = cfg.end_beta,
         scheduler_mode=     cfg.scheduler_mode,
+        fixed_radius=fixed_radius,
+        kl_radius=getattr(cfg, "kl_radius", 0.1),
+        dual_lr=getattr(cfg, "dual_lr", 1e-3),
+        dual_lambda_min=getattr(cfg, "dual_lambda_min", 1e-4),
+        dual_lambda_max=getattr(cfg, "dual_lambda_max", 1e4),
         gbs_process_type=getattr(cfg, "gbs_process_type", "vp"),
         gbs_num_steps=getattr(cfg, "gbs_num_steps", 100),
         gbs_lr=getattr(cfg, "gbs_lr", 1e-3),
@@ -304,7 +340,12 @@ def train(cfg: dict):
     elif cfg.policy == "gbsppo":
         cfg.work_dir = cfg.work_dir / f"beta={cfg.beta}"
     elif cfg.policy == "gmmppo":
-        cfg.work_dir = cfg.work_dir / f"beta={cfg.beta}"
+        if getattr(cfg, "fixed_radius", False):
+            cfg.work_dir = cfg.work_dir / (
+                f"fixed_radius={cfg.kl_radius}_beta0={cfg.beta}"
+            )
+        else:
+            cfg.work_dir = cfg.work_dir / f"beta={cfg.beta}"
     elif cfg.policy == "adrppo":
         cfg.work_dir = cfg.work_dir / f"threshold={cfg.success_threshold}"
     elif cfg.policy == "doraemonppo":

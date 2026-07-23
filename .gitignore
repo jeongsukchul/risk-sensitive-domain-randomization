@@ -7,7 +7,6 @@ mujoco_menagerie
 checkpoints/
 learning/logs
 learning/outputs
-learning/commands
 .git/
 learning/wandb
 external_deps/

@@ -78,6 +78,11 @@ os.environ['JAX_PLATFORM_NAME'] = 'gpu'
 def get_work_dir(cfg):
     base_path = f"./logs/{cfg.task}/{cfg.seed}/{cfg.policy}"
     if cfg.policy == "gmmppo":
+        if getattr(cfg, "fixed_radius", False):
+            return (
+                f"{base_path}/fixed_radius={cfg.kl_radius}"
+                f"_beta0={cfg.beta}"
+            )
         return f"{base_path}/beta={int(cfg.beta)}"
     elif cfg.policy == 'epoptppo':
         return f"{base_path}/epsilon={cfg.epsilon}"
@@ -438,7 +443,14 @@ def main():
         
         # Construct the Policy Name
         p_name = current_sweep_cfg.policy
-        if p_name == 'gmmppo': p_name += f"_beta={int(current_sweep_cfg.beta)}"
+        if p_name == 'gmmppo':
+            if getattr(current_sweep_cfg, "fixed_radius", False):
+                p_name += (
+                    f"_radius={current_sweep_cfg.kl_radius}"
+                    f"_beta0={current_sweep_cfg.beta}"
+                )
+            else:
+                p_name += f"_beta={int(current_sweep_cfg.beta)}"
         elif p_name == 'epoptppo': p_name += f"_eps={current_sweep_cfg.epsilon}"
         
         # Construct the Dist Name
