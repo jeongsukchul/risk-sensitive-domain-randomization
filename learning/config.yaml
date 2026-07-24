@@ -50,7 +50,7 @@ fixed_radius: false
 kl_radius: 0.1
 dual_lr: 1.
 dual_ema_decay: 0.
-kl_violation_clip: 0.25  # relative bound: actual clip = value * kl_radius
+kl_violation_clip: 0.5  # relative bound: actual clip = value * kl_radius
 dual_update_mode: beta  # lambda (standard dual) or beta (naive direct beta)
 dual_lambda_min: 0.01
 dual_lambda_max: 10.0

@@ -9,6 +9,7 @@ for seed in 10 11 12 13 14 15
         dual_lr=$dual_lr task=AcrobotSwingup wandb_project=$wandb_project seed=$seed
     python run.py policy=gmmppo fixed_radius=true kl_radius=1 \
         dual_lr=$dual_lr task=AcrobotSwingup wandb_project=$wandb_project seed=$seed
+    
     python run.py policy=gmmppo fixed_radius=true kl_radius=5\
         dual_lr=$dual_lr task=AcrobotSwingup wandb_project=$wandb_project seed=$seed
     done
