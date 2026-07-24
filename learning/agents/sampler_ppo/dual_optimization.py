@@ -3,6 +3,30 @@
 import jax.numpy as jnp
 
 
+def exponential_moving_average(previous_value, current_value, decay):
+  """Updates an exponential moving average."""
+  decay = jnp.asarray(decay)
+  return (
+      decay * jnp.asarray(previous_value)
+      + (1.0 - decay) * jnp.asarray(current_value)
+  )
+
+
+def clipped_kl_violation(
+    estimated_kl,
+    kl_radius,
+    max_abs_violation=None,
+):
+  """Returns KL - radius, optionally clipped to a symmetric interval."""
+  violation = jnp.asarray(estimated_kl) - jnp.asarray(kl_radius)
+  if max_abs_violation is not None:
+    max_abs_violation = jnp.asarray(max_abs_violation)
+    violation = jnp.clip(
+        violation, -max_abs_violation, max_abs_violation
+    )
+  return violation
+
+
 def dual_from_beta(beta):
   """Converts a negative inverse temperature beta to lambda = -1 / beta."""
   return -jnp.reciprocal(jnp.asarray(beta))
@@ -35,12 +59,40 @@ def projected_dual_ascent(
     learning_rate,
     min_dual,
     max_dual,
+    max_abs_violation=None,
 ):
-  """Performs lambda <- projection(lambda + lr * (KL - radius))."""
-  violation = jnp.asarray(estimated_kl) - jnp.asarray(kl_radius)
+  """Performs projected ascent using a possibly clipped KL violation."""
+  violation = clipped_kl_violation(
+      estimated_kl, kl_radius, max_abs_violation
+  )
   updated_dual = jnp.clip(
       jnp.asarray(dual_lambda) + jnp.asarray(learning_rate) * violation,
       jnp.asarray(min_dual),
       jnp.asarray(max_dual),
   )
   return updated_dual, violation
+
+
+def projected_direct_beta_update(
+    beta,
+    estimated_kl,
+    kl_radius,
+    learning_rate,
+    min_beta,
+    max_beta,
+    max_abs_violation=None,
+):
+  """Performs a naive projected beta update using the KL violation.
+
+  This deliberately treats beta as the directly controlled scalar and does not
+  apply the chain-rule factor 1 / beta**2.
+  """
+  violation = clipped_kl_violation(
+      estimated_kl, kl_radius, max_abs_violation
+  )
+  updated_beta = jnp.clip(
+      jnp.asarray(beta) + jnp.asarray(learning_rate) * violation,
+      jnp.asarray(min_beta),
+      jnp.asarray(max_beta),
+  )
+  return updated_beta, violation

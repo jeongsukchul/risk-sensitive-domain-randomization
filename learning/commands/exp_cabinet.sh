@@ -1,16 +1,16 @@
 wandb_project="cabinet-fixedkl"
 #fixed kl version
 task=PandaOpenCabinet
-dual_lr=0.1
+dual_lr=0.01
 for seed in 10 11 12 13 14 15
     do
-    python run.py policy=gmmppo fixed_radius=true kl_radius=0.05 \
-        dual_lr=$dual_lr task=$task wandb_project=$wandb_project seed=$seed
-    python run.py policy=gmmppo fixed_radius=true kl_radius=0.1 \
-        dual_lr=$dual_lr task=$task wandb_project=$wandb_project seed=$seed
-    python run.py policy=gmmppo fixed_radius=true kl_radius=0.5 \
-        dual_lr=$dual_lr task=$task wandb_project=$wandb_project seed=$seed
     python run.py policy=gmmppo fixed_radius=true kl_radius=1. \
+        dual_lr=$dual_lr task=$task wandb_project=$wandb_project seed=$seed
+    python run.py policy=gmmppo fixed_radius=true kl_radius=5. \
+        dual_lr=$dual_lr task=$task wandb_project=$wandb_project seed=$seed
+    python run.py policy=gmmppo fixed_radius=true kl_radius=10. \
+        dual_lr=$dual_lr task=$task wandb_project=$wandb_project seed=$seed
+    python run.py policy=gmmppo fixed_radius=true kl_radius=50. \
         dual_lr=$dual_lr task=$task wandb_project=$wandb_project seed=$seed
 
     done

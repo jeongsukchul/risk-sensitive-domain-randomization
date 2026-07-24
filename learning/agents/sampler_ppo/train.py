@@ -34,7 +34,11 @@ from brax.training.acme import specs
 from learning.agents.sampler_ppo.scheduling import GMMScheduler, SchedulerState
 from learning.agents.sampler_ppo.dual_optimization import (
     beta_from_dual,
+    clipped_kl_violation,
+    dual_from_beta,
     estimate_kl_to_uniform,
+    exponential_moving_average,
+    projected_direct_beta_update,
     projected_dual_ascent,
 )
 from learning.agents.sampler_ppo.empirical_metrics import (
@@ -97,6 +101,7 @@ class TrainingState:
   scheduler_state : SchedulerState
   dual_lambda: jax.Array
   gmm_kl_estimate: jax.Array
+  dual_kl_ema: jax.Array
 
 def _unpmap(v):
   return jax.tree_util.tree_map(lambda x: x[0], v)
@@ -318,8 +323,13 @@ def train(
     fixed_radius: bool = False,
     kl_radius: float = 0.1,
     dual_lr: float = 1e-3,
+    dual_ema_decay: float = 0.9,
+    kl_violation_clip: float = 0.25,
+    dual_update_mode: str = "lambda",
     dual_lambda_min: float = 1e-4,
     dual_lambda_max: float = 1e4,
+    dual_beta_min: float = -1e4,
+    dual_beta_max: float = -1e-4,
     # GBS hyperparameters (aligned with module/gbs/gbs_test.py defaults)
     gbs_process_type: str = "vp",  # "vp" or "langevin"
     gbs_num_steps: int = 100,
@@ -344,6 +354,7 @@ def train(
     Tuple of (make_policy function, network params, metrics)
   """
   fixed_radius = bool(fixed_radius)
+  dual_update_mode = str(dual_update_mode).lower()
   if fixed_radius:
     if sampler_choice != "GMM":
       raise ValueError("fixed_radius is currently supported only for GMMPPO (sampler_choice='GMM').")
@@ -355,16 +366,35 @@ def train(
       raise ValueError("kl_radius must be non-negative.")
     if dual_lr <= 0:
       raise ValueError("dual_lr must be positive.")
-    if dual_lambda_min <= 0 or dual_lambda_max <= dual_lambda_min:
-      raise ValueError(
-          "dual_lambda_min must be positive and smaller than dual_lambda_max."
-      )
+    if not 0 <= dual_ema_decay < 1:
+      raise ValueError("dual_ema_decay must be in [0, 1).")
+    if kl_violation_clip <= 0:
+      raise ValueError("kl_violation_clip must be positive.")
+    if dual_update_mode not in ("lambda", "beta"):
+      raise ValueError("dual_update_mode must be either 'lambda' or 'beta'.")
     initial_dual_lambda = -1.0 / float(beta)
-    if not dual_lambda_min <= initial_dual_lambda <= dual_lambda_max:
-      raise ValueError(
-          "The initial lambda=-1/beta must lie within "
-          "[dual_lambda_min, dual_lambda_max]."
-      )
+    if dual_update_mode == "lambda":
+      if dual_lambda_min <= 0 or dual_lambda_max <= dual_lambda_min:
+        raise ValueError(
+            "dual_lambda_min must be positive and smaller than "
+            "dual_lambda_max."
+        )
+      if not dual_lambda_min <= initial_dual_lambda <= dual_lambda_max:
+        raise ValueError(
+            "The initial lambda=-1/beta must lie within "
+            "[dual_lambda_min, dual_lambda_max]."
+        )
+    else:
+      if dual_beta_max >= 0 or dual_beta_max <= dual_beta_min:
+        raise ValueError(
+            "dual_beta_min must be smaller than dual_beta_max, and both "
+            "bounds must be negative."
+        )
+      if not dual_beta_min <= beta <= dual_beta_max:
+        raise ValueError(
+            "The initial beta must lie within "
+            "[dual_beta_min, dual_beta_max]."
+        )
   else:
     initial_dual_lambda = 1.0
 
@@ -1019,6 +1049,7 @@ def train(
     doraemon_state = training_state.doraemon_state
     dual_lambda = training_state.dual_lambda
     gmm_kl_estimate = training_state.gmm_kl_estimate
+    dual_kl_ema = training_state.dual_kl_ema
     def update_flow(flow_state, flow_opt_state):
       target_lnpdf = _beta * cumulated_values/sampler_update_freq
       flow_model = nnx.merge(samplerppo_network.flow_network, flow_state)
@@ -1064,7 +1095,7 @@ def train(
     def update_doraemon(doraemon_state, returns):
       return (doraemon_update_fn(doraemon_state, dynamics_params, returns), 1.)
 
-    def update_gmm(gts, current_dual_lambda):
+    def update_gmm(gts, current_dual_lambda, current_dual_kl_ema):
       target_lnpdf = _beta * cumulated_values/sampler_update_freq
       log_q = jax.vmap(
           samplerppo_network.gmm_network.model.log_density,
@@ -1077,23 +1108,46 @@ def train(
           estimated_kl, axis_name=_PMAP_AXIS_NAME
       )
       if fixed_radius:
-        next_dual_lambda, _ = projected_dual_ascent(
-            current_dual_lambda,
-            estimated_kl,
-            kl_radius,
-            dual_lr,
-            dual_lambda_min,
-            dual_lambda_max,
+        next_dual_kl_ema = exponential_moving_average(
+            current_dual_kl_ema, estimated_kl, dual_ema_decay
         )
+        if dual_update_mode == "beta":
+          next_beta, _ = projected_direct_beta_update(
+              beta_from_dual(current_dual_lambda),
+              next_dual_kl_ema,
+              kl_radius,
+              dual_lr,
+              dual_beta_min,
+              dual_beta_max,
+              kl_violation_clip,
+          )
+          next_dual_lambda = dual_from_beta(next_beta)
+        else:
+          next_dual_lambda, _ = projected_dual_ascent(
+              current_dual_lambda,
+              next_dual_kl_ema,
+              kl_radius,
+              dual_lr,
+              dual_lambda_min,
+              dual_lambda_max,
+              kl_violation_clip,
+          )
       else:
         next_dual_lambda = current_dual_lambda
+        next_dual_kl_ema = current_dual_kl_ema
       new_sample_db_state = samplerppo_network.gmm_network.sample_selector.save_samples(gts.model_state, \
                     gts.sample_db_state, dynamics_params_sampler, target_lnpdf, \
                       jnp.zeros_like(dynamics_params), mapping)
       new_gmm_training_state = gts._replace(sample_db_state=new_sample_db_state)
       new_gmm_training_state = gmm_update_fn(new_gmm_training_state, key_update)
 
-      return new_gmm_training_state, next_dual_lambda, estimated_kl, 1.
+      return (
+          new_gmm_training_state,
+          next_dual_lambda,
+          estimated_kl,
+          next_dual_kl_ema,
+          1.,
+      )
     if sampler_choice=="NODR" or sampler_choice=="UDR" or sampler_choice=='EPOpt':
         update_signal = jax.lax.cond(training_state.update_steps % sampler_update_freq==0, \
                 lambda: 1., \
@@ -1117,13 +1171,22 @@ def train(
             lambda: (training_state.flow_state, 0.),
         )
     elif sampler_choice=="GMM":
-      gmm_training_state, dual_lambda, gmm_kl_estimate, update_signal = jax.lax.cond(
+      (
+          gmm_training_state,
+          dual_lambda,
+          gmm_kl_estimate,
+          dual_kl_ema,
+          update_signal,
+      ) = jax.lax.cond(
           training_state.update_steps % sampler_update_freq == 0,
-          lambda: update_gmm(gmm_training_state, dual_lambda),
+          lambda: update_gmm(
+              gmm_training_state, dual_lambda, dual_kl_ema
+          ),
           lambda: (
               training_state.gmm_training_state,
               training_state.dual_lambda,
               training_state.gmm_kl_estimate,
+              training_state.dual_kl_ema,
               0.,
           ),
       )
@@ -1150,12 +1213,26 @@ def train(
           'gmm_kl_to_uniform': gmm_kl_estimate,
       })
     if fixed_radius:
+      resulting_beta = beta_from_dual(dual_lambda)
+      raw_kl_violation = gmm_kl_estimate - kl_radius
+      ema_kl_violation = dual_kl_ema - kl_radius
+      dual_kl_violation = clipped_kl_violation(
+          dual_kl_ema, kl_radius, kl_violation_clip
+      )
       metrics.update({
           'dual_lambda': dual_lambda,
-          'dual_beta': beta_from_dual(dual_lambda),
-          'resulting_beta': beta_from_dual(dual_lambda),
+          'dual_beta': resulting_beta,
+          'resulting_beta': resulting_beta,
+          'beta_update_delta': resulting_beta - _beta,
+          'dual_update_mode_beta': jnp.asarray(
+              dual_update_mode == "beta", dtype=jnp.float32
+          ),
           'kl_radius': jnp.asarray(kl_radius),
-          'kl_violation': gmm_kl_estimate - kl_radius,
+          'dual_kl_ema': dual_kl_ema,
+          'kl_violation_raw': raw_kl_violation,
+          'kl_violation_ema': ema_kl_violation,
+          'kl_violation': dual_kl_violation,
+          'kl_violation_clip': jnp.asarray(kl_violation_clip),
       })
     new_training_state = TrainingState(
         optimizer_state=optimizer_state,
@@ -1171,6 +1248,7 @@ def train(
         update_steps = training_state.update_steps + 1,
         dual_lambda=dual_lambda,
         gmm_kl_estimate=gmm_kl_estimate,
+        dual_kl_ema=dual_kl_ema,
     )
     cumulated_values = (1-update_signal) * cumulated_values
     return (new_training_state, state, cumulated_values, new_key), metrics
@@ -1210,13 +1288,25 @@ def train(
     if fixed_radius:
       latest_dual_lambda = jnp.mean(training_state.dual_lambda)
       latest_beta = beta_from_dual(latest_dual_lambda)
+      latest_dual_kl_ema = jnp.mean(training_state.dual_kl_ema)
+      raw_kl_violation = metrics['gmm_kl_to_uniform'] - kl_radius
+      ema_kl_violation = latest_dual_kl_ema - kl_radius
       metrics.update({
           'beta': latest_beta,
           'dual_lambda': latest_dual_lambda,
           'dual_beta': latest_beta,
           'resulting_beta': latest_beta,
+          'dual_update_mode_beta': jnp.asarray(
+              dual_update_mode == "beta", dtype=jnp.float32
+          ),
           'kl_radius': jnp.asarray(kl_radius),
-          'kl_violation': metrics['gmm_kl_to_uniform'] - kl_radius,
+          'dual_kl_ema': latest_dual_kl_ema,
+          'kl_violation_raw': raw_kl_violation,
+          'kl_violation_ema': ema_kl_violation,
+          'kl_violation': clipped_kl_violation(
+              latest_dual_kl_ema, kl_radius, kl_violation_clip
+          ),
+          'kl_violation_clip': jnp.asarray(kl_violation_clip),
       })
     jax.tree_util.tree_map(lambda x: x.block_until_ready(), metrics)
 
@@ -1306,6 +1396,9 @@ def train(
       update_steps=0,
       dual_lambda=jnp.asarray(initial_dual_lambda, dtype=jnp.float32),
       gmm_kl_estimate=jnp.asarray(0.0, dtype=jnp.float32),
+      dual_kl_ema=jnp.asarray(
+          kl_radius if fixed_radius else 0.0, dtype=jnp.float32
+      ),
   )
 
   if num_timesteps == 0:
@@ -1448,6 +1541,9 @@ def train(
       )
       metrics.update({
           "eval/empirical_kl_radius": jnp.asarray(kl_radius),
+          "eval/empirical_dual_update_mode_beta": jnp.asarray(
+              dual_update_mode == "beta", dtype=jnp.float32
+          ),
           "eval/empirical_target_kl_radius_residual":
               target_radius_residual,
           "eval/empirical_sampler_kl_radius_residual":
@@ -1484,6 +1580,9 @@ def train(
         sampler_reverse_kl_to_uniform=np.asarray(
             comparison_metrics["sampler_reverse_kl_to_uniform"]
         ),
+        dual_update_mode=np.asarray(
+            dual_update_mode if fixed_radius else "fixed_beta"
+        ),
         kl_radius=np.asarray(kl_radius if fixed_radius else np.nan),
         target_kl_radius_residual=np.asarray(
             target_radius_residual if fixed_radius else np.nan
@@ -1517,7 +1616,8 @@ def train(
       ax.set_title(title)
       fig.colorbar(image, ax=ax)
     radius_label = (
-        f", radius={float(kl_radius):.6g}" if fixed_radius else ""
+        f", radius={float(kl_radius):.6g}, mode={dual_update_mode}"
+        if fixed_radius else ", mode=fixed_beta"
     )
     fig.suptitle(
         f"{int(eval_grid_size_2d)}x{int(eval_grid_size_2d)} "

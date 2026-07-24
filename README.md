@@ -58,9 +58,17 @@ python train.py policy=gmmppo beta=0 wandb_project="rsdr-cheetah" task=CheetahRu
 All GMMPPO modes estimate and log `gmm_kl_to_uniform`. In fixed-beta mode,
 `beta` and `beta_used` remain the configured inverse temperature. GMMPPO also
 supports a fixed KL radius relative to the uniform domain-randomization
-distribution. In this mode, `beta` is the negative initial value $\beta_0$ and
-$\lambda=-1/\beta$ is optimized by projected dual ascent. It additionally logs
-`dual_lambda`, `dual_beta`, `resulting_beta`, `kl_radius`, and `kl_violation`.
+distribution. In this mode, `beta` is the negative initial value $\beta_0$.
+The default `dual_update_mode=lambda` optimizes $\lambda=-1/\beta$ by projected
+dual ascent. The dual signal uses an EMA of the measured KL, initialized at the
+requested radius, and then clips the EMA violation symmetrically:
+`ema_kl <- dual_ema_decay * ema_kl + (1 - dual_ema_decay) * estimated_KL`;
+`dual_violation <- clip(ema_kl - kl_radius, -kl_violation_clip,
+kl_violation_clip)`. The defaults are `dual_ema_decay=0.9` and
+`kl_violation_clip=0.25`. It additionally logs `dual_lambda`, `dual_beta`,
+`resulting_beta`, `beta_update_delta`, `dual_update_mode_beta`, `kl_radius`,
+`dual_kl_ema`, `kl_violation_raw`, `kl_violation_ema`, and the clipped
+`kl_violation` used by the update.
 
 ```bash
 cd learning
@@ -68,8 +76,21 @@ python run.py policy=gmmppo fixed_radius=true kl_radius=0.1 beta=-30 \
   dual_lr=0.001 wandb_project="rsdr-cheetah" task=CheetahRun seed=0
 ```
 
+The alternative `dual_update_mode=beta` applies the deliberately naive direct
+update
+`beta <- clip(beta + dual_lr * dual_violation)`. It uses the same EMA and
+violation clipping and does not use the chain-rule factor `1 / beta**2`.
+
+```bash
+python run.py policy=gmmppo fixed_radius=true dual_update_mode=beta \
+  kl_radius=0.1 beta=-1 dual_lr=0.1 dual_beta_min=-100 \
+  dual_beta_max=-0.001 task=AcrobotSwingup seed=0
+```
+
 `fixed_radius=true` cannot be combined with `use_scheduling=true`. The optional
-projection bounds are configured with `dual_lambda_min` and `dual_lambda_max`.
+projection bounds are `dual_lambda_min`/`dual_lambda_max` in lambda mode and
+`dual_beta_min`/`dual_beta_max` in direct-beta mode. Both modes continue to log
+lambda using the diagnostic conversion $\lambda=-1/\beta$.
 
 For two-dimensional tasks, evaluation uses an equal-area, cell-centered
 128-by-128 grid (`eval_grid_size_2d=128`, or 16,384 parameter settings). GMMPPO

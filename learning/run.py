@@ -147,6 +147,11 @@ def train_ppo(cfg:dict, randomization_fn, env, env_cfg, eval_env=None):
 
     print("training with ppo")
     fixed_radius = bool(getattr(cfg, "fixed_radius", False))
+    dual_update_mode = str(
+        getattr(cfg, "dual_update_mode", "lambda")
+    ).lower()
+    dual_ema_decay = float(getattr(cfg, "dual_ema_decay", 0.9))
+    kl_violation_clip = float(getattr(cfg, "kl_violation_clip", 0.25))
     if fixed_radius:
         if cfg.policy != "gmmppo":
             raise ValueError("fixed_radius is currently supported only for policy=gmmppo.")
@@ -158,16 +163,47 @@ def train_ppo(cfg:dict, randomization_fn, env, env_cfg, eval_env=None):
             raise ValueError("kl_radius must be non-negative.")
         if cfg.dual_lr <= 0:
             raise ValueError("dual_lr must be positive.")
-        if cfg.dual_lambda_min <= 0 or cfg.dual_lambda_max <= cfg.dual_lambda_min:
+        if not 0 <= dual_ema_decay < 1:
+            raise ValueError("dual_ema_decay must be in [0, 1).")
+        if kl_violation_clip <= 0:
+            raise ValueError("kl_violation_clip must be positive.")
+        if dual_update_mode not in ("lambda", "beta"):
             raise ValueError(
-                "dual_lambda_min must be positive and smaller than dual_lambda_max."
+                "dual_update_mode must be either 'lambda' or 'beta'."
             )
         initial_dual_lambda = -1.0 / float(cfg.beta)
-        if not cfg.dual_lambda_min <= initial_dual_lambda <= cfg.dual_lambda_max:
-            raise ValueError(
-                "The initial lambda=-1/beta must lie within "
-                "[dual_lambda_min, dual_lambda_max]."
-            )
+        if dual_update_mode == "lambda":
+            if (
+                cfg.dual_lambda_min <= 0
+                or cfg.dual_lambda_max <= cfg.dual_lambda_min
+            ):
+                raise ValueError(
+                    "dual_lambda_min must be positive and smaller than "
+                    "dual_lambda_max."
+                )
+            if not (
+                cfg.dual_lambda_min
+                <= initial_dual_lambda
+                <= cfg.dual_lambda_max
+            ):
+                raise ValueError(
+                    "The initial lambda=-1/beta must lie within "
+                    "[dual_lambda_min, dual_lambda_max]."
+                )
+        else:
+            if (
+                cfg.dual_beta_max >= 0
+                or cfg.dual_beta_max <= cfg.dual_beta_min
+            ):
+                raise ValueError(
+                    "dual_beta_min must be smaller than dual_beta_max, "
+                    "and both bounds must be negative."
+                )
+            if not cfg.dual_beta_min <= cfg.beta <= cfg.dual_beta_max:
+                raise ValueError(
+                    "The initial beta must lie within "
+                    "[dual_beta_min, dual_beta_max]."
+                )
 
     if cfg.task in dm_control_suite._envs:
         ppo_params = brax_ppo_config(cfg.task)
@@ -217,7 +253,8 @@ def train_ppo(cfg:dict, randomization_fn, env, env_cfg, eval_env=None):
         if fixed_radius:
             radius_label = (
                 f"fixed_radius={cfg.kl_radius}_beta0={cfg.beta}"
-                f"_dual_lr={cfg.dual_lr}"
+                f"_dual_update={dual_update_mode}_dual_lr={cfg.dual_lr}"
+                f"_ema={dual_ema_decay}_vclip={kl_violation_clip}"
             )
             wandb_name += f" [{radius_label}]"
             group += f" [{radius_label}]"
@@ -304,8 +341,13 @@ def train_ppo(cfg:dict, randomization_fn, env, env_cfg, eval_env=None):
         fixed_radius=fixed_radius,
         kl_radius=getattr(cfg, "kl_radius", 0.1),
         dual_lr=getattr(cfg, "dual_lr", 1e-3),
+        dual_ema_decay=dual_ema_decay,
+        kl_violation_clip=kl_violation_clip,
+        dual_update_mode=dual_update_mode,
         dual_lambda_min=getattr(cfg, "dual_lambda_min", 1e-4),
         dual_lambda_max=getattr(cfg, "dual_lambda_max", 1e4),
+        dual_beta_min=getattr(cfg, "dual_beta_min", -1e4),
+        dual_beta_max=getattr(cfg, "dual_beta_max", -1e-4),
         gbs_process_type=getattr(cfg, "gbs_process_type", "vp"),
         gbs_num_steps=getattr(cfg, "gbs_num_steps", 100),
         gbs_lr=getattr(cfg, "gbs_lr", 1e-3),
@@ -343,8 +385,19 @@ def train(cfg: dict):
         cfg.work_dir = cfg.work_dir / f"beta={cfg.beta}"
     elif cfg.policy == "gmmppo":
         if getattr(cfg, "fixed_radius", False):
+            dual_update_mode = str(
+                getattr(cfg, "dual_update_mode", "lambda")
+            ).lower()
+            dual_ema_decay = float(
+                getattr(cfg, "dual_ema_decay", 0.9)
+            )
+            kl_violation_clip = float(
+                getattr(cfg, "kl_violation_clip", 0.25)
+            )
             cfg.work_dir = cfg.work_dir / (
                 f"fixed_radius={cfg.kl_radius}_beta0={cfg.beta}"
+                f"_dual_update={dual_update_mode}"
+                f"_ema={dual_ema_decay}_vclip={kl_violation_clip}"
             )
         else:
             cfg.work_dir = cfg.work_dir / f"beta={cfg.beta}"

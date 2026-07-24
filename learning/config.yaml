@@ -43,14 +43,19 @@ epsilon : 0.1
 scheduler_lr : 0.2
 scheduler_window_size: 20
 start_beta : 0.
-end_beta : -1.
+end_beta : -5.
 scheduler_mode : 'linear'  # 'linear' or 'exp'
 # Fixed-KL-radius GMMPPO. `beta` is beta_0 and must be negative in this mode.
 fixed_radius: false
 kl_radius: 0.1
 dual_lr: 0.001
-dual_lambda_min: 0.0001
-dual_lambda_max: 10000.0
+dual_ema_decay: 0.9
+kl_violation_clip: 0.25
+dual_update_mode: lambda  # lambda (standard dual) or beta (naive direct beta)
+dual_lambda_min: 0.01
+dual_lambda_max: 10.0
+dual_beta_min: -100.0
+dual_beta_max: -0.1
 
 #sampler cfg
 sampler_update_freq : 1           #set 10 to take long horizon information despite of policy_updates.
@@ -59,7 +64,7 @@ success_threshold : .6
 success_rate_condition : 0.7
 trust_region_threshold: 0.005
 gamma : 0.
-beta : -1.
+beta : -5.
 use_scheduling : False
 # misc
 save_video: true
