@@ -40,6 +40,7 @@ from learning.agents.sampler_ppo.dual_optimization import (
 from learning.agents.sampler_ppo.empirical_metrics import (
     compare_empirical_target_and_sampler,
 )
+from learning.agents.sampler_ppo.training_logging import training_log_offsets
 import scipy
 from agents.sampler_ppo import losses as samplerppo_losses
 from agents.sampler_ppo import networks as samplerppo_networks
@@ -288,6 +289,7 @@ def train(
     # training metrics
     log_training_metrics: bool = False,
     training_metrics_steps: Optional[int] = None,
+    training_log_freq: int = 0,
     # callbacks
     progress_fn: Callable[[int, Metrics], None] = lambda *args: None,
     policy_params_fn: Callable[..., None] = lambda *args: None,
@@ -368,6 +370,9 @@ def train(
 
   if eval_grid_size_2d <= 0:
     raise ValueError("eval_grid_size_2d must be positive.")
+  training_log_freq = int(training_log_freq)
+  if training_log_freq < 0:
+    raise ValueError("training_log_freq must be non-negative.")
 
   assert batch_size * num_minibatches % num_envs == 0
   xt = time.time()
@@ -1172,30 +1177,30 @@ def train(
 
   def training_epoch(
       training_state: TrainingState, state: envs.State, key: PRNGKey
-  ) -> Tuple[TrainingState, envs.State, Metrics]:
+  ) -> Tuple[TrainingState, envs.State, Metrics, Metrics]:
     (training_state, state, _, _), loss_metrics = jax.lax.scan(
         training_step,
         (training_state, state, jnp.zeros(num_envs//jax.process_count()), key),
         (),
         length=num_training_steps_per_epoch,
     )
-    loss_metrics = jax.tree_util.tree_map(jnp.mean, loss_metrics)
+    mean_loss_metrics = jax.tree_util.tree_map(jnp.mean, loss_metrics)
     # for k, v in loss_metrics.items():
     #   if 'target_pdf' in k:
     #     loss_metrics[k] *=sampler_update_freq
-    return training_state, state, loss_metrics
+    return training_state, state, mean_loss_metrics, loss_metrics
 
   training_epoch = jax.pmap(training_epoch, axis_name=_PMAP_AXIS_NAME)
 
   # Note that this is NOT a pure jittable method.
   def training_epoch_with_timing(
       training_state: TrainingState, env_state: envs.State, key: PRNGKey
-  ) -> Tuple[TrainingState, envs.State, Metrics]:
+  ) -> Tuple[TrainingState, envs.State, Metrics, Metrics]:
     nonlocal training_walltime
     t = time.time()
     training_state, env_state = _strip_weak_type((training_state, env_state))
     result = training_epoch(training_state, env_state, key)
-    training_state, env_state, metrics = _strip_weak_type(result)
+    training_state, env_state, metrics, step_metrics = _strip_weak_type(result)
 
     metrics = jax.tree_util.tree_map(jnp.mean, metrics)
     if sampler_choice == "GMM":
@@ -1227,7 +1232,12 @@ def train(
         'training/walltime': training_walltime,
         **{f'training/{name}': value for name, value in metrics.items()},
     }
-    return training_state, env_state, metrics  # pytype: disable=bad-return-type  # py311-upgrade
+    return (  # pytype: disable=bad-return-type  # py311-upgrade
+        training_state,
+        env_state,
+        metrics,
+        step_metrics,
+    )
   def evaluation_on_current_occupancy(
       training_state: TrainingState,
       env_state: envs.State,
@@ -1915,14 +1925,57 @@ def train(
   for it in range(num_evals_after_init):
     logging.info('starting iteration %s %s', it, time.time() - xt)
 
-    for _ in range(max(num_resets_per_eval, 1)):
+    num_training_chunks = max(num_resets_per_eval, 1)
+    for training_chunk_index in range(num_training_chunks):
       # optimization
+      start_update_step = int(
+          np.asarray(_unpmap(training_state.update_steps))
+      )
+      start_env_step = int(_unpmap(training_state.env_steps))
       epoch_key, local_key = jax.random.split(local_key)
       epoch_keys = jax.random.split(epoch_key, local_devices_to_use)
-      (training_state, env_state, training_metrics) = (
+      (
+          training_state,
+          env_state,
+          training_metrics,
+          buffered_step_metrics,
+      ) = (
           training_epoch_with_timing(training_state, env_state, epoch_keys)
       )
       current_step = int(_unpmap(training_state.env_steps))
+
+      if process_id == 0 and training_log_freq > 0:
+        averaged_step_metrics = {
+            name: jnp.mean(value, axis=0)
+            for name, value in buffered_step_metrics.items()
+        }
+        host_step_metrics = {
+            name: np.asarray(value)
+            for name, value in jax.device_get(
+                averaged_step_metrics
+            ).items()
+        }
+        log_offsets = training_log_offsets(
+            start_update_step=start_update_step,
+            num_steps=num_training_steps_per_epoch,
+            training_log_freq=training_log_freq,
+            exclude_final_step=(
+                num_evals > 0
+                and training_chunk_index == num_training_chunks - 1
+            ),
+        )
+        for offset in log_offsets:
+          update_step = start_update_step + offset + 1
+          log_step = (
+              start_env_step
+              + (offset + 1) * env_step_per_training_step
+          )
+          buffered_metrics = {
+              f"training/{name}": values[offset]
+              for name, values in host_step_metrics.items()
+          }
+          buffered_metrics["training/update_step"] = update_step
+          progress_fn(log_step, buffered_metrics)
 
       key_envs = jax.vmap(
           lambda x, s: jax.random.split(x[0], s), in_axes=(0, None)

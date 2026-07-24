@@ -135,7 +135,8 @@ def progress_fn(num_steps, metrics, use_wandb=True):
         wandb.log(metrics, step=num_steps)
     print("-------------------------------------------------------------------")
     print(f"num_steps: {num_steps}")
-    print(f"num_update_steps: {num_steps//8}")
+    update_steps = metrics.get("training/update_step", num_steps // 8)
+    print(f"num_update_steps: {update_steps}")
     
     for k,v in metrics.items():
         print(f" {k} :  {v}")
@@ -286,6 +287,7 @@ def train_ppo(cfg:dict, randomization_fn, env, env_cfg, eval_env=None):
         gamma = train_gamma,
         beta = cfg.beta,
         eval_grid_size_2d=getattr(cfg, "eval_grid_size_2d", 128),
+        training_log_freq=getattr(cfg, "training_log_freq", 0),
         sampler_update_freq =cfg.sampler_update_freq,
         n_sampler_iters = cfg.n_sampler_iters,
         success_threshold = cfg.success_threshold,

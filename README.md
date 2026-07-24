@@ -102,6 +102,14 @@ beta are saved in `results/GMM/empirical_target_sampler_<step>.npz`. The
 artifact also stores both KL-to-uniform estimates and the configured radius,
 together with a three-panel comparison PNG.
 
+Training metrics can be recorded more frequently than evaluation with
+`training_log_freq`. The value is measured in training updates, is independent
+of `sampler_update_freq` and `num_evals`, and `0` disables the extra records.
+For example, `training_log_freq=5` records every fifth update. These scalar
+records are buffered during the compiled training epoch and emitted before the
+next evaluation, avoiding a device-to-host synchronization at every logging
+point.
+
 #### If you want to use diffusion based parameterization use (DIS-LV)
 ```bash
 python train.py policy=gbsppo beta=-30 wandb_project="rsdr-cheetah" task=CheetahRun seed=0

@@ -15,6 +15,7 @@ impl : warp #or jax
 eval_with_training_env : false #added
 num_evals : ???
 eval_grid_size_2d: 128
+training_log_freq: 5  # training updates between buffered metric records; 0 disables
 
 #policy
 policy : ppo
@@ -58,7 +59,7 @@ success_threshold : .6
 success_rate_condition : 0.7
 trust_region_threshold: 0.005
 gamma : 0.
-beta : 1.
+beta : -1.
 use_scheduling : False
 # misc
 save_video: true
