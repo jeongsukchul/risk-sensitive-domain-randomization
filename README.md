@@ -66,12 +66,14 @@ The default `dual_update_mode=lambda` optimizes $\lambda=-1/\beta$ by projected
 dual ascent. The dual signal uses an EMA of the measured KL, initialized at the
 requested radius, and then clips the EMA violation symmetrically:
 `ema_kl <- dual_ema_decay * ema_kl + (1 - dual_ema_decay) * estimated_KL`;
-`dual_violation <- clip(ema_kl - kl_radius, -kl_violation_clip,
-kl_violation_clip)`. The defaults are `dual_ema_decay=0.9` and
-`kl_violation_clip=0.25`. It additionally logs `dual_lambda`, `dual_beta`,
+`clip_value <- kl_violation_clip * kl_radius`;
+`dual_violation <- clip(ema_kl - kl_radius, -clip_value, clip_value)`.
+With `kl_violation_clip=0.25`, the actual bound is 25 percent of the requested
+radius. It additionally logs `dual_lambda`, `dual_beta`,
 `resulting_beta`, `beta_update_delta`, `dual_update_mode_beta`, `kl_radius`,
 `dual_kl_ema`, `kl_violation_raw`, `kl_violation_ema`, and the clipped
-`kl_violation` used by the update.
+`kl_violation` used by the update. The `kl_violation_clip` metric is the
+effective bound, while `kl_violation_clip_ratio` is the configured fraction.
 
 ```bash
 cd learning

@@ -254,7 +254,7 @@ def train_ppo(cfg:dict, randomization_fn, env, env_cfg, eval_env=None):
             radius_label = (
                 f"fixed_radius={cfg.kl_radius}_beta0={cfg.beta}"
                 f"_dual_update={dual_update_mode}_dual_lr={cfg.dual_lr}"
-                f"_ema={dual_ema_decay}_vclip={kl_violation_clip}"
+                f"_ema={dual_ema_decay}_vclip_ratio={kl_violation_clip}"
             )
             wandb_name += f" [{radius_label}]"
             group += f" [{radius_label}]"
@@ -397,7 +397,7 @@ def train(cfg: dict):
             cfg.work_dir = cfg.work_dir / (
                 f"fixed_radius={cfg.kl_radius}_beta0={cfg.beta}"
                 f"_dual_update={dual_update_mode}"
-                f"_ema={dual_ema_decay}_vclip={kl_violation_clip}"
+                f"_ema={dual_ema_decay}_vclip_ratio={kl_violation_clip}"
             )
         else:
             cfg.work_dir = cfg.work_dir / f"beta={cfg.beta}"

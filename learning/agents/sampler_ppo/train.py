@@ -355,6 +355,7 @@ def train(
   """
   fixed_radius = bool(fixed_radius)
   dual_update_mode = str(dual_update_mode).lower()
+  kl_violation_clip_value = kl_violation_clip * kl_radius
   if fixed_radius:
     if sampler_choice != "GMM":
       raise ValueError("fixed_radius is currently supported only for GMMPPO (sampler_choice='GMM').")
@@ -1119,7 +1120,7 @@ def train(
               dual_lr,
               dual_beta_min,
               dual_beta_max,
-              kl_violation_clip,
+              kl_violation_clip_value,
           )
           next_dual_lambda = dual_from_beta(next_beta)
         else:
@@ -1130,7 +1131,7 @@ def train(
               dual_lr,
               dual_lambda_min,
               dual_lambda_max,
-              kl_violation_clip,
+              kl_violation_clip_value,
           )
       else:
         next_dual_lambda = current_dual_lambda
@@ -1225,7 +1226,7 @@ def train(
       raw_kl_violation = gmm_kl_estimate - kl_radius
       ema_kl_violation = dual_kl_ema - kl_radius
       dual_kl_violation = clipped_kl_violation(
-          dual_kl_ema, kl_radius, kl_violation_clip
+          dual_kl_ema, kl_radius, kl_violation_clip_value
       )
       metrics.update({
           'dual_lambda': dual_lambda,
@@ -1240,7 +1241,10 @@ def train(
           'kl_violation_raw': raw_kl_violation,
           'kl_violation_ema': ema_kl_violation,
           'kl_violation': dual_kl_violation,
-          'kl_violation_clip': jnp.asarray(kl_violation_clip),
+          'kl_violation_clip': jnp.asarray(
+              kl_violation_clip_value
+          ),
+          'kl_violation_clip_ratio': jnp.asarray(kl_violation_clip),
       })
     new_training_state = TrainingState(
         optimizer_state=optimizer_state,
@@ -1322,9 +1326,14 @@ def train(
           'kl_violation_raw': raw_kl_violation,
           'kl_violation_ema': ema_kl_violation,
           'kl_violation': clipped_kl_violation(
-              latest_dual_kl_ema, kl_radius, kl_violation_clip
+              latest_dual_kl_ema,
+              kl_radius,
+              kl_violation_clip_value,
           ),
-          'kl_violation_clip': jnp.asarray(kl_violation_clip),
+          'kl_violation_clip': jnp.asarray(
+              kl_violation_clip_value
+          ),
+          'kl_violation_clip_ratio': jnp.asarray(kl_violation_clip),
       })
     jax.tree_util.tree_map(lambda x: x.block_until_ready(), metrics)
 
