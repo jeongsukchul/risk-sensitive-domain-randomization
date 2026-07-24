@@ -56,9 +56,12 @@ python train.py policy=gmmppo beta=0 wandb_project="rsdr-cheetah" task=CheetahRu
 ```
 
 All GMMPPO modes estimate and log `gmm_kl_to_uniform`. In fixed-beta mode,
-`beta` and `beta_used` remain the configured inverse temperature. GMMPPO also
-supports a fixed KL radius relative to the uniform domain-randomization
-distribution. In this mode, `beta` is the negative initial value $\beta_0$.
+`beta` and `beta_used` remain the configured inverse temperature. It also logs
+the signed diagnostic `kl_violation = gmm_kl_to_uniform - kl_radius` and the
+positive-only `kl_radius_violation`; these metrics do not update fixed beta.
+GMMPPO also supports a fixed KL radius relative to the uniform
+domain-randomization distribution. In this mode, `beta` is the negative initial
+value $\beta_0$.
 The default `dual_update_mode=lambda` optimizes $\lambda=-1/\beta$ by projected
 dual ascent. The dual signal uses an EMA of the measured KL, initialized at the
 requested radius, and then clips the EMA violation symmetrically:

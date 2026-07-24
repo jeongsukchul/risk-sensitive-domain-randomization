@@ -48,10 +48,10 @@ scheduler_mode : 'linear'  # 'linear' or 'exp'
 # Fixed-KL-radius GMMPPO. `beta` is beta_0 and must be negative in this mode.
 fixed_radius: false
 kl_radius: 0.1
-dual_lr: 0.001
-dual_ema_decay: 0.9
+dual_lr: 1.
+dual_ema_decay: 0.
 kl_violation_clip: 0.25
-dual_update_mode: lambda  # lambda (standard dual) or beta (naive direct beta)
+dual_update_mode: beta  # lambda (standard dual) or beta (naive direct beta)
 dual_lambda_min: 0.01
 dual_lambda_max: 10.0
 dual_beta_min: -100.0

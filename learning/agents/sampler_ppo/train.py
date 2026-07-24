@@ -1207,11 +1207,19 @@ def train(
       reported_beta = (
           beta_from_dual(dual_lambda) if fixed_radius else _beta
       )
+      raw_kl_violation = gmm_kl_estimate - kl_radius
       metrics.update({
           'beta': reported_beta,
           'beta_used': _beta,
           'gmm_kl_to_uniform': gmm_kl_estimate,
+          'kl_radius': jnp.asarray(kl_radius),
+          'kl_violation_raw': raw_kl_violation,
+          'kl_radius_violation': jnp.maximum(
+              raw_kl_violation, 0.0
+          ),
       })
+      if not fixed_radius:
+        metrics['kl_violation'] = raw_kl_violation
     if fixed_radius:
       resulting_beta = beta_from_dual(dual_lambda)
       raw_kl_violation = gmm_kl_estimate - kl_radius
@@ -1285,6 +1293,16 @@ def train(
       metrics['gmm_kl_to_uniform'] = jnp.mean(
           training_state.gmm_kl_estimate
       )
+      raw_kl_violation = metrics['gmm_kl_to_uniform'] - kl_radius
+      metrics.update({
+          'kl_radius': jnp.asarray(kl_radius),
+          'kl_violation_raw': raw_kl_violation,
+          'kl_radius_violation': jnp.maximum(
+              raw_kl_violation, 0.0
+          ),
+      })
+      if not fixed_radius:
+        metrics['kl_violation'] = raw_kl_violation
     if fixed_radius:
       latest_dual_lambda = jnp.mean(training_state.dual_lambda)
       latest_beta = beta_from_dual(latest_dual_lambda)
@@ -1532,26 +1550,28 @@ def train(
         "eval/empirical_weighted_target_reverse_kl_to_uniform":
             comparison_metrics["target_reverse_kl_to_uniform"],
     })
+    target_radius_residual = (
+        comparison_metrics["target_reverse_kl_to_uniform"] - kl_radius
+    )
+    sampler_radius_residual = (
+        comparison_metrics["sampler_reverse_kl_to_uniform"] - kl_radius
+    )
+    metrics.update({
+        "eval/empirical_kl_radius": jnp.asarray(kl_radius),
+        "eval/empirical_target_kl_radius_residual":
+            target_radius_residual,
+        "eval/empirical_sampler_kl_radius_residual":
+            sampler_radius_residual,
+        "eval/empirical_target_kl_radius_violation":
+            jnp.maximum(target_radius_residual, 0.0),
+        "eval/empirical_sampler_kl_radius_violation":
+            jnp.maximum(sampler_radius_residual, 0.0),
+    })
     if fixed_radius:
-      target_radius_residual = (
-          comparison_metrics["target_reverse_kl_to_uniform"] - kl_radius
-      )
-      sampler_radius_residual = (
-          comparison_metrics["sampler_reverse_kl_to_uniform"] - kl_radius
-      )
       metrics.update({
-          "eval/empirical_kl_radius": jnp.asarray(kl_radius),
           "eval/empirical_dual_update_mode_beta": jnp.asarray(
               dual_update_mode == "beta", dtype=jnp.float32
           ),
-          "eval/empirical_target_kl_radius_residual":
-              target_radius_residual,
-          "eval/empirical_sampler_kl_radius_residual":
-              sampler_radius_residual,
-          "eval/empirical_target_kl_radius_violation":
-              jnp.maximum(target_radius_residual, 0.0),
-          "eval/empirical_sampler_kl_radius_violation":
-              jnp.maximum(sampler_radius_residual, 0.0),
       })
 
     target_mass = jnp.exp(log_target_mass)
