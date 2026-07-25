@@ -103,6 +103,17 @@ constructs the empirical target with
 `log_softmax(beta * (estimated_return - center))` and compares it with the
 grid-normalized GMM density. Evaluation logs:
 
+The empirical target return estimator mirrors one training sampler update.
+Each of `empirical_num_rollouts=10` independent estimates starts from a fresh
+reset and collects
+`batch_size * num_minibatches / num_envs` blocks of `unroll_length`
+transitions. It applies the same per-step nonnegative reward clipping and
+`reward_scale_for_sampler` used by the training sampler. The estimates are
+averaged to construct the target; split-half disagreement and logit standard
+errors are logged as `eval/empirical_target_split_*` and
+`eval/empirical_target_logit_se_*`. Full-episode deterministic policy
+evaluation remains separate and unchanged.
+
 - `eval/empirical_reverse_kl_q_to_target`
 - `eval/empirical_forward_kl_target_to_q`
 - `eval/empirical_js_divergence`

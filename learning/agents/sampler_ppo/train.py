@@ -43,6 +43,7 @@ from learning.agents.sampler_ppo.dual_optimization import (
 )
 from learning.agents.sampler_ppo.empirical_metrics import (
     compare_empirical_target_and_sampler,
+    empirical_target_noise_metrics,
 )
 from learning.agents.sampler_ppo.training_logging import training_log_offsets
 import scipy
@@ -291,6 +292,7 @@ def train(
     eval_env: Optional[envs.Env] = None,
     num_eval_envs: int = 1024,
     eval_grid_size_2d: int = 128,
+    empirical_num_rollouts: int = 10,
     # training metrics
     log_training_metrics: bool = False,
     training_metrics_steps: Optional[int] = None,
@@ -401,6 +403,9 @@ def train(
 
   if eval_grid_size_2d <= 0:
     raise ValueError("eval_grid_size_2d must be positive.")
+  empirical_num_rollouts = int(empirical_num_rollouts)
+  if empirical_num_rollouts < 2:
+    raise ValueError("empirical_num_rollouts must be at least 2.")
   training_log_freq = int(training_log_freq)
   if training_log_freq < 0:
     raise ValueError("training_log_freq must be non-negative.")
@@ -1474,6 +1479,57 @@ def train(
       key=eval_key,
   )
 
+  empirical_num_unrolls = batch_size * num_minibatches // num_envs
+
+  @jax.jit
+  def sampler_matched_empirical_returns(
+      policy_params,
+      dynamics_params,
+      key,
+  ):
+    """Estimates the sampler reward signal from independent fresh resets."""
+    policy = make_policy(policy_params)
+    rollout_keys = jax.random.split(key, empirical_num_rollouts)
+
+    def evaluate_one_rollout(unused_carry, rollout_key):
+      reset_key, trajectory_key = jax.random.split(rollout_key)
+      reset_keys = jax.random.split(reset_key, num_eval_envs)
+      rollout_state = eval_env.reset(reset_keys)
+
+      def collect_unroll(carry, unused):
+        current_state, current_key = carry
+        current_key, next_key = jax.random.split(current_key)
+        next_state, rollout_data = generate_adv_unroll(
+            eval_env,
+            current_state,
+            dynamics_params,
+            policy,
+            current_key,
+            unroll_length,
+        )
+        reward_sum = jnp.sum(
+            jnp.maximum(rollout_data.reward, 0.0), axis=0
+        )
+        return (next_state, next_key), reward_sum
+
+      (_, _), reward_sums = jax.lax.scan(
+          collect_unroll,
+          (rollout_state, trajectory_key),
+          (),
+          length=empirical_num_unrolls,
+      )
+      mean_reward = jnp.sum(reward_sums, axis=0) / (
+          empirical_num_unrolls * unroll_length
+      )
+      return unused_carry, mean_reward * reward_scale_for_sampler
+
+    _, per_rollout_returns = jax.lax.scan(
+        evaluate_one_rollout,
+        None,
+        rollout_keys,
+    )
+    return jnp.mean(per_rollout_returns, axis=0), per_rollout_returns
+
 
   training_metrics = {}
   training_walltime = 0
@@ -1519,15 +1575,21 @@ def train(
       x_grid,
       y_grid,
       step,
+      estimated_returns_override=None,
+      target_noise_metrics=None,
+      per_rollout_returns=None,
   ):
     if sampler_choice != "GMM":
       return metrics
 
-    estimated_returns = (
-        jnp.asarray(reward_per_grid_cell)
-        / jnp.maximum(jnp.asarray(episode_length_per_grid_cell), 1.0)
-        * reward_scale_for_sampler
-    )
+    if estimated_returns_override is None:
+      estimated_returns = (
+          jnp.asarray(reward_per_grid_cell)
+          / jnp.maximum(jnp.asarray(episode_length_per_grid_cell), 1.0)
+          * reward_scale_for_sampler
+      )
+    else:
+      estimated_returns = jnp.asarray(estimated_returns_override)
     gmm_state = _unpmap(
         state.gmm_training_state.model_state.gmm_state
     )
@@ -1558,7 +1620,26 @@ def train(
         ),
         "eval/empirical_weighted_target_reverse_kl_to_uniform":
             comparison_metrics["target_reverse_kl_to_uniform"],
+        "eval/empirical_num_rollouts": jnp.asarray(
+            empirical_num_rollouts
+        ),
+        "eval/empirical_sampler_unroll_length": jnp.asarray(
+            unroll_length
+        ),
+        "eval/empirical_sampler_num_unrolls": jnp.asarray(
+            empirical_num_unrolls
+        ),
+        "eval/empirical_sampler_total_transitions": jnp.asarray(
+            empirical_num_unrolls * unroll_length
+        ),
+        "eval/empirical_matches_training_reward_clip": jnp.asarray(1.0),
+        "eval/empirical_uses_stochastic_policy": jnp.asarray(1.0),
     })
+    if target_noise_metrics is not None:
+      metrics.update({
+          f"eval/empirical_{name}": value
+          for name, value in target_noise_metrics.items()
+      })
     target_radius_residual = (
         comparison_metrics["target_reverse_kl_to_uniform"] - kl_radius
     )
@@ -1590,6 +1671,11 @@ def train(
         os.path.join(save_dir, f"{output_stem}.npz"),
         dynamics_params=np.asarray(dynamics_params_grid),
         estimated_returns=np.asarray(estimated_returns),
+        per_rollout_estimated_returns=(
+            np.asarray(per_rollout_returns)
+            if per_rollout_returns is not None
+            else np.empty((0, dynamics_params_grid.shape[0]))
+        ),
         target_log_mass=np.asarray(log_target_mass),
         sampler_log_mass=np.asarray(log_sampler_mass),
         target_mass=np.asarray(target_mass),
@@ -1807,6 +1893,25 @@ def train(
         num_eval_seeds=10,
         success_threshold=success_threshold,
     )
+    empirical_returns = None
+    target_noise_metrics = None
+    per_rollout_returns = None
+    if sampler_choice == "GMM":
+      empirical_key, local_key = jax.random.split(local_key)
+      empirical_returns, per_rollout_returns = (
+          sampler_matched_empirical_returns(
+              _unpmap((
+                  training_state.normalizer_params,
+                  training_state.params.policy,
+                  training_state.params.value,
+              )),
+              dynamics_params_grid,
+              empirical_key,
+          )
+      )
+      target_noise_metrics = empirical_target_noise_metrics(
+          per_rollout_returns, current_sampler_beta
+      )
     metrics = _add_empirical_gmm_grid_metrics(
         metrics,
         training_state,
@@ -1817,6 +1922,9 @@ def train(
         x,
         y,
         current_step,
+        estimated_returns_override=empirical_returns,
+        target_noise_metrics=target_noise_metrics,
+        per_rollout_returns=per_rollout_returns,
     )
     eval_fig = plt.figure()
     reward_2d = reward_1d.reshape(x.shape)
@@ -2257,6 +2365,25 @@ def train(
             num_eval_seeds=10,
             success_threshold=success_threshold,
         )
+        empirical_returns = None
+        target_noise_metrics = None
+        per_rollout_returns = None
+        if sampler_choice == "GMM":
+          empirical_key, local_key = jax.random.split(local_key)
+          empirical_returns, per_rollout_returns = (
+              sampler_matched_empirical_returns(
+                  _unpmap((
+                      training_state.normalizer_params,
+                      training_state.params.policy,
+                      training_state.params.value,
+                  )),
+                  dynamics_params_grid,
+                  empirical_key,
+              )
+          )
+          target_noise_metrics = empirical_target_noise_metrics(
+              per_rollout_returns, current_sampler_beta
+          )
         metrics = _add_empirical_gmm_grid_metrics(
             metrics,
             training_state,
@@ -2267,6 +2394,9 @@ def train(
             x,
             y,
             current_step,
+            estimated_returns_override=empirical_returns,
+            target_noise_metrics=target_noise_metrics,
+            per_rollout_returns=per_rollout_returns,
         )
         final_eval_dynamics_percentiles, final_eval_reward_percentiles = _compute_percentile_dynamics_params(
             np.asarray(dynamics_params_grid),

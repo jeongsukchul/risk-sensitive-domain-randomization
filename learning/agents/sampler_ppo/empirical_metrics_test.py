@@ -6,10 +6,52 @@ import numpy as np
 
 from learning.agents.sampler_ppo.empirical_metrics import (
     compare_empirical_target_and_sampler,
+    empirical_target_noise_metrics,
 )
 
 
 class EmpiricalMetricsTest(unittest.TestCase):
+
+  def test_identical_rollout_targets_have_zero_noise(self):
+    per_rollout_returns = jnp.tile(
+        jnp.asarray([[0.0, 1.0, 2.0]]), (10, 1)
+    )
+
+    metrics = empirical_target_noise_metrics(
+        per_rollout_returns, beta=-2.0
+    )
+
+    for name in (
+        "target_logit_se_mean",
+        "target_logit_se_p95",
+        "target_logit_se_max",
+        "target_split_reverse_kl",
+        "target_split_forward_kl",
+        "target_split_js_divergence",
+        "target_split_total_variation",
+    ):
+      np.testing.assert_allclose(metrics[name], 0.0, atol=1e-6)
+    np.testing.assert_allclose(
+        metrics["target_split_overlap"], 1.0, atol=1e-6
+    )
+
+  def test_split_target_metric_detects_rollout_noise(self):
+    per_rollout_returns = jnp.asarray([
+        [0.0, 1.0],
+        [0.0, 1.0],
+        [1.0, 0.0],
+        [1.0, 0.0],
+    ])
+
+    metrics = empirical_target_noise_metrics(
+        per_rollout_returns, beta=-4.0
+    )
+
+    self.assertGreater(
+        float(metrics["target_split_total_variation"]), 0.9
+    )
+    self.assertLess(float(metrics["target_split_overlap"]), 0.1)
+    self.assertGreater(float(metrics["target_logit_se_max"]), 0.0)
 
   def test_identical_distributions_have_zero_divergence(self):
     returns = jnp.asarray([-1.0, 0.0, 1.0])
