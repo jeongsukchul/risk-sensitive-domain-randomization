@@ -293,6 +293,7 @@ def train(
     num_eval_envs: int = 1024,
     eval_grid_size_2d: int = 128,
     empirical_num_rollouts: int = 10,
+    empirical_clip_negative_rewards: bool = False,
     # training metrics
     log_training_metrics: bool = False,
     training_metrics_steps: Optional[int] = None,
@@ -406,6 +407,9 @@ def train(
   empirical_num_rollouts = int(empirical_num_rollouts)
   if empirical_num_rollouts < 2:
     raise ValueError("empirical_num_rollouts must be at least 2.")
+  empirical_clip_negative_rewards = bool(
+      empirical_clip_negative_rewards
+  )
   training_log_freq = int(training_log_freq)
   if training_log_freq < 0:
     raise ValueError("training_log_freq must be non-negative.")
@@ -1507,9 +1511,10 @@ def train(
             current_key,
             unroll_length,
         )
-        reward_sum = jnp.sum(
-            jnp.maximum(rollout_data.reward, 0.0), axis=0
-        )
+        rollout_rewards = rollout_data.reward
+        if empirical_clip_negative_rewards:
+          rollout_rewards = jnp.maximum(rollout_rewards, 0.0)
+        reward_sum = jnp.sum(rollout_rewards, axis=0)
         return (next_state, next_key), reward_sum
 
       (_, _), reward_sums = jax.lax.scan(
@@ -1632,7 +1637,12 @@ def train(
         "eval/empirical_sampler_total_transitions": jnp.asarray(
             empirical_num_unrolls * unroll_length
         ),
-        "eval/empirical_matches_training_reward_clip": jnp.asarray(1.0),
+        "eval/empirical_clips_negative_rewards": jnp.asarray(
+            empirical_clip_negative_rewards, dtype=jnp.float32
+        ),
+        "eval/empirical_matches_training_reward_clip": jnp.asarray(
+            empirical_clip_negative_rewards, dtype=jnp.float32
+        ),
         "eval/empirical_uses_stochastic_policy": jnp.asarray(1.0),
     })
     if target_noise_metrics is not None:

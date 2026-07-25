@@ -20,7 +20,7 @@ for beta in -30 -20 -10 do
     for seed in 11 12 13 14 15 
     do
     python run.py policy=gmmppo fixed_radius=false \
-        beta=$beta dual_lr=$dual_lr task=$task wandb_project=$wandb_project seed=$seed
+        beta=$beta task=$task wandb_project=$wandb_project seed=$seed
     done
 done
 

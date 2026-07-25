@@ -325,6 +325,9 @@ def train_ppo(cfg:dict, randomization_fn, env, env_cfg, eval_env=None):
         beta = cfg.beta,
         eval_grid_size_2d=getattr(cfg, "eval_grid_size_2d", 128),
         empirical_num_rollouts=getattr(cfg, "empirical_num_rollouts", 10),
+        empirical_clip_negative_rewards=getattr(
+            cfg, "empirical_clip_negative_rewards", False
+        ),
         training_log_freq=getattr(cfg, "training_log_freq", 0),
         sampler_update_freq =cfg.sampler_update_freq,
         n_sampler_iters = cfg.n_sampler_iters,

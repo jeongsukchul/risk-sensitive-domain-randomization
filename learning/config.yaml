@@ -16,6 +16,7 @@ eval_with_training_env : false #added
 num_evals : ???
 eval_grid_size_2d: 128
 empirical_num_rollouts: 10  # independent sampler-matched target estimates
+empirical_clip_negative_rewards: false
 training_log_freq: 5  # training updates between buffered metric records; 0 disables
 
 #policy

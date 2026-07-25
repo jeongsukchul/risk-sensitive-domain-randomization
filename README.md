@@ -107,10 +107,12 @@ The empirical target return estimator mirrors one training sampler update.
 Each of `empirical_num_rollouts=10` independent estimates starts from a fresh
 reset and collects
 `batch_size * num_minibatches / num_envs` blocks of `unroll_length`
-transitions. It applies the same per-step nonnegative reward clipping and
-`reward_scale_for_sampler` used by the training sampler. The estimates are
-averaged to construct the target; split-half disagreement and logit standard
-errors are logged as `eval/empirical_target_split_*` and
+transitions. By default it uses the original signed rewards
+(`empirical_clip_negative_rewards=false`) and applies
+`reward_scale_for_sampler`. Set the option to `true` to reproduce the training
+sampler's per-step nonnegative clipping. The estimates are averaged to
+construct the target; split-half disagreement and logit standard errors are
+logged as `eval/empirical_target_split_*` and
 `eval/empirical_target_logit_se_*`. Full-episode deterministic policy
 evaluation remains separate and unchanged.
 
