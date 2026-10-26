@@ -1,10 +1,11 @@
 import re
+import operator
 import json
 import math
 from pathlib import Path
 
 import hydra
-from omegaconf import OmegaConf
+from omegaconf import DictConfig, OmegaConf
 import os
 import numpy as np
 import pandas as pd
@@ -30,56 +31,40 @@ CAT_TO_COLOR = {
     "results": "magenta",
 }
 
-def parse_cfg(cfg: OmegaConf) -> OmegaConf:
-    """
-    Parses a Hydra config. Mostly for convenience.
-    """
 
-    # Logic
-    for k in cfg.keys():
-        try:
-            v = cfg[k]
-            if v == None:
-                v = True
-        except:
-            pass
+def parse_cfg(cfg: DictConfig) -> DictConfig:
+    """Resolve simple numeric overrides and the run's output directory."""
+    operations = {
+        "+": operator.add,
+        "-": operator.sub,
+        "*": operator.mul,
+        "/": operator.truediv,
+    }
+    for key in cfg:
+        if OmegaConf.is_missing(cfg, key):
+            continue
+        value = cfg[key]
+        if isinstance(value, str):
+            match = re.fullmatch(r"(\d+)([+\-*/])(\d+)", value)
+            if match:
+                result = operations[match[2]](int(match[1]), int(match[3]))
+                cfg[key] = int(result) if float(result).is_integer() else result
 
-    # Algebraic expressions
-    for k in cfg.keys():
-        try:
-            v = cfg[k]
-            if isinstance(v, str):
-                match = re.match(r"(\d+)([+\-*/])(\d+)", v)
-                if match:
-                    cfg[k] = eval(match.group(1) + match.group(2) + match.group(3))
-                    if isinstance(cfg[k], float) and cfg[k].is_integer():
-                        cfg[k] = int(cfg[k])
-        except:
-            pass
+    if not OmegaConf.is_missing(cfg, "work_dir") and cfg.work_dir is not None:
+        cfg.work_dir = Path(cfg.work_dir).expanduser().resolve()
+        return cfg
 
-    # Convenience
     try:
-        cfg.work_dir = (
-            Path(hydra.utils.get_original_cwd())
-            / "logs"
-            / cfg.task
-            / str(cfg.seed)
-            / cfg.policy
-            
-        )
-    except Exception as e:
-        # print(colored(f"Failed to set work_dir: {e}", "red"))
-
-        cfg.work_dir = Path.cwd() / "logs" / cfg.task / str(cfg.seed) / cfg.policy 
+        original_cwd = Path(hydra.utils.get_original_cwd())
+    except ValueError:
+        original_cwd = Path.cwd()
+    cfg.work_dir = original_cwd / "logs" / cfg.task / str(cfg.seed) / cfg.policy
     return cfg
 
 
 def make_dir(dir_path):
     """Create directory if it does not already exist."""
-    try:
-        os.makedirs(dir_path)
-    except OSError:
-        pass
+    os.makedirs(dir_path, exist_ok=True)
     return dir_path
 
 
@@ -89,8 +74,14 @@ def load_percentile_dynamics_params(cfg=None, policy=None, work_dir=None, path=N
         resolved_policy = policy or getattr(cfg, "policy", None)
         resolved_work_dir = Path(work_dir or getattr(cfg, "work_dir", ""))
         if resolved_policy is None or not str(resolved_work_dir):
-            raise ValueError("Either `path` or both `policy` and `work_dir`/`cfg.work_dir` must be provided.")
-        path = resolved_work_dir / "models" / f"{resolved_policy}_percentile_dynamics_params_latest.json"
+            raise ValueError(
+                "Either `path` or both `policy` and `work_dir`/`cfg.work_dir` must be provided."
+            )
+        path = (
+            resolved_work_dir
+            / "models"
+            / f"{resolved_policy}_percentile_dynamics_params_latest.json"
+        )
     else:
         path = Path(path)
 
@@ -101,9 +92,13 @@ def load_percentile_dynamics_params(cfg=None, policy=None, work_dir=None, path=N
         payload = json.load(f)
 
     payload["percentile_levels"] = np.asarray(payload["percentile_levels"])
-    payload["dynamics_params_percentiles"] = np.asarray(payload["dynamics_params_percentiles"], dtype=np.float32)
+    payload["dynamics_params_percentiles"] = np.asarray(
+        payload["dynamics_params_percentiles"], dtype=np.float32
+    )
     if payload.get("reward_percentiles") is not None:
-        payload["reward_percentiles"] = np.asarray(payload["reward_percentiles"], dtype=np.float32)
+        payload["reward_percentiles"] = np.asarray(
+            payload["reward_percentiles"], dtype=np.float32
+        )
 
     return payload
 
@@ -133,10 +128,7 @@ def _extract_single_trajectory(trajectory, batch_index, batch_size):
             return x[batch_index]
         return x
 
-    return [
-        jax.tree_util.tree_map(_select_leaf, state)
-        for state in trajectory
-    ]
+    return [jax.tree_util.tree_map(_select_leaf, state) for state in trajectory]
 
 
 def _tile_frame_sequences(frame_sequences, grid_cols=4, bg_value=0, tile_labels=None):
@@ -158,7 +150,7 @@ def _tile_frame_sequences(frame_sequences, grid_cols=4, bg_value=0, tile_labels=
             r, col = divmod(i, grid_cols)
             y0 = r * h + (h - fh) // 2
             x0 = col * w + (w - fw) // 2
-            canvas[y0:y0 + fh, x0:x0 + fw] = frame
+            canvas[y0 : y0 + fh, x0 : x0 + fw] = frame
             if tile_labels is not None and i < len(tile_labels):
                 pil_img = Image.fromarray(canvas)
                 draw = ImageDraw.Draw(pil_img)
@@ -168,7 +160,12 @@ def _tile_frame_sequences(frame_sequences, grid_cols=4, bg_value=0, tile_labels=
                 text_box_w = 10 + 8 * max(len(label), 1)
                 text_box_h = 24
                 draw.rectangle(
-                    [text_x - 4, text_y - 2, text_x - 4 + text_box_w, text_y - 2 + text_box_h],
+                    [
+                        text_x - 4,
+                        text_y - 2,
+                        text_x - 4 + text_box_w,
+                        text_y - 2 + text_box_h,
+                    ],
                     fill=(0, 0, 0),
                 )
                 draw.text((text_x, text_y), label, fill=(255, 255, 255))
@@ -194,7 +191,11 @@ def _save_percentile_dynamics_params(metrics, work_dir, policy, use_wandb):
         "policy": policy,
         "percentile_levels": np.asarray(percentile_levels).tolist(),
         "dynamics_params_percentiles": np.asarray(percentile_params).tolist(),
-        "reward_percentiles": None if reward_percentiles is None else np.asarray(reward_percentiles).tolist(),
+        "reward_percentiles": (
+            None
+            if reward_percentiles is None
+            else np.asarray(reward_percentiles).tolist()
+        ),
     }
 
     timestamped_path = os.path.join(
@@ -224,6 +225,7 @@ def cfg_to_group(cfg, return_list=False):
     """
     lst = [cfg.task, re.sub("[^0-9a-zA-Z]+", "-", cfg.exp_name)]
     return lst if return_list else "-".join(lst)
+
 
 def print_run(cfg):
     """
@@ -256,6 +258,7 @@ def print_run(cfg):
         _pprint(k, v)
     print(div)
 
+
 class VideoRecorder:
     """Utility class for logging evaluation videos."""
 
@@ -265,7 +268,7 @@ class VideoRecorder:
         self._wandb = wandb
         self.fps = fps
         self.frames = []
-        self.enabled = self._save_dir and self._wandb 
+        self.enabled = self._save_dir and self._wandb
 
     def record(self, env):
         if self.enabled:
@@ -312,7 +315,7 @@ class Logger:
             project=self.project,
             entity=self.entity,
             name=f"{cfg.task}.tdmpc.{cfg.exp_name}.{cfg.seed}",
-            #group=self._group,
+            # group=self._group,
             tags=cfg_to_group(cfg, return_list=True) + [f"seed:{cfg.seed}"],
             dir=self._log_dir,
             config=OmegaConf.to_container(cfg, resolve=True),

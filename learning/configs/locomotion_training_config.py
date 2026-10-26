@@ -17,7 +17,7 @@
 from ml_collections import config_dict
 
 from mujoco_playground._src import dm_control_suite, locomotion
-from module.termination_fn import get_termination_fn
+from learning.module.termination_fn import get_termination_fn
 
 def locomotion_ppo_config(env_name: str) -> config_dict.ConfigDict:
   """Returns tuned Brax PPO config for the given environment."""

@@ -3,29 +3,21 @@ requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "adversarial-sampler-for-rl"
+name = "risk-sensitive-domain-randomization"
 version = "0.1.0"
-description = "Adversarial Sampler for RL"
+description = "Risk-sensitive domain randomization with variational samplers and PPO"
 readme = "README.md"
-requires-python = ">=3.10"
-authors = [
-  { name = "Your Name", email = "you@example.com" },
-]
-# List your actual dependencies here so they auto-install for other users
-dependencies = [
-    "numpy",
-    "jax",
-    "flax",
-    "brax",
-    "optax",
-    "wandb",
-    "matplotlib",
-    "imageio",
-    "absl-py",
-    "scipy",
-]
+requires-python = ">=3.11"
+dynamic = ["dependencies"]
 
-# This section automatically finds your 'learning' folder and makes it a package
+[tool.setuptools.dynamic]
+dependencies = {file = ["requirements.txt"]}
+
 [tool.setuptools.packages.find]
-where = ["."]  # Look in the current directory
-include = ["learning*", "custom_envs"]  # Include the 'learning' directory and anything inside it
+where = ["."]
+include = ["learning*", "custom_envs*"]
+exclude = ["*.logs*", "*.outputs*", "*.wandb*", "*.plots*", "*.toy_experiments*"]
+
+[tool.setuptools.package-data]
+learning = ["**/*.yaml", "**/*.yml"]
+custom_envs = ["**/*.xml", "**/*.png", "**/*.obj"]

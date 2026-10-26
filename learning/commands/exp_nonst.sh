@@ -1,53 +1,10 @@
-task=AcrobotSwingup
-
-# python eval_nonstationary.py \
-#   --task $task \
-#   --policy ppo \
-#   --beta -10 \
-#   --dist_type random_walk \
-#   --seeds 0 3 4 5 7 12 13 100 101 
-python eval_nonstationary.py \
-  --task $task \
-  --policy ppo \
-  --beta -10 \
-  --dist_type langevin \
-  --seeds 0 3 4 5 7 12 13 100 101 
-# python eval_nonstationary.py \
-#   --task $task \
-#   --policy gmmppo \
-#   --beta -10 \
-#   --dist_type random_walk \
-#   --seeds 2 10 20 21 22 23 100 101
-# python eval_nonstationary.py \
-#   --task $task \
-#   --policy gmmppo \
-#   --beta -10 \
-#   --dist_type langevin \
-#   --seeds 2 10 20 21 22 23 100 101
-
-# python eval_nonstationary.py \
-#   --task $task \
-#   --policy gmmppo \
-#   --beta -20 \
-#   --dist_type random_walk \
-#   --seeds 1 4 5 10 12 100 101 20 22
-# python eval_nonstationary.py \
-#   --task $task \
-#   --policy gmmppo \
-#   --beta -20 \
-#   --dist_type langevin \
-#   --seeds 1 4 5 10 12 100 101 20 22
-
-
-# python eval_nonstationary.py \
-#   --task $task \
-#   --policy gmmppo \
-#   --beta -30 \
-#   --dist_type random_walk \
-#   --seeds 0 4 10 20 22 100 101
-# python eval_nonstationary.py \
-#   --task $task \
-#   --policy gmmppo \
-#   --beta -30 \
-#   --dist_type langevin \
-#   --seeds 0 4 10 20 22 100 101
+#!/usr/bin/env bash
+# Evaluate saved policies. Pass --sampler_checkpoint for a shared Langevin attack.
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.."
+read -r -a seeds <<< "${SEEDS:-0 1 2 3 4 5 6 7 8 9}"
+"${PYTHON:-python}" -m learning.eval_nonstationary \
+    --task "${TASK:-AcrobotSwingup}" \
+    --policy "${POLICY:-ppo}" \
+    --dist_type "${DIST_TYPE:-random_walk}" \
+    --seeds "${seeds[@]}" "$@"

@@ -1,8 +1,9 @@
 # defaults:
 #     - override hydra/launcher: submitit_local
 # training
-num_envs : ???
-batch_size : ???
+num_envs: null  # null keeps the task-specific PPO default
+batch_size: null
+num_timesteps: null
 # environment
 benchmark: dm_control
 task: CheetahRun
@@ -13,11 +14,12 @@ exp_name : test
 checkpoint: ???
 impl : warp #or jax
 eval_with_training_env : false #added
-num_evals : ???
+num_evals: null
 eval_grid_size_2d: 128
 empirical_num_rollouts: 10  # independent sampler-matched target estimates
 empirical_clip_negative_rewards: false
 training_log_freq: 5  # training updates between buffered metric records; 0 disables
+profile_training_cost: false  # true records synchronized rollout/update phase times
 
 #policy
 policy : ppo
@@ -25,8 +27,8 @@ asymmetric_critic: true
 distributional_q : false
 
 # logging
-wandb_project: gradient_test
-wandb_entity: tjrcjf410-seoul-national-university
+wandb_project: rsdr
+wandb_entity: null  # uses the account configured by wandb login
 wandb_silent: false
 use_wandb: true
 save_csv: true
@@ -51,12 +53,12 @@ scheduler_mode : 'linear'  # 'linear' or 'exp'
 fixed_radius: false
 kl_radius: 0.1
 dual_lr: 1.
-dual_ema_decay: 0.5
+dual_ema_decay: 0.9
 kl_violation_clip: 0.5  # relative bound: actual clip = value * kl_radius
 dual_update_mode: beta  # lambda (standard dual) or beta (naive direct beta)
 dual_lambda_min: 0.01
 dual_lambda_max: 10.0
-dual_beta_min: -100.0
+dual_beta_min: -150.0
 dual_beta_max: -0.1
 
 #sampler cfg

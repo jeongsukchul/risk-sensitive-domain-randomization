@@ -30,7 +30,7 @@ from learning.module.gbs.sinkhorn_metrics import (
 
 # IMPORTANT: gbs_loss must provide a sampler that does NOT need target logprob inside.
 # I assume you expose: rnd_no_target(...) -> (x0, xT, log_ratio)
-from .gbs_loss_test import (
+from .experimental_losses import (
     dds_logw_from_buffer,
     dds_lv_loss_from_values,
     dds_re_loss_from_values,

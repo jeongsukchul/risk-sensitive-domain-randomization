@@ -13,5 +13,16 @@ external_deps/
 learning/agents/sampler_ppo/toy_experiments
 learning/module/gbs/wandb
 learning/module/gbs/compare_GBS_GMMVI
-learning/wandb
 learning/plots
+*.tex
+*.pdf
+
+# Local builds and generated run artifacts
+build/
+dist/
+.pytest_cache/
+.ruff_cache/
+logs/
+outputs/
+wandb/
+*.py[cod]

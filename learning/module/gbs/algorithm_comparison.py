@@ -28,8 +28,8 @@ import functools
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 from tqdm import trange
 import wandb
-from learning.module.gbs.gbs_loss_test import VP
-from learning.module.gbs.gbs_trainer_test import gbs_history_keys, run_gbs
+from learning.module.gbs.experimental_losses import VP
+from learning.module.gbs.experimental_trainer import gbs_history_keys, run_gbs
 from learning.module.gbs.target_examples_bridge import (
     is_target_example,
     load_target_example,

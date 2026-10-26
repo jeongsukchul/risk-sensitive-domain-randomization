@@ -17,7 +17,7 @@
 from ml_collections import config_dict
 
 from custom_envs import dm_control_suite
-from module.termination_fn import get_termination_fn
+from learning.module.termination_fn import get_termination_fn
 
 
 def brax_ppo_config(env_name: str) -> config_dict.ConfigDict:

@@ -176,7 +176,7 @@ class Balance(mjx_env.MjxEnv):
 
     @property
     def nominal_params(self) -> jp.ndarray:
-        return jp.array([1.0, 1.0, 1.0])
+        return jp.array([1.0, 1.0])
 
     @property
     def dr_range(self):
