@@ -1,6 +1,32 @@
 # Risk-Sensitive Domain Randomization (RSDR)
 
+<p align="center">
+  <img alt="Python 3.12" src="https://img.shields.io/badge/python-3.12-3776AB?logo=python&logoColor=white">
+  <img alt="JAX" src="https://img.shields.io/badge/JAX-Flax%20%7C%20Brax-A8B1FF">
+  <img alt="MuJoCo Playground" src="https://img.shields.io/badge/MuJoCo-Playground-1F6FB2">
+</p>
+
 Implementation accompanying **Distributionally Robust Domain Randomization with Learned Risk-Sensitive Dynamics Samplers**.
+
+<p align="center">
+  <img src="docs/assets/rsdr_overview.png" alt="RSDR overview: a learned sampler draws dynamics parameters for the simulator, PPO trains on the rollouts, and returns update the risk-tilted target the sampler fits with reverse KL." width="85%">
+</p>
+<p align="center"><em>
+  RSDR overview. The sampler &nu;<sub>&phi;</sub> proposes dynamics &xi;<sub>1:B</sub> for the simulator and the asymmetric critic;
+  PPO returns J(&theta;;&xi;) define the tilted target &nu;<sub>&beta;</sub>, which the sampler fits by reverse KL.
+</em></p>
+
+### How it works
+
+1. **Sample dynamics.** Draw a batch $\{\xi_i\}_{1:B} \sim \nu_\phi$ from the learned sampler and apply them through domain randomization.
+2. **Update the policy.** Train PPO on the resulting rollouts. The critic $V_\psi(o_t, \xi_t)$ sees the dynamics; the actor $\pi_\theta(a_t \mid o_t)$ does not.
+3. **Update the sampler.** Use the returns $\{J(\theta;\xi_i)\}_{1:B}$ to form the tilted target $\nu_\beta$ and minimize $D_{\mathrm{KL}}(\nu_\phi \,\|\, \nu_\beta)$.
+
+| $\beta$ | Behavior | Sampler focuses on |
+| --- | --- | --- |
+| $\beta < 0$ | Risk-averse | Low-return (hard) dynamics |
+| $\beta = 0$ | Risk-neutral | Uniform over the domain |
+| $\beta > 0$ | Risk-seeking | High-return (easy) dynamics |
 
 RSDR alternates PPO policy updates with learning a distribution over latent dynamics parameters. The sampler approximates the exponentially tilted target
 
