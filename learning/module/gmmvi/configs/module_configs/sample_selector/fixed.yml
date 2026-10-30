@@ -1,3 +1,6 @@
+# Portions adapted from variational_sampling_methods (MIT).
+# Copyright (c) 2023 Denis Blessing
+# Modified for RSDR; see THIRD_PARTY_NOTICES.md.
 sample_selector_type: "fixed"
 sample_selector_config:
   desired_samples_per_component: 100

@@ -1,3 +1,5 @@
+<!-- Modified for the RSDR distribution. Upstream model and environment
+     attribution and license terms: THIRD_PARTY_NOTICES.md. -->
 <mujoco model="spot">
   <compiler angle="radian" meshdir="../../../../../mujoco_menagerie/boston_dynamics_spot/assets" autolimits="true"/>
 

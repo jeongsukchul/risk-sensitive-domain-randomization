@@ -1,3 +1,5 @@
+<!-- Modified for the RSDR distribution. Upstream model and environment
+     attribution and license terms: THIRD_PARTY_NOTICES.md. -->
 <mujoco model="panda single cube camera">
   <include file="mjx_panda.xml"/>
   <!-- For now, we copy over mjx_scene.xml to ensure there's no extra light source -->

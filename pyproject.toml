@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=61.0"]
+requires = ["setuptools>=77.0.3"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -7,6 +7,8 @@ name = "risk-sensitive-domain-randomization"
 version = "0.1.0"
 description = "Risk-sensitive domain randomization with variational samplers and PPO"
 readme = "README.md"
+license = "Apache-2.0 AND MIT AND BSD-2-Clause AND BSD-3-Clause"
+license-files = ["LICENSE", "THIRD_PARTY_NOTICES.md"]
 requires-python = ">=3.11"
 dynamic = ["dependencies"]
 

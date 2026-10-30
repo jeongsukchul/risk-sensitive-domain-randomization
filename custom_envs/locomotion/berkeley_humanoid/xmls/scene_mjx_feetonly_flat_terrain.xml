@@ -1,3 +1,5 @@
+<!-- Modified for the RSDR distribution. Upstream model and environment
+     attribution and license terms: THIRD_PARTY_NOTICES.md. -->
 <mujoco model="berkeley humanoid feetonly flat terrain scene">
   <include file="berkeley_humanoid_mjx_feetonly.xml"/>
 

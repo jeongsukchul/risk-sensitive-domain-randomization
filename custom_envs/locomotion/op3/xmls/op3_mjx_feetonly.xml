@@ -1,3 +1,5 @@
+<!-- Modified for the RSDR distribution. Upstream model and environment
+     attribution and license terms: THIRD_PARTY_NOTICES.md. -->
 <mujoco model="robotis_op3">
   <compiler angle="radian" meshdir="../../../../mujoco_menagerie/robotis_op3/assets" autolimits="true"/>
 

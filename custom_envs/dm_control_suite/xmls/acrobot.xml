@@ -1,3 +1,5 @@
+<!-- Modified for the RSDR distribution. Upstream model and environment
+     attribution and license terms: THIRD_PARTY_NOTICES.md. -->
 <!--
 Based on Coulomb's [1] rather than Spong's [2] model.
 [1] Coulom, Rémi. Reinforcement learning using neural networks, with applications to motor control.

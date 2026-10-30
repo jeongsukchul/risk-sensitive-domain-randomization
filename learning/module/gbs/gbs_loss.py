@@ -1,3 +1,6 @@
+# DIS-LV formulation follows sde_sampler (Julius Berner and Lorenz Richter).
+# This is the RSDR JAX implementation; see THIRD_PARTY_NOTICES.md and
+# the upstream MIT notice there.
 # gbs_loss.py
 from __future__ import annotations
 

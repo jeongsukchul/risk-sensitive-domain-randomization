@@ -1,3 +1,5 @@
+<!-- Modified for the RSDR distribution. Upstream model and environment
+     attribution and license terms: THIRD_PARTY_NOTICES.md. -->
 <mujoco model="single peg insertion">
   <asset>
     <texture type="cube" name="socket_texture" fileright="socket_blue.png" fileleft="socket_blue.png" fileup="socket_blue.png" filedown="socket_blue.png" filefront="socket_white.png" fileback="socket_blue.png"/>

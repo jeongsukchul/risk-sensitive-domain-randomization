@@ -1,3 +1,5 @@
+<!-- Modified for the RSDR distribution. Upstream model and environment
+     attribution and license terms: THIRD_PARTY_NOTICES.md. -->
 <!--
 Common textures, colors and materials to be used throughout this suite. Some
 materials such as xxx_highlight are activated on occurence of certain events,

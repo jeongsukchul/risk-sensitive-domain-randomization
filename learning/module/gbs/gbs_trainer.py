@@ -1,3 +1,6 @@
+# DIS-LV formulation follows sde_sampler (Julius Berner and Lorenz Richter).
+# This is the RSDR JAX implementation; see THIRD_PARTY_NOTICES.md and
+# the upstream MIT notice there.
 """
 Code for the General Bridge Sampler (GBS).
 Fur further details see: https://arxiv.org/abs/2307.01198

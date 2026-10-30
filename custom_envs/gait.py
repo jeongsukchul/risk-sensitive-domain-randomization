@@ -1,3 +1,8 @@
+# Modified for the RSDR distribution. See THIRD_PARTY_NOTICES.md.
+
+# Gait reference: MuJoCo MPC, Copyright 2022 DeepMind Technologies Limited.
+# Apache-2.0; see LICENSE.
+
 # Copyright 2025 DeepMind Technologies Limited
 #
 # Licensed under the Apache License, Version 2.0 (the "License");

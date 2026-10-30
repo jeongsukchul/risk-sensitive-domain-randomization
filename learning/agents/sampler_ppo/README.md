@@ -25,7 +25,7 @@ Random key splitting, reward scaling/clipping, optimizer order, and update frequ
 
 Sampler checkpoints use `results/<sampler>/checkpoints/sampler_state_<step>.msgpack` and `sampler_state_latest.msgpack`. Each evaluated step now writes its own file; earlier training epochs overwrote the step-zero path. Policy checkpoints are managed separately by the entry point's callback.
 
-Validation in the existing `jax_flow` environment completed 37 agent checks and 4 configuration checks, all eight training methods on Acrobot, the fixed-radius extension, the Warp backend, and all six manuscript environments' JIT reset/step checks. Test source files were removed from the release checkout after validation. The root README retains a smoke command for installation checks.
+Release validation completed 37 agent checks and 4 configuration checks, all eight training methods on Acrobot, the fixed-radius extension, the Warp backend, and all six manuscript environments' JIT reset/step checks. Test source files were removed from the release checkout after validation. The root README retains a smoke command for installation checks.
 
 The validation also corrected Acrobot's nominal parameter vector to match its two-dimensional domain and made per-epoch diagnostic plots derive their own evaluation key when the initial evaluation is skipped. Runtime functions previously placed in test-named modules are retained as `learning.module.gbs.experimental_losses` and `experimental_trainer` for the toy comparison workflow.
 

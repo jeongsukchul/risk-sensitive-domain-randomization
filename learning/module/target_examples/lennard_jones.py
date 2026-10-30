@@ -1,3 +1,9 @@
+# SPDX-License-Identifier: Apache-2.0 AND MIT
+# Portions adapted from variational_sampling_methods.
+# Copyright (c) 2023 Denis Blessing
+# Modified for RSDR; upstream MIT terms are in
+# THIRD_PARTY_NOTICES.md.
+
 """
 ===========================================================================
 The following code comes from the paper 'SE(3) Equivariant Augmented Coupling Flows'.

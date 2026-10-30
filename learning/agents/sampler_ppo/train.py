@@ -1,3 +1,9 @@
+# Modified for the RSDR distribution. See THIRD_PARTY_NOTICES.md.
+
+# Image augmentation portions adapted from JAXRL (MIT).
+# Copyright (c) 2021 Ilya Kostrikov
+# See THIRD_PARTY_NOTICES.md.
+
 # Copyright 2025 The Brax Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");

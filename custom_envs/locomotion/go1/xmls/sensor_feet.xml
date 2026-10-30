@@ -1,3 +1,5 @@
+<!-- Modified for the RSDR distribution. Upstream model and environment
+     attribution and license terms: THIRD_PARTY_NOTICES.md. -->
 <mujoco>
   <sensor>
     <contact name="FR_floor_found" geom1="FR" geom2="floor" reduce="mindist" num="1" data="found"/>

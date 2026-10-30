@@ -1,3 +1,6 @@
+# Portions adapted from variational_sampling_methods (MIT).
+# Copyright (c) 2023 Denis Blessing
+# Modified for RSDR; see THIRD_PARTY_NOTICES.md.
 num_component_adapter_type: "adaptive"
 num_component_adapter_config:
   del_iters: 100

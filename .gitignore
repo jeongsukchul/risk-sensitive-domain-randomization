@@ -10,10 +10,18 @@ learning/outputs
 .git/
 learning/wandb
 external_deps/
-learning/agents/sampler_ppo/toy_experiments
+# Keep exploratory source files; ignore their generated results.
+learning/agents/sampler_ppo/toy_experiments/**/*.gif
+learning/agents/sampler_ppo/toy_experiments/**/*.png
+learning/agents/sampler_ppo/toy_experiments/**/*.npy
 learning/module/gbs/wandb
 learning/module/gbs/compare_GBS_GMMVI
 learning/plots
+learning/final_leaderboard*.csv
+learning/module/gbs/*.gif
+learning/module/gbs/*.png
+learning/module/gbs/*.npy
+.ipynb_checkpoints/
 *.tex
 *.pdf
 

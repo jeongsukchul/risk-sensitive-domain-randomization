@@ -1,3 +1,5 @@
+<!-- Modified for the RSDR distribution. Upstream model and environment
+     attribution and license terms: THIRD_PARTY_NOTICES.md. -->
 <mujoco model="panda scene with updated robotiq gripper">
   <include file="panda_updated_robotiq_2f85.xml"/>
   <compiler angle="radian" assetdir="assets" autolimits="true"/>

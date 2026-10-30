@@ -1,3 +1,8 @@
+# SPDX-License-Identifier: Apache-2.0 AND MIT
+# Portions adapted from OfflineRL-Kit.
+# Copyright (c) 2022 Yi-hao Sun
+# Modified for RSDR; see THIRD_PARTY_NOTICES.md.
+
 """
 The world models we use in model-based RL don't predict termination, so we need to
 define termination functions for each task.

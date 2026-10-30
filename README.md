@@ -40,13 +40,13 @@ Training uses JAX, Flax, Brax, and MuJoCo Playground, with an asymmetric critic 
 
 ## Installation
 
-Use Python 3.12 (validated in the `jax_flow` environment) and a Linux machine with an NVIDIA GPU for the benchmark runs. The manuscript reports an RTX 3090 (24 GB), 64 GB RAM, and an Intel Core i9-10980XE. Start from an editable checkout so environment assets and downloaded robot models remain in a predictable location.
+Use Python 3.12 in a Conda environment named `rsdr` and a Linux machine with an NVIDIA GPU for the benchmark runs. The manuscript reports an RTX 3090 (24 GB), 64 GB RAM, and an Intel Core i9-10980XE. Start from an editable checkout so environment assets and downloaded robot models remain in a predictable location.
 
 ```bash
 git clone https://github.com/jeongsukchul/risk-sensitive-domain-randomization.git
 cd risk-sensitive-domain-randomization
-conda create -n jax_flow python=3.12
-conda activate jax_flow
+conda create -n rsdr python=3.12
+conda activate rsdr
 python -m pip install --upgrade pip
 python -m pip install --upgrade "jax[cuda12]"
 python -m pip install -e .
@@ -196,8 +196,21 @@ custom_envs/
 
 See the [agent internals guide](learning/agents/sampler_ppo/README.md) for module responsibilities and checkpoint compatibility.
 
-The `jax_flow` validation completed 41 regression checks, all eight training-method smoke runs, fixed-radius and Warp runs, and JIT reset/step checks for the six manuscript tasks. The release checkout omits the test source files after validation. See [validation details](docs/reproducibility.md#validation) for the environment, scope, and fixes. Use the [quick-start smoke command](#quick-start) to check a new installation.
+Exploratory notebooks are committed with their execution outputs and execution
+counts cleared. Generated plots, animations, sample arrays, and leaderboard CSVs
+are excluded from the source checkout; documentation figures and simulator assets
+are retained. See the [toy experiment guide](learning/agents/sampler_ppo/toy_experiments/README.md)
+for the notebooks that generate and plot toy sampler results. Evaluation and
+heatmap notebooks require results from a training run.
+
+Release validation completed 41 regression checks, all eight training-method smoke runs, fixed-radius and Warp runs, and JIT reset/step checks for the six manuscript tasks. The release checkout omits the test source files after validation. See [validation details](docs/reproducibility.md#validation) for the environment, scope, and fixes. Use the [quick-start smoke command](#quick-start) to check a new installation.
 
 ## Acknowledgements
 
-This implementation builds on [MuJoCo Playground](https://github.com/google-deepmind/mujoco_playground), [Brax](https://github.com/google/brax), [variational_sampling_methods](https://github.com/DenisBless/variational_sampling_methods) for GMMVI, [sde_sampler](https://github.com/juliusberner/sde_sampler) for DIS-LV, and [bijx](https://github.com/mathisgerdes/bijx) for normalizing flows. Existing source license headers and attributions are retained. The repository does not currently declare a project-wide license.
+This implementation builds on [MuJoCo Playground](https://github.com/google-deepmind/mujoco_playground), [Brax](https://github.com/google/brax), [variational_sampling_methods](https://github.com/DenisBless/variational_sampling_methods) for GMMVI, [sde_sampler](https://github.com/juliusberner/sde_sampler) for DIS-LV, and [bijx](https://github.com/mathisgerdes/bijx) for normalizing flows.
+
+## License
+
+Original RSDR code and modifications are licensed under the [Apache License 2.0](LICENSE).
+Third-party code and robot models retain their upstream terms; attribution and
+additional license notices are collected in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

@@ -1,3 +1,5 @@
+<!-- Modified for the RSDR distribution. Upstream model and environment
+     attribution and license terms: THIRD_PARTY_NOTICES.md. -->
 <mujoco model="go1 feet only">
   <compiler angle="radian" meshdir="../../../../../mujoco_menagerie/unitree_go1/assets" autolimits="true"/>
 
