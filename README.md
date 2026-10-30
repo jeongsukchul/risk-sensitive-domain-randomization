@@ -18,23 +18,23 @@ Implementation accompanying **Distributionally Robust Domain Randomization with 
 
 ### How it works
 
-1. **Sample dynamics.** Draw a batch $\{\xi_i\}_{1:B} \sim \nu_\phi$ from the learned sampler and apply them through domain randomization.
-2. **Update the policy.** Train PPO on the resulting rollouts. The critic $V_\psi(o_t, \xi_t)$ sees the dynamics; the actor $\pi_\theta(a_t \mid o_t)$ does not.
-3. **Update the sampler.** Use the returns $\{J(\theta;\xi_i)\}_{1:B}$ to form the tilted target $\nu_\beta$ and minimize $D_{\mathrm{KL}}(\nu_\phi \,\|\, \nu_\beta)$.
+1. **Sample dynamics.** Draw a batch {&xi;<sub>i</sub>}<sub>1:B</sub> &sim; &nu;<sub>&phi;</sub> from the learned sampler and apply them through domain randomization.
+2. **Update the policy.** Train PPO on the resulting rollouts. The critic V<sub>&psi;</sub>(o<sub>t</sub>, &xi;<sub>t</sub>) sees the dynamics; the actor &pi;<sub>&theta;</sub>(a<sub>t</sub> &mid; o<sub>t</sub>) does not.
+3. **Update the sampler.** Use the returns {J(&theta;;&xi;<sub>i</sub>)}<sub>1:B</sub> to form the tilted target &nu;<sub>&beta;</sub> and minimize D<sub>KL</sub>(&nu;<sub>&phi;</sub> &Vert; &nu;<sub>&beta;</sub>).
 
-| $\beta$ | Behavior | Sampler focuses on |
+| &beta; | Behavior | Sampler focuses on |
 | --- | --- | --- |
-| $\beta < 0$ | Risk-averse | Low-return (hard) dynamics |
-| $\beta = 0$ | Risk-neutral | Uniform over the domain |
-| $\beta > 0$ | Risk-seeking | High-return (easy) dynamics |
+| &beta; &lt; 0 | Risk-averse | Low-return (hard) dynamics |
+| &beta; = 0 | Risk-neutral | Uniform over the domain |
+| &beta; &gt; 0 | Risk-seeking | High-return (easy) dynamics |
 
 RSDR alternates PPO policy updates with learning a distribution over latent dynamics parameters. The sampler approximates the exponentially tilted target
 
 $$
-\nu_\beta(\xi;\theta) \propto \exp\!\bigl(\beta J(\theta;\xi)\bigr)\,\nu_0(\xi),
+\nu_\beta(\xi;\theta) \propto \exp\bigl(\beta J(\theta;\xi)\bigr)\,\nu_0(\xi),
 $$
 
-where $\nu_0$ is uniform over the specified domain. Negative $\beta$ emphasizes low-return dynamics, zero recovers the uniform target, and positive $\beta$ emphasizes high-return dynamics. The default sampler uses reverse-KL Gaussian mixture variational inference (GMMVI). A diffusion-based DIS-LV variant and PPO domain-randomization baselines are also included.
+where &nu;<sub>0</sub> is uniform over the specified domain. Negative &beta; emphasizes low-return dynamics, zero recovers the uniform target, and positive &beta; emphasizes high-return dynamics. The default sampler uses reverse-KL Gaussian mixture variational inference (GMMVI). A diffusion-based DIS-LV variant and PPO domain-randomization baselines are also included.
 
 Training uses JAX, Flax, Brax, and MuJoCo Playground, with an asymmetric critic that can observe dynamics parameters during training. The policy receives the ordinary state observation.
 
@@ -53,7 +53,7 @@ python -m pip install -e .
 python -c "import jax; print(jax.devices())"
 ```
 
-Choose the JAX CUDA build appropriate for your driver using the [official installation guide](https://docs.jax.dev/en/latest/installation.html). `requirements.txt` is the package dependency source; it is **not** a complete lockfile of the original paper environment. See [reproducibility details](docs/reproducibility.md) for the validation environment and known manuscript/code differences.
+Choose the JAX CUDA build appropriate for your driver using the [official installation guide](https://docs.jax.dev/en/latest/installation.html). `requirements.txt` is the package dependency source; it is **not** a complete lockfile of the original paper environment.
 
 Environment registration may download the MuJoCo Menagerie assets on first import, including configuration inspection, into `external_deps/mujoco_menagerie`, at the revision specified in `custom_envs/mjx_env.py`. Allow internet access and disk space for that initial download. Headless rendering defaults to EGL; set `MUJOCO_GL` yourself if your system needs another backend.
 
@@ -98,7 +98,7 @@ To enable W&B, run `wandb login`, then use `use_wandb=true wandb_project=rsdr` a
 | DORAEMON | `policy=doraemonppo` | `success_threshold`, `success_rate_condition`, `trust_region_threshold` |
 | GOFLOW | `policy=flowppo` | `beta`, `gamma`, `n_sampler_iters` |
 
-For `gmmppo`, `beta=0` learns the maximum-entropy uniform **target** within the variational family. Use `policy=ppo` for direct uniform sampling. The main RSDR experiments fix `beta`; an adaptive fixed-KL-radius extension is described in [the detailed guide](docs/reproducibility.md#fixed-kl-radius-extension).
+For `gmmppo`, `beta=0` learns the maximum-entropy uniform **target** within the variational family. Use `policy=ppo` for direct uniform sampling. The main RSDR experiments fix `beta`.
 
 Examples, with local logging:
 
@@ -142,7 +142,7 @@ DRY_RUN=1 TASKS="CheetahRun" SEEDS="0" POLICIES="ppo epoptppo" \
   bash learning/commands/baselines.sh epsilon=0.4 use_wandb=false save_video=false
 ```
 
-With no environment overrides, the RSDR script runs all six tasks, ten seeds, and eleven beta values. This is a large sequential sweep. Review [the domain-range discrepancy and evaluation details](docs/reproducibility.md#manuscript-alignment) before claiming exact reproduction of the paper's tables. Older scripts under `learning/commands/` retain exploratory settings and seed ranges.
+With no environment overrides, the RSDR script runs all six tasks, ten seeds, and eleven beta values. This is a large sequential sweep. Older scripts under `learning/commands/` retain exploratory settings and seed ranges.
 
 ## Configuration and outputs
 
@@ -163,17 +163,8 @@ Runs are saved under `logs/<task>/<seed>/<policy>/`, with sampler settings appen
 | `models/<step>/` | Orbax policy checkpoints |
 | `models/<policy>_params_latest.pkl` | Latest inference parameters |
 | `models/<policy>_percentile_dynamics_params_latest.json` | Dynamics settings selected at return percentiles |
-| `results/<sampler>/` | Evaluation returns, sampler samples, and available diagnostics/checkpoints |
+| `results/<sampler>/` | Evaluation returns, sampler samples, and sampler checkpoints |
 | `computational_cost.csv` | Training transitions, policy/sampler updates, and timing |
-
-For evaluation under time-varying dynamics, use the restored-policy evaluator:
-
-```bash
-python -m learning.eval_nonstationary --task AcrobotSwingup --policy ppo \
-  --seeds 0 --dist_type random_walk --rw_scale 0.01
-```
-
-See the [detailed guide](docs/reproducibility.md) for Langevin attacks, sampler diagnostics, fixed-radius updates, and cost measurements.
 
 ## Code map
 
@@ -203,7 +194,7 @@ are retained. See the [toy experiment guide](learning/agents/sampler_ppo/toy_exp
 for the notebooks that generate and plot toy sampler results. Evaluation and
 heatmap notebooks require results from a training run.
 
-Release validation completed 41 regression checks, all eight training-method smoke runs, fixed-radius and Warp runs, and JIT reset/step checks for the six manuscript tasks. The release checkout omits the test source files after validation. See [validation details](docs/reproducibility.md#validation) for the environment, scope, and fixes. Use the [quick-start smoke command](#quick-start) to check a new installation.
+Use the [quick-start smoke command](#quick-start) to check a new installation.
 
 ## Acknowledgements
 
