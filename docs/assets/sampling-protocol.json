@@ -1,0 +1,14 @@
+{
+  "scope": "Analytic one-dimensional schematic, not experimental training data",
+  "target": "nu_beta proportional to nu_0 * exp(beta * expected_episode_return)",
+  "reference": "Uniform density on [0, 1]",
+  "beta": -7.0,
+  "sampler": "Illustrative continuous tracking of the exact tilted target; not an actual VI run",
+  "samples_per_lane": 72,
+  "random_seed": 20261113,
+  "sampling_batches_per_loop": 15,
+  "udr_sampling": "Fresh independent uniform batches throughout the loop",
+  "rsdr_sampling": "Fresh inverse-CDF samples from the changing sampler density",
+  "common_uniform_quantiles_across_policies": true,
+  "frames": 180
+}
