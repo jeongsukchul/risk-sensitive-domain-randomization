@@ -28,4 +28,9 @@
 .demo-rewards strong{font-size:18px;font-weight:650;color:var(--ink)}
 .demo-rewards>span+span strong{color:var(--blue)}
 #dialog-content .demo-rewards{margin-top:16px;width:min(100%,420px);max-width:none}
+.venue{display:flex;justify-content:center;align-items:center;flex-wrap:wrap;gap:10px}
+.venue .spotlight-badge,.spotlight-rate{display:inline-block;padding:3px 12px;border-radius:20px;font-size:14px;font-weight:700;letter-spacing:.02em;line-height:1.6}
+.venue .spotlight-badge{background:#edf3f8;color:var(--blue)}
+.spotlight-rate{border:1px solid var(--line);color:var(--blue)}
+.venue-selection{font-size:14px;line-height:1.6;color:var(--muted);margin:-5px 0 20px;text-wrap:balance}
 @media(max-width:600px){.equation-panel{padding:0 16px}.equation-block{padding:22px 0}.math-equation{font-size:14px}.sampling-figure h3{font-size:19px}.demo-rewards{max-width:300px}}
