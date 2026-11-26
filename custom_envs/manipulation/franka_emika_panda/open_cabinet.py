@@ -270,7 +270,7 @@ class PandaOpenCabinet(panda.PandaBase):
     return jp.concatenate(low), jp.concatenate(high)
 LEFT_FINGER_GEOM = 73
 RIGHT_FINGER_GEOM = 80
-HANDLE_GEOM = 80
+HANDLE_GEOM = 81
 import functools
 
 def domain_randomize(model: mjx.Model, dr_range: tuple, params: jax.Array = None, rng: jax.Array = None):
@@ -296,7 +296,7 @@ def domain_randomize(model: mjx.Model, dr_range: tuple, params: jax.Array = None
         friction = friction.at[HANDLE_GEOM, 0].set(p[idx]); idx += 1
         # 2. Mass
         mass = model.body_mass.at[handle_body].set(model.body_mass[handle_body] * p[idx]); idx += 1
-        mass = mass.at[:11].set(model.body_mass[link_ids] * p[idx:idx+11]); idx += 11
+        mass = mass.at[link_ids].set(model.body_mass[link_ids] * p[idx:idx+11]); idx += 11
         # 3. Damping
         damping = model.dof_damping.at[joint_qids].set(model.dof_damping[joint_qids] * p[idx:idx+9]); idx += 9
         # 4. Gain/Bias (KP)
@@ -318,7 +318,7 @@ def domain_randomize(model: mjx.Model, dr_range: tuple, params: jax.Array = None
         friction = friction.at[HANDLE_GEOM, 0].set(p[idx]); idx += 1
         # 2. Mass
         mass = model.body_mass.at[handle_body].set(model.body_mass[handle_body] * p[idx]); idx += 1
-        mass = mass.at[:11].set(model.body_mass[link_ids] * p[idx:idx+11]); idx += 11
+        mass = mass.at[link_ids].set(model.body_mass[link_ids] * p[idx:idx+11]); idx += 11
         # 3. Damping
         damping = model.dof_damping.at[joint_qids].set(model.dof_damping[joint_qids] * p[idx:idx+9]); idx += 9
         # 4. Gain/Bias (KP)
@@ -369,7 +369,7 @@ def domain_randomize_eval(model: mjx.Model, dr_range: tuple, params: jax.Array =
         friction = friction.at[HANDLE_GEOM, 0].set(p[idx]); idx += 1
         # 2. Mass
         mass = model.body_mass.at[handle_body].set(model.body_mass[handle_body] * p[idx]); idx += 1
-        mass = mass.at[:11].set(model.body_mass[link_ids] * p[idx:idx+11]); idx += 11
+        mass = mass.at[link_ids].set(model.body_mass[link_ids] * p[idx:idx+11]); idx += 11
         # 3. Damping
         damping = model.dof_damping.at[joint_qids].set(model.dof_damping[joint_qids] * p[idx:idx+9]); idx += 9
         # 4. Gain/Bias (KP)
@@ -389,7 +389,7 @@ def domain_randomize_eval(model: mjx.Model, dr_range: tuple, params: jax.Array =
         friction = friction.at[HANDLE_GEOM, 0].set(p[idx]); idx += 1
         # 2. Mass
         mass = model.body_mass.at[handle_body].set(model.body_mass[handle_body] * p[idx]); idx += 1
-        mass = mass.at[:11].set(model.body_mass[link_ids] * p[idx:idx+11]); idx += 11
+        mass = mass.at[link_ids].set(model.body_mass[link_ids] * p[idx:idx+11]); idx += 11
         # 3. Damping
         damping = model.dof_damping.at[joint_qids].set(model.dof_damping[joint_qids] * p[idx:idx+9]); idx += 9
         # 4. Gain/Bias (KP)
